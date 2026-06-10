@@ -1,5 +1,12 @@
 .PHONY: build run test lint mock dev-up dev-down dev-reset migrate migrate-down
 
+# ── Environment ──────────────────────────────────────────────────────────────
+# Load variables from .env file (if exists) and export them for subprocesses
+ifneq (,$(wildcard .env))
+    include .env
+    export
+endif
+
 # ── Build ────────────────────────────────────────────────────────────────────
 build:
 	go build -o bin/server ./cmd/server
