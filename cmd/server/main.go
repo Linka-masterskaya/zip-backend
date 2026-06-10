@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
 
 var (
@@ -32,6 +33,12 @@ func main() {
 	}
 
 	slog.SetDefault(newLogger(cfg.App.Env))
+
+	if _, err := storage.New(cfg.MinIO); err != nil {
+		slog.Error("minio connect failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("minio connected", "bucket", cfg.MinIO.Bucket)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
