@@ -54,7 +54,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Build
-        run: go build ./...
+        run: go build -v ./cmd/...
 
   trivy:
     name: Security Scan (Trivy)
@@ -68,5 +68,5 @@ jobs:
         with:
           scan-type: 'fs'
           severity: 'HIGH,CRITICAL'
-          exit-code: '1'
+          exit-code: 1
           ignore-unfixed: true
