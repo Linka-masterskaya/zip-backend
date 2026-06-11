@@ -1,0 +1,32 @@
+FROM golang:1.25-alpine AS builder
+WORKDIR /app
+
+ARG VERSION=dev
+ARG BUILD_TIME=unknown
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-s -w \
+    -X main.version=${VERSION} \
+    -X main.buildTime=${BUILD_TIME}" \
+    -trimpath \
+    -o /app/bin/server \
+    ./cmd/server
+
+# Stage 2
+FROM gcr.io/distroless/static-debian12
+
+WORKDIR /app
+
+COPY --from=builder /app/bin/server .
+
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["./server"]

@@ -15,7 +15,7 @@
      * Изменения попадают в `main` только через Pull Request после code review.
      * Вся новая разработка начинается от `main`.
 
-2. **Фиче-ветки (`feature/AB-<номер-задачи>-краткое-описание`)**
+2. **Фиче-ветки (`feature/AB-<task-number>-short-description`)**
 
    * **Назначение:** Разработка новой функциональности или исправление багов.
    * **Правила:**
@@ -25,10 +25,10 @@
      * Ветка удаляется после слияния.
    * **Примеры:**
 
-     * `feature/AB-1-создание-дома`
-     * `feature/AB-3-реализация-регистрации`
+     * `feature/AB-1-create-house`
+     * `feature/AB-3-user-registration`
 
-3. **Hotfix-ветки (`hotfix/AB-<номер-задачи>-краткое-описание`)**
+3. **Hotfix-ветки (`hotfix/AB-<task-number>-short-description`)**
 
    * **Назначение:** Срочные исправления критических ошибок.
    * **Правила:**
@@ -38,7 +38,7 @@
      * Ветка удаляется после слияния.
    * **Пример:**
 
-     * `hotfix/AB-105-исправление-авторизации`
+     * `hotfix/AB-105-fix-auth`
 
 ---
 
@@ -49,20 +49,20 @@
    ```bash
    git checkout main
    git pull origin main
-   git checkout -b feature/AB-<номер-задачи>-описание
+   git checkout -b feature/AB-<task-number>-description
    ```
 
 2. **Разработка и коммиты**
 
    ```bash
    git add .
-   git commit -m "[AB-<номер>] Краткое описание изменений"
+   git commit -m "[AB-<number>] Short description of changes"
    ```
 
 3. **Публикация ветки и создание PR в `main`**
 
    ```bash
-   git push origin feature/AB-<номер-задачи>-описание
+   git push origin feature/AB-<task-number>-description
    ```
 
    * PR: `feature/AB-...` → `main`
@@ -76,13 +76,13 @@
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/AB-3-получение-дома
+git checkout -b feature/AB-3-get-house
 # работа над кодом
-git commit -m "[AB-3] Реализован метод GET /houses/{id}"
-git push origin feature/AB-3-получение-дома
+git commit -m "[AB-3] Implement method GET /houses/{id}"
+git push origin feature/AB-3-get-house
 ```
 
-На GitHub создаётся PR из `feature/AB-3-получение-дома` в `main`.
+На GitHub создаётся PR из `feature/AB-3-get-house` в `main`.
 
 ---
 
@@ -91,10 +91,10 @@ git push origin feature/AB-3-получение-дома
 ```bash
 git checkout main
 git pull origin main
-git checkout -b hotfix/AB-105-исправление-ошибки
+git checkout -b hotfix/AB-105-fix-auth-error
 # правки
-git commit -m "[AB-105] Критическая ошибка авторизации исправлена"
-git push origin hotfix/AB-105-исправление-ошибки
+git commit -m "[AB-105] Fix critical auth error"
+git push origin hotfix/AB-105-fix-auth-error
 ```
 
 PR → `main`.
@@ -103,9 +103,9 @@ PR → `main`.
 
 ### **Правила Именования и Коммитов**
 
-* **Фиче-ветки:** `feature/AB-<номер-задачи>-описание`
-* **Hotfix-ветки:** `hotfix/AB-<номер-задачи>-описание`
-* **Коммиты:** `"[AB-<номер>] Краткое описание"`
+* **Фиче-ветки:** `feature/AB-<task-number>-description`
+* **Hotfix-ветки:** `hotfix/AB-<task-number>-description`
+* **Коммиты:** `"[AB-<number>] Short description"`
 
 ---
 
@@ -113,9 +113,9 @@ PR → `main`.
 
 ```
 main
-├── feature/AB-1-создание-дома
-├── feature/AB-2-регистрация-пользователя
-├── hotfix/AB-105-исправление-ошибки
+├── feature/AB-1-create-house
+├── feature/AB-2-user-registration
+├── hotfix/AB-105-fix-auth-error
 ```
 
 ---
