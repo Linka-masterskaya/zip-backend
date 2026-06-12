@@ -23,6 +23,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/db"
+	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
@@ -49,7 +50,7 @@ func main() {
 	// Обработка флага --migrate
 	runMigrationsIfNeeded(cfg)
 
-	slog.SetDefault(newLogger(cfg.App.Env))
+	logger.Init(cfg.App.Env)
 
 	metrics.Initialize()
 
@@ -107,6 +108,16 @@ func main() {
 	metricsMux.HandleFunc("GET /health", healthHandler(cfg.App.Env))
 	metricsMux.HandleFunc("GET /readyz", readyzHandler(redisClient))
 
+	metricsMux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+			"env":    cfg.App.Env,
+		}); err != nil {
+			slog.Error("health response encode failed", logger.Err(err))
+		}
+	})
+
 	metricsSrv := &http.Server{
 		Addr:         ":9090",
 		Handler:      metricsMux,
@@ -123,7 +134,7 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("main server error", "err", err)
+			slog.Error("main server error", logger.Err(err))
 			os.Exit(1)
 		}
 	}()
@@ -131,7 +142,7 @@ func main() {
 	go func() {
 		slog.Info("starting metrics and health server", "addr", metricsSrv.Addr)
 		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("metrics server error", "err", err)
+			slog.Error("metrics server error", logger.Err(err))
 		}
 	}()
 
@@ -145,25 +156,18 @@ func main() {
 
 	go func() {
 		if err := metricsSrv.Shutdown(ctx); err != nil {
-			slog.Error("metrics server shutdown error", "err", err)
+			slog.Error("metrics server shutdown error", logger.Err(err))
 		}
 	}()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("shutdown error", "err", err)
+		slog.Error("shutdown error", logger.Err(err))
 	}
 
 	// Redis. Закрываем соединение
 	if err := redisClient.Close(); err != nil {
 		slog.Error("redis close error", "err", err)
 	}
-}
-
-func newLogger(env string) *slog.Logger {
-	if env == "prod" {
-		return slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	}
-	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
