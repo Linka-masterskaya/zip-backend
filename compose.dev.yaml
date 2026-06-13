@@ -13,14 +13,12 @@ services:
     volumes:
       - local-postgres-volume:/var/lib/postgresql/data
     environment:
-      - POSTGRES_USER=${DB_USER:-linka}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-linka}
-      - POSTGRES_DB=${DB_NAME:-linka}
+      - POSTGRES_PASSWORD=postgres
     networks:
       - linka-net
     healthcheck:
-      # те же переменные по умолчанию для гибкости 
-      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-linka} -d ${DB_NAME:-linka}" ]
+      # Без доп. ключей. В хелсчеке утилита pg_isready по умолчанию использует дефолтные креды к БД
+      test: [ "CMD-SHELL", "pg_isready" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -37,8 +35,6 @@ services:
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-minioadmin}
-    # запуск сервера MinIO с указанием папки для данных и порта веб-консоли
-    command: ["server", "/data", "--console-address", ":9001"]
     networks:
       - linka-net
     healthcheck:
@@ -47,6 +43,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # запуск сервера MinIO с указанием папки для данных и порта веб-консоли
+    command: [ "server", "/data", "--console-address", ":9001" ]
 
   nats:
     container_name: local-nats
@@ -57,15 +55,16 @@ services:
       - "8222:8222" # порт мониторинга
     volumes:
       - local-nats-volume:/data
-    # js включает JetStream, -m включает мониторинг, --sd задает папку хранения сообщений
-    command: ["-js", "-m", "8222", "--sd", "/data"]
+    networks:
+      - linka-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      # wget встроен в alpine образ NATS по умолчанию, проверяет эндпоинт мониторинга
+      test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz" ]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - linka-net
+    # js включает JetStream, -m включает мониторинг, --sd задает папку хранения сообщений
+    command: [ "-js", "-m", "8222", "--sd", "/data" ]
 
 volumes:
   local-postgres-volume:
