@@ -12,20 +12,19 @@ import (
 
 type AppHandler func(w http.ResponseWriter, r *http.Request) error
 
-type JSONErrorResponse struct {
-	Error struct {
-		Code      string `json:"code"`
-		Message   string `json:"message"`
-		RequestID string `json:"request_id"`
-	} `json:"error"`
+type ErrorPayload struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
 }
 
-func ErrorMiddleware(next AppHandler) http.Handler {
+type JSONErrorResponse struct {
+	Error ErrorPayload `json:"error"`
+}
+
+func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reqID, _ := r.Context().Value("request_id").(string)
-		if reqID == "" {
-			reqID = r.Header.Get("X-Request-Id")
-		}
+		reqID := r.Header.Get("X-Request-Id")
 
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -38,9 +37,16 @@ func ErrorMiddleware(next AppHandler) http.Handler {
 				)
 
 				sendJSONError(w, apperr.ErrInternal, reqID)
-				return
 			}
 		}()
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func ErrorMiddleware(next AppHandler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqID := r.Header.Get("X-Request-Id")
 
 		if err := next(w, r); err != nil {
 			var appErr *apperr.AppError
@@ -72,10 +78,13 @@ func sendJSONError(w http.ResponseWriter, appErr *apperr.AppError, reqID string)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(appErr.HTTPStatus)
 
-	resp := JSONErrorResponse{}
-	resp.Error.Code = appErr.Code
-	resp.Error.Message = appErr.Message
-	resp.Error.RequestID = reqID
+	resp := JSONErrorResponse{
+		Error: ErrorPayload{
+			Code:      appErr.Code,
+			Message:   appErr.Message,
+			RequestID: reqID,
+		},
+	}
 
 	_ = json.NewEncoder(w).Encode(resp)
 }

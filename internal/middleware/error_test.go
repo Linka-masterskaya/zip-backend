@@ -42,21 +42,15 @@ func TestErrorMiddleware_AppError(t *testing.T) {
 	}
 }
 
-func TestErrorMiddleware_PanicRecovery(t *testing.T) {
-	handler := AppHandler(func(w http.ResponseWriter, r *http.Request) error {
+func TestRecoveryMiddleware(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("something went critically wrong")
 	})
 
-	mw := ErrorMiddleware(handler)
+	mw := RecoveryMiddleware(handler)
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	rec := httptest.NewRecorder()
-
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("panic was not recovered by middleware")
-		}
-	}()
 
 	mw.ServeHTTP(rec, req)
 
@@ -72,6 +66,7 @@ func TestErrorMiddleware_PanicRecovery(t *testing.T) {
 	if resp.Error.Code != "INTERNAL" {
 		t.Errorf("expected code INTERNAL, got %s", resp.Error.Code)
 	}
+
 	if resp.Error.Message != "internal server error" {
 		t.Errorf("expected default message, got %s", resp.Error.Message)
 	}
