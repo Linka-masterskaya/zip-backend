@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -37,7 +38,37 @@ type RedisConfig struct {
 
 // NATSConfig contains NATS connection settings.
 type NATSConfig struct {
-	URL string `mapstructure:"url"`
+	Connection ConnectionConfig `mapstructure:"connection"`
+	Stream     StreamConfig     `mapstructure:"stream"`
+	Consumers  ConsumersConfig  `mapstructure:"consumers"`
+}
+
+type ConnectionConfig struct {
+	URL                 string        `mapstructure:"url"`
+	MaxReconnect        int           `mapstructure:"max_reconnect"`
+	PingInterval        time.Duration `mapstructure:"ping_interval"`
+	MaxPingsOutstanding int           `mapstructure:"max_pings_outstanding"`
+}
+
+type StreamConfig struct {
+	Name        string        `mapstructure:"name"`
+	InitTimeout time.Duration `mapstructure:"init_timeout"`
+	MaxAge      time.Duration `mapstructure:"max_age"`
+	MaxBytes    int64         `mapstructure:"max_bytes"`
+	MaxMsgs     int64         `mapstructure:"max_msgs"`
+	Duplicates  time.Duration `mapstructure:"duplicates"`
+}
+
+type ConsumersConfig struct {
+	TTS    ConsumerSettings `mapstructure:"tts"`
+	ClamAV ConsumerSettings `mapstructure:"clamav"`
+}
+
+type ConsumerSettings struct {
+	Durable      string        `mapstructure:"durable"`
+	AckWait      time.Duration `mapstructure:"ack_wait"`
+	MaxDeliver   int           `mapstructure:"max_deliver"`
+	FetchMaxWait time.Duration `mapstructure:"fetch_max_wait"`
 }
 
 // MinIOConfig contains MinIO object storage settings.
