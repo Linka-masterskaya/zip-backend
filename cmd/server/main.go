@@ -44,7 +44,11 @@ func main() {
 		slog.Error("failed to init nats", "err", err)
 		os.Exit(1)
 	}
-	defer nc.Drain()
+	defer func() {
+		if err := nc.Drain(); err != nil {
+			slog.Error("nats drain", "err", err)
+		}
+	}()
 	_ = publisher // временно, пока нет хендлеров в server
 
 	metrics.Initialize()
@@ -117,10 +121,6 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", "err", err)
-	}
-
-	if err := nc.Drain(); err != nil {
-		slog.Error("nats drain error", "err", err)
 	}
 }
 

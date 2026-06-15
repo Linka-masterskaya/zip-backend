@@ -68,9 +68,9 @@ func consumeJobs[T any](
 		for msg := range msgs.Messages() {
 			var job T
 			if err := json.Unmarshal(msg.Data(), &job); err != nil {
-				slog.Error("consumeJobs: unmarshal", "consumer", cfg.Durable, "err", err)
-				if nakErr := msg.Nak(); nakErr != nil {
-					slog.Error("consumeJobs: nak failed", "consumer", cfg.Durable, "err", nakErr)
+				slog.Error("consumeJobs: unmarshal, terminating message", "consumer", cfg.Durable, "err", err)
+				if termErr := msg.Term(); termErr != nil {
+					slog.Error("consumeJobs: term failed", "consumer", cfg.Durable, "err", termErr)
 				}
 				continue
 			}
@@ -86,6 +86,10 @@ func consumeJobs[T any](
 			if ackErr := msg.Ack(); ackErr != nil {
 				slog.Error("consumeJobs: ack failed", "consumer", cfg.Durable, "err", ackErr)
 			}
+		}
+
+		if err := msgs.Error(); err != nil {
+			slog.Error("consumeJobs: fetch batch error", "consumer", cfg.Durable, "err", err)
 		}
 	}
 }

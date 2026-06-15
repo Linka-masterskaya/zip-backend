@@ -4,7 +4,6 @@ package broker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -56,30 +55,24 @@ func New(cfg config.ConnectionConfig) (*nats.Conn, error) {
 	return nc, nil
 }
 
-// InitStreams creates the AI_JOBS stream if it doesn't exist. Safe to call multiple times.
+// InitStreams creates or updates the AI_JOBS stream config.
 func InitStreams(cfg config.StreamConfig, js jetstream.JetStream) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.InitTimeout)
 	defer cancel()
 
-	_, err := js.Stream(ctx, cfg.Name)
-	if errors.Is(err, jetstream.ErrStreamNotFound) {
-		_, err = js.CreateStream(ctx, jetstream.StreamConfig{
-			Name:       cfg.Name,
-			Storage:    jetstream.FileStorage,
-			Retention:  jetstream.WorkQueuePolicy,
-			Subjects:   []string{SubjectLLMRequest, SubjectLLMResponseAll, SubjectTTSJobs, SubjectTTSDoneAll, SubjectClamAVJobs},
-			MaxAge:     cfg.MaxAge,
-			MaxBytes:   cfg.MaxBytes,
-			MaxMsgs:    cfg.MaxMsgs,
-			Duplicates: cfg.Duplicates,
-		})
-		if err != nil {
-			return fmt.Errorf("InitStreams: add stream: %w", err)
-		}
-		return nil
-	}
+	_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:       cfg.Name,
+		Storage:    jetstream.FileStorage,
+		Retention:  jetstream.WorkQueuePolicy,
+		Subjects:   []string{SubjectLLMRequest, SubjectLLMResponseAll, SubjectTTSJobs, SubjectTTSDoneAll, SubjectClamAVJobs},
+		MaxAge:     cfg.MaxAge,
+		MaxBytes:   cfg.MaxBytes,
+		MaxMsgs:    cfg.MaxMsgs,
+		Duplicates: cfg.Duplicates,
+	})
 	if err != nil {
-		return fmt.Errorf("InitStreams: stream info: %w", err)
+		return fmt.Errorf("InitStreams: create or update stream: %w", err)
 	}
+
 	return nil
 }

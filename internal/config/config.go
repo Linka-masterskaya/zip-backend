@@ -43,6 +43,7 @@ type NATSConfig struct {
 	Consumers  ConsumersConfig  `mapstructure:"consumers"`
 }
 
+// ConnectionConfig contains NATS connection and reconnect settings.
 type ConnectionConfig struct {
 	URL                 string        `mapstructure:"url"`
 	MaxReconnect        int           `mapstructure:"max_reconnect"`
@@ -50,6 +51,7 @@ type ConnectionConfig struct {
 	MaxPingsOutstanding int           `mapstructure:"max_pings_outstanding"`
 }
 
+// StreamConfig contains JetStream AI_JOBS stream settings.
 type StreamConfig struct {
 	Name        string        `mapstructure:"name"`
 	InitTimeout time.Duration `mapstructure:"init_timeout"`
@@ -59,11 +61,13 @@ type StreamConfig struct {
 	Duplicates  time.Duration `mapstructure:"duplicates"`
 }
 
+// ConsumersConfig contains settings for all AI job consumers.
 type ConsumersConfig struct {
 	TTS    ConsumerSettings `mapstructure:"tts"`
 	ClamAV ConsumerSettings `mapstructure:"clamav"`
 }
 
+// ConsumerSettings contains durable consumer settings for a single job type.
 type ConsumerSettings struct {
 	Durable      string        `mapstructure:"durable"`
 	AckWait      time.Duration `mapstructure:"ack_wait"`
