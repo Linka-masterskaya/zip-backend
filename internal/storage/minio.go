@@ -14,6 +14,8 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 )
 
+const defaultMinIOTimeout = 15 * time.Second
+
 // Client provides access to MinIO object storage operations.
 type Client struct {
 	client *minio.Client
@@ -43,7 +45,17 @@ func New(cfg config.MinIOConfig) (*Client, error) {
 		return nil, fmt.Errorf("create minio client: %w", err)
 	}
 
-	ctx := context.Background()
+	timeout := defaultMinIOTimeout
+	if cfg.Timeout != "" {
+		timeout, err = time.ParseDuration(cfg.Timeout)
+		if err != nil {
+			return nil, fmt.Errorf("parse minio timeout: %w", err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	if err := ensureBucket(ctx, client, cfg.Bucket); err != nil {
 		return nil, err
 	}
@@ -74,7 +86,7 @@ func ensureBucket(ctx context.Context, client *minio.Client, bucket string) erro
 }
 
 // PresignedURL returns a temporary URL for reading an object from the configured private bucket.
-func (c *Client) PresignedURL(key string, ttl time.Duration) (string, error) {
+func (c *Client) PresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
 	if c == nil || c.client == nil {
 		return "", errors.New("minio client is not initialized")
 	}
@@ -86,7 +98,7 @@ func (c *Client) PresignedURL(key string, ttl time.Duration) (string, error) {
 	}
 
 	objectURL, err := c.client.PresignedGetObject(
-		context.Background(),
+		ctx,
 		c.bucket,
 		key,
 		ttl,
