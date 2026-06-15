@@ -14,13 +14,14 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 )
 
-var (
-	defaultClient *minio.Client
-	defaultBucket string
-)
+// Client provides access to MinIO object storage operations.
+type Client struct {
+	client *minio.Client
+	bucket string
+}
 
 // New creates a MinIO client, ensures the configured bucket exists, and keeps it private.
-func New(cfg config.MinIOConfig) (*minio.Client, error) {
+func New(cfg config.MinIOConfig) (*Client, error) {
 	if cfg.Endpoint == "" {
 		return nil, errors.New("minio endpoint is required")
 	}
@@ -47,10 +48,10 @@ func New(cfg config.MinIOConfig) (*minio.Client, error) {
 		return nil, err
 	}
 
-	defaultClient = client
-	defaultBucket = cfg.Bucket
-
-	return client, nil
+	return &Client{
+		client: client,
+		bucket: cfg.Bucket,
+	}, nil
 }
 
 func ensureBucket(ctx context.Context, client *minio.Client, bucket string) error {
@@ -73,8 +74,8 @@ func ensureBucket(ctx context.Context, client *minio.Client, bucket string) erro
 }
 
 // PresignedURL returns a temporary URL for reading an object from the configured private bucket.
-func PresignedURL(key string, ttl time.Duration) (string, error) {
-	if defaultClient == nil {
+func (c *Client) PresignedURL(key string, ttl time.Duration) (string, error) {
+	if c == nil || c.client == nil {
 		return "", errors.New("minio client is not initialized")
 	}
 	if key == "" {
@@ -84,9 +85,9 @@ func PresignedURL(key string, ttl time.Duration) (string, error) {
 		return "", errors.New("ttl must be positive")
 	}
 
-	objectURL, err := defaultClient.PresignedGetObject(
+	objectURL, err := c.client.PresignedGetObject(
 		context.Background(),
-		defaultBucket,
+		c.bucket,
 		key,
 		ttl,
 		url.Values{},
