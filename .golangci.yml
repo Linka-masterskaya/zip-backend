@@ -1,0 +1,30 @@
+version: "2"
+
+run:
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - exhaustive
+    - gocyclo
+    - godot
+    - gosec
+    - govet
+    - misspell
+    - noctx
+    - revive
+    - staticcheck
+  settings:
+    errcheck:
+      check-blank: true
+    gocyclo:
+      min-complexity: 15
+  exclusions:
+    generated: strict
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec

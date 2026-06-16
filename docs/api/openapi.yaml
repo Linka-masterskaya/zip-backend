@@ -1,0 +1,336 @@
+openapi: 3.0.3
+info:
+  title: Linka Backend API — Auth & Profile
+  version: 0.3.0
+  description: |
+    Auth + Profile для Linka Editor. Сверено с дизайном.
+    Без username. Вход по email. Refresh — httpOnly cookie (SameSite=Strict). Access — Bearer JWT (HS256, 15m).
+servers:
+  - url: http://localhost:8080/api/v1
+    description: dev
+tags:
+  - name: auth
+  - name: profile
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    refreshCookie: { type: apiKey, in: cookie, name: refresh_token }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string, example: validation_error }
+            message: { type: string, example: "Вы ввели некорректный email" }
+            details: { type: object, additionalProperties: true }
+
+    TokenResponse:
+      type: object
+      required: [access_token, expires_in, token_type]
+      properties:
+        access_token: { type: string }
+        token_type:   { type: string, enum: [Bearer], default: Bearer }
+        expires_in:   { type: integer, example: 900 }
+
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      description: "p18 — только email+пароль. Повтор пароля проверяет фронт."
+      properties:
+        email:    { type: string, format: email }
+        password: { type: string, format: password, minLength: 8, maxLength: 72 }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      description: "p17 — вход по email"
+      properties:
+        email:    { type: string, format: email }
+        password: { type: string, format: password }
+
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties: { token: { type: string } }
+
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties: { email: { type: string, format: email } }
+
+    ResetPasswordRequest:
+      type: object
+      required: [token, new_password]
+      properties:
+        token:        { type: string }
+        new_password: { type: string, format: password, minLength: 8, maxLength: 72 }
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      description: "p10 — нужен старый пароль"
+      properties:
+        current_password: { type: string, format: password }
+        new_password:     { type: string, format: password, minLength: 8, maxLength: 72 }
+
+    ChangeEmailRequest:
+      type: object
+      required: [new_email]
+      properties: { new_email: { type: string, format: email } }
+
+    ConfirmEmailRequest:
+      type: object
+      required: [token]
+      properties: { token: { type: string } }
+
+    UpdateProfileRequest:
+      type: object
+      description: "p3 — единственное редактируемое здесь поле: display_name (только буквы и пробел, p12). Email и пароль — отдельными флоу."
+      properties:
+        display_name:
+          type: string
+          maxLength: 100
+          pattern: '^[A-Za-zА-Яа-яЁё ]+$'
+          description: "только буквы и пробел, без цифр и знаков (p12). В коде валидировать по Unicode-буквам (\\p{L})."
+
+    Profile:
+      type: object
+      required: [id, email, role, email_verified]
+      properties:
+        id:             { type: string, format: uuid }
+        email:          { type: string, format: email }
+        display_name:   { type: string, nullable: true }
+        avatar_url:     { type: string, nullable: true, description: presigned MinIO URL }
+        role:           { type: string, enum: [defectologist, parent, viewer, admin] }
+        email_verified: { type: boolean }
+        org_id:         { type: string, format: uuid, nullable: true }
+        created_at:     { type: string, format: date-time }
+
+    AvatarResponse:
+      type: object
+      properties: { avatar_url: { type: string } }
+
+  responses:
+    BadRequest:   { description: Невалидный ввод, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unauthorized: { description: Нет/невалидный токен, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden:    { description: Запрещено, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict:     { description: Конфликт уникальности, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    TooMany:      { description: Rate-limit, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Регистрация по email (R4, p18) — шлёт verify-письмо
+      description: |
+        ДОПУЩЕНИЕ (открытый вопрос §8.1): регистрация создаёт новую личную организацию
+        и назначает пользователю роль `defectologist`. Модель приглашений/общих org —
+        не финализирована, при изменении меняется поведение этого эндпоинта.
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RegisterRequest' } } }
+      responses:
+        '201':
+          description: Создан; access в теле, refresh в httpOnly cookie
+          headers:
+            Set-Cookie: { schema: { type: string }, description: "refresh_token=...; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth" }
+          content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      summary: Подтвердить email по токену
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/VerifyEmailRequest' } } }
+      responses:
+        '204': { description: "Подтверждён, токен сожжён" }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /auth/verify-email/resend:
+    post:
+      tags: [auth]
+      summary: Переслать письмо верификации текущему пользователю
+      description: "Если verify-письмо потеряно. Использует email из access-токена. Под rate-limit (A-10)."
+      security: [{ bearerAuth: [] }]
+      responses:
+        '202': { description: Если email ещё не подтверждён — письмо отправлено }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Вход по email (R5, p17)
+      description: "При auth.require_email_verification=true неверифицированный email → 403."
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } }
+      responses:
+        '200':
+          description: OK; refresh в httpOnly cookie
+          headers: { Set-Cookie: { schema: { type: string } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooMany' }
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Обновить access (ротация + reuse-detection)
+      description: "CSRF: SameSite=Strict + Origin==frontend_url"
+      security: [{ refreshCookie: [] }]
+      responses:
+        '200': { description: Новый access; refresh ротируется, content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Выход (p2 «Выйти») — отзыв refresh-семьи
+      security: [{ refreshCookie: [] }]
+      responses:
+        '204': { description: "Refresh-семья удалена, cookie очищен" }
+
+  /auth/yandex:
+    get:
+      tags: [auth]
+      summary: Старт Яндекс OAuth (R6, p17 «Войти с Яндекс ID»)
+      security: []
+      responses: { '302': { description: Redirect на Яндекс } }
+
+  /auth/yandex/callback:
+    get:
+      tags: [auth]
+      summary: Яндекс callback — upsert user, токены
+      security: []
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        '302': { description: Redirect на frontend с refresh-cookie }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/password/forgot:
+    post:
+      tags: [auth]
+      summary: Запрос сброса (R7, p19) — всегда 202
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ForgotPasswordRequest' } } }
+      responses:
+        '202': { description: Если email есть — письмо (p14) }
+        '429': { $ref: '#/components/responses/TooMany' }
+
+  /auth/password/reset:
+    post:
+      tags: [auth]
+      summary: Новый пароль по токену (R7, p20)
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ResetPasswordRequest' } } }
+      responses:
+        '204': { description: "Пароль обновлён, токен сожжён, сессии отозваны" }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /profile/me:
+    get:
+      tags: [profile]
+      summary: Мой профиль (p3)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [profile]
+      summary: Редактировать display_name (R12, p3/p12)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateProfileRequest' } } }
+      responses:
+        '200': { description: Обновлён, content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /profile/me/avatar:
+    put:
+      tags: [profile]
+      summary: Загрузить аватар (R14, p4 «Заменить фото»)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties: { file: { type: string, format: binary } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AvatarResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { description: Файл слишком большой }
+    delete:
+      tags: [profile]
+      summary: Удалить аватар (p4 «Удалить фото»)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Удалён }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /profile/me/password:
+    post:
+      tags: [profile]
+      summary: Сменить пароль inline (R15, p10 — нужен старый)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ChangePasswordRequest' } } }
+      responses:
+        '204': { description: "Изменён, прочие сессии отозваны" }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /profile/me/email:
+    post:
+      tags: [profile]
+      summary: Запрос смены email — подтверждение на СТАРЫЙ email (p13/p16)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ChangeEmailRequest' } } }
+      responses:
+        '202': { description: Письмо подтверждения на текущий email }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /profile/me/email/confirm:
+    post:
+      tags: [profile]
+      summary: Подтвердить смену email (p16 «Подтвердить»)
+      description: "Токен из письма на СТАРЫЙ ящик. После confirm: email=new_email, email_verified=false, верификационное письмо уходит на НОВЫЙ адрес (владение новым ящиком не доказано старым письмом)."
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ConfirmEmailRequest' } } }
+      responses:
+        '204': { description: Email обновлён; verify отправлен на новый адрес }
+        '400': { $ref: '#/components/responses/BadRequest' }
