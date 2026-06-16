@@ -66,10 +66,27 @@ services:
     # js включает JetStream, -m включает мониторинг, --sd задает папку хранения сообщений
     command: [ "-js", "-m", "8222", "--sd", "/data" ]
 
+  redis:
+    container_name: local-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - local-redis-volume:/data
+    networks:
+      - linka-net
+    healthcheck:
+      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   local-postgres-volume:
   local-minio-volume:
   local-nats-volume:
+  local-redis-volume:
 
 
 networks:

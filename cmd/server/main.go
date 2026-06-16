@@ -14,6 +14,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+	"github.com/Linka-masterskaya/zip-backend/internal/redis"
 )
 
 var (
@@ -36,6 +37,12 @@ func main() {
 	slog.SetDefault(newLogger(cfg.App.Env))
 
 	metrics.Initialize()
+
+	redisClient, err := redis.NewClient(cfg.Redis.URL)
+	if err != nil {
+		slog.Error("redis initialization failed:", "err", err)
+		os.Exit(1)
+	}
 
 	mainMux := http.NewServeMux()
 	wrappedHandler := middleware.Metrics(mainMux)
@@ -106,6 +113,12 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
+
+	// Redis. Закрываем соединение
+	if err := redisClient.Close(); err != nil {
+		slog.Error("redis close error", "err", err)
+	}
+
 }
 
 func newLogger(env string) *slog.Logger {
