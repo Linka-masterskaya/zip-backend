@@ -44,6 +44,8 @@ func main() {
 
 	metrics.Initialize()
 
+	// Пока инициализируем MinIO только для проверки подключения и создания bucket при старте
+	// Клиент будет сохранен и передан в сервисы позже, когда появятся операции с объектами
 	if _, err := storage.New(cfg.MinIO); err != nil {
 		slog.Error("minio connect failed", "err", err)
 		os.Exit(1)
