@@ -1,0 +1,93 @@
+# Базовая инфраструктура
+# Для локальной разработки
+
+services:
+  postgres:
+    container_name: local-postgresql
+    image: postgres:15-alpine
+    restart: unless-stopped
+    # если Postgresql уже установлен локально, используй другой порт на хост-машине (например "5433:5432")
+    # если меняется порт, не забудь изменить его в DB_URL внутри локального .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - local-postgres-volume:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=postgres
+    networks:
+      - linka-net
+    healthcheck:
+      # Без доп. ключей. В хелсчеке утилита pg_isready по умолчанию использует дефолтные креды к БД
+      test: [ "CMD-SHELL", "pg_isready" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    container_name: local-minio
+    image: minio/minio:latest
+    restart: unless-stopped
+    ports:
+      - "9000:9000" # порт API
+      - "9001:9001" # порт веб-консоли
+    volumes:
+      - local-minio-volume:/data
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-minioadmin}
+    networks:
+      - linka-net
+    healthcheck:
+      # mc ready local — встроенная утилита проверки готовности дисков MinIO
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # запуск сервера MinIO с указанием папки для данных и порта веб-консоли
+    command: [ "server", "/data", "--console-address", ":9001" ]
+
+  nats:
+    container_name: local-nats
+    image: nats:alpine
+    restart: unless-stopped
+    ports:
+      - "4222:4222" # порт приложения
+      - "8222:8222" # порт мониторинга
+    volumes:
+      - local-nats-volume:/data
+    networks:
+      - linka-net
+    healthcheck:
+      # wget встроен в alpine образ NATS по умолчанию, проверяет эндпоинт мониторинга
+      test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # js включает JetStream, -m включает мониторинг, --sd задает папку хранения сообщений
+    command: [ "-js", "-m", "8222", "--sd", "/data" ]
+
+  redis:
+    container_name: local-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - local-redis-volume:/data
+    networks:
+      - linka-net
+    healthcheck:
+      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  local-postgres-volume:
+  local-minio-volume:
+  local-nats-volume:
+  local-redis-volume:
+
+
+networks:
+  linka-net:
