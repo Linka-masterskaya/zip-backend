@@ -2,6 +2,7 @@ global:
   scrape_interval: 5s
 
 scrape_configs:
-  - job_name: 'zip-backend-metrics'
+  - job_name: "zip-backend-metrics"
     static_configs:
-      - targets: ['zip-backend:9090']
+      - targets: ["zip-backend:9090"]
+    metrics_path: "/metrics"

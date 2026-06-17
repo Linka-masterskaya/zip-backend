@@ -1,4 +1,6 @@
-// Package metrics contains Prometheus metrics registration and helpers.
+// Package metrics provides Prometheus instrumentation for HTTP services.
+// It manages metric registration, collection, and export for monitoring
+// request rates, latencies, and concurrent connections.
 package metrics
 
 import (
@@ -20,7 +22,7 @@ var (
 	initOnce sync.Once
 )
 
-// Initialize registers application metrics once.
+// Initialize - sets up Prometheus metrics.
 func Initialize() {
 	initOnce.Do(func() {
 		registry = prometheus.NewRegistry()
@@ -58,27 +60,27 @@ func Initialize() {
 	})
 }
 
-// NewHandler returns an HTTP handler for exposing Prometheus metrics.
+// NewHandler - creates an HTTP handler for metrics export.
 func NewHandler() http.Handler {
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 }
 
-// IncRequests increments the total HTTP requests counter.
+// IncRequests - increments the request counter.
 func IncRequests(method, path, status string) {
 	httpRequestsTotal.WithLabelValues(method, path, status).Inc()
 }
 
-// ObserveDuration records the HTTP request duration.
+// ObserveDuration - records request duration in the histogram.
 func ObserveDuration(method, path, status string, seconds float64) {
 	httpRequestDuration.WithLabelValues(method, path, status).Observe(seconds)
 }
 
-// IncInFlight increments the in-flight HTTP requests gauge.
+// IncInFlight - increments the active requests counter.
 func IncInFlight() {
 	httpRequestsInFlight.Inc()
 }
 
-// DecInFlight decrements the in-flight HTTP requests gauge.
+// DecInFlight - decrements the active requests counter.
 func DecInFlight() {
 	httpRequestsInFlight.Dec()
 }

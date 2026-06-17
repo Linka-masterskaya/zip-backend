@@ -9,7 +9,31 @@ redis:
   url: "redis://localhost:6379/0"
 
 nats:
-  url: "nats://localhost:4222"
+  connection:
+    url: "nats://localhost:4222"
+    max_reconnect: 5
+    ping_interval: "20s"
+    max_pings_outstanding: 3
+
+  stream:
+    name: "AI_JOBS"
+    init_timeout: "10s"
+    max_age: "24h"
+    max_bytes: 104857600  # 100MB
+    max_msgs: 100000
+    duplicates: "5m"
+
+  consumers:
+    tts:
+      durable: "ai-worker-tts"
+      ack_wait: "30s"
+      max_deliver: 3
+      fetch_max_wait: "5s"
+    clamav:
+      durable: "ai-worker-clamav"
+      ack_wait: "10s"
+      max_deliver: 3
+      fetch_max_wait: "5s"
 
 minio:
   endpoint: "localhost:9000"
