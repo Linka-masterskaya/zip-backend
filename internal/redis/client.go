@@ -29,7 +29,7 @@ func NewClient(URL string) (*Client, error) {
 	err = rdb.Ping(ctx).Err()
 
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("failed to ping redis:"), err)
+		return nil, errors.Join(fmt.Errorf("failed to ping redis"), err)
 	}
 
 	slog.Info("Connection to redis is established")
