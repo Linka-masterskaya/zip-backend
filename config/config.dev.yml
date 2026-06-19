@@ -41,6 +41,7 @@ minio:
   secret_key: "minioadmin"
   bucket: "linka-media"
   use_ssl: false
+  timeout: "15s"
 
 jwt:
   secret: "changeme-min-32-chars-secret-key"

@@ -12,13 +12,15 @@ import (
 	"syscall"
 	"time"
 
-	broker "github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/broker"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/redis"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
 
 var (
@@ -40,6 +42,16 @@ func main() {
 
 	slog.SetDefault(newLogger(cfg.App.Env))
 
+	metrics.Initialize()
+
+	// Пока инициализируем MinIO только для проверки подключения и создания bucket при старте
+	// Клиент будет сохранен и передан в сервисы позже, когда появятся операции с объектами
+	if _, err := storage.New(cfg.MinIO); err != nil {
+		slog.Error("minio connect failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("minio connected", "bucket", cfg.MinIO.Bucket)
+
 	nc, publisher, err := initNATS(cfg.NATS)
 	if err != nil {
 		slog.Error("failed to init nats", "err", err)
@@ -51,8 +63,6 @@ func main() {
 		}
 	}()
 	_ = publisher // временно, пока нет хендлеров в server
-
-	metrics.Initialize()
 
 	redisClient, err := redis.NewClient(cfg.Redis.URL)
 	if err != nil {

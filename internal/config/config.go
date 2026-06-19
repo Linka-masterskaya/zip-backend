@@ -82,6 +82,7 @@ type MinIOConfig struct {
 	SecretKey string `mapstructure:"secret_key"`
 	Bucket    string `mapstructure:"bucket"`
 	UseSSL    bool   `mapstructure:"use_ssl"`
+	Timeout   string `mapstructure:"timeout"`
 }
 
 // JWTConfig contains JWT signing and expiration settings.
