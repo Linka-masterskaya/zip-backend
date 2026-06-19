@@ -70,16 +70,17 @@ func main() {
 	migrateFlag := flag.Bool("migrate", false, "Run database migrations and exit")
 	flag.Parse()
 
-	// Подключение к БД
-	db, err := sql.Open("postgres", cfg.DB.URL)
-	if err != nil {
-		slog.Error("failed to connect to postgres", "err", err)
-		os.Exit(1)
-	}
-	defer db.Close()
-
 	// Если флаг --migrate, выполняем миграции
 	if *migrateFlag {
+		// Подключение к БД
+		db, err := sql.Open("postgres", cfg.DB.URL)
+		if err != nil {
+			slog.Error("failed to connect to postgres", "err", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		// Запуск миграций
 		if err := migrations.Run(db); err != nil {
 			log.Fatalf("Migration failed: %v", err)
 		}

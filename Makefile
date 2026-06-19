@@ -72,4 +72,4 @@ migration-help:
 	@echo "*  make migrate-down                     Roll back the last migration"
 
 migrate-embed:
-    go run ./cmd/server --migrate
+	go run ./cmd/server --migrate
