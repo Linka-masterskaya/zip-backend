@@ -106,6 +106,21 @@ services:
       start_period: 15s
     command: run --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
 
+  redis:
+    container_name: local-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - local-redis-volume:/data
+    networks:
+      - linka-net
+    healthcheck:
+      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   local-postgres-volume:
@@ -113,6 +128,7 @@ volumes:
   local-nats-volume:
   local-loki-volume:
   local-alloy-volume:
+  local-redis-volume:
 
 
 networks:

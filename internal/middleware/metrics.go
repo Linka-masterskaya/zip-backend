@@ -13,11 +13,13 @@ type responseWriterWrapper struct {
 	statusCode int
 }
 
+// WriteHeader - overrides the original WriteHeader to capture the status code.
 func (rw *responseWriterWrapper) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Metrics - HTTP middleware that collects Prometheus metrics for each request.
 func Metrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		metrics.IncInFlight()

@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,9 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/broker"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+	"github.com/Linka-masterskaya/zip-backend/internal/redis"
+	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
 
 var (
@@ -36,6 +43,32 @@ func main() {
 	slog.SetDefault(newLogger(cfg.App.Env))
 
 	metrics.Initialize()
+
+	// Пока инициализируем MinIO только для проверки подключения и создания bucket при старте
+	// Клиент будет сохранен и передан в сервисы позже, когда появятся операции с объектами
+	if _, err := storage.New(cfg.MinIO); err != nil {
+		slog.Error("minio connect failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("minio connected", "bucket", cfg.MinIO.Bucket)
+
+	nc, publisher, err := initNATS(cfg.NATS)
+	if err != nil {
+		slog.Error("failed to init nats", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := nc.Drain(); err != nil {
+			slog.Error("nats drain", "err", err)
+		}
+	}()
+	_ = publisher // временно, пока нет хендлеров в server
+
+	redisClient, err := redis.NewClient(cfg.Redis.URL)
+	if err != nil {
+		slog.Error("redis initialization failed:", "err", err)
+		os.Exit(1)
+	}
 
 	mainMux := http.NewServeMux()
 	wrappedHandler := middleware.Metrics(mainMux)
@@ -106,6 +139,12 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
+
+	// Redis. Закрываем соединение
+	if err := redisClient.Close(); err != nil {
+		slog.Error("redis close error", "err", err)
+	}
+
 }
 
 func newLogger(env string) *slog.Logger {
@@ -113,4 +152,26 @@ func newLogger(env string) *slog.Logger {
 		return slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	}
 	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
+	nc, err := broker.New(cfg.Connection)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initNATS: %w", err)
+	}
+	slog.Info("nats connected", "url", cfg.Connection.URL)
+
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initNATS: jetstream: %w", err)
+	}
+
+	if err := broker.InitStreams(cfg.Stream, js); err != nil {
+		return nil, nil, fmt.Errorf("initNATS: streams: %w", err)
+	}
+	slog.Info("jetstream stream ready", "stream", cfg.Stream.Name)
+
+	publisher := broker.NewPublisher(js)
+
+	return nc, publisher, nil
 }

@@ -27,7 +27,7 @@ mock:
 
 # ── Dev infra ────────────────────────────────────────────────────────────────
 dev-up:
-	docker compose -f compose.dev.yaml up -d
+	docker compose -f docker-compose.yml -f compose.dev.yaml up -d
 
 dev-down:
 	docker compose -f compose.dev.yaml down
