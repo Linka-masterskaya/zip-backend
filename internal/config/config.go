@@ -33,7 +33,9 @@ type DBConfig struct {
 
 // RedisConfig contains Redis connection settings.
 type RedisConfig struct {
-	URL string `mapstructure:"url"`
+	URL        string `mapstructure:"url"`
+	ClientName string `mapstructure:"client_name"`
+	PoolSize   int    `mapstructure:"pool_size"`
 }
 
 // NATSConfig contains NATS connection settings.
