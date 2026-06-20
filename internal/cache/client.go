@@ -69,16 +69,22 @@ type RateLimitRequest struct {
 	WindowSize time.Duration
 }
 
-// IncrCounter increments key and sets ttl on first increment.
+// incrWithTTL atomically increments key and sets TTL on first increment.
+var incrWithTTL = redis.NewScript(`
+-- KEYS[1]: counter key
+-- ARGV[1]: ttl in seconds
+local count = redis.call("INCR", KEYS[1])
+if count == 1 then
+    redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+return count
+`)
+
+// IncrCounter atomically increments key and sets ttl on first increment via Lua.
 func (c *Client) IncrCounter(ctx context.Context, key string, ttl time.Duration) (int64, error) {
-	count, err := c.rdb.Incr(ctx, key).Result()
+	count, err := incrWithTTL.Run(ctx, c.rdb, []string{key}, int(ttl.Seconds())).Int64()
 	if err != nil {
 		return 0, fmt.Errorf("redis.IncrCounter: %w", err)
-	}
-	if count == 1 {
-		if err := c.rdb.Expire(ctx, key, ttl).Err(); err != nil {
-			return count, fmt.Errorf("redis.IncrCounter: expire: %w", err)
-		}
 	}
 	return count, nil
 }
