@@ -29,7 +29,6 @@ var (
 )
 
 func main() {
-	//nolint:gosec
 	cfgPath := os.Getenv("CONFIG_PATH")
 	if cfgPath == "" {
 		cfgPath = "config/config.dev.yml"
