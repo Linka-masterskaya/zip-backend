@@ -1,3 +1,4 @@
+// Package redis provides Redis client initialization helpers.
 package redis
 
 import (
@@ -10,10 +11,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// Client wraps a Redis client connection.
 type Client struct {
 	Rdb *redis.Client
 }
 
+// NewClient creates a Redis client from URL and verifies the connection.
 func NewClient(URL string) (*Client, error) {
 	options, err := redis.ParseURL(URL)
 
@@ -29,7 +32,7 @@ func NewClient(URL string) (*Client, error) {
 	err = rdb.Ping(ctx).Err()
 
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("failed to ping redis:"), err)
+		return nil, errors.Join(fmt.Errorf("failed to ping redis"), err)
 	}
 
 	slog.Info("Connection to redis is established")
@@ -38,6 +41,7 @@ func NewClient(URL string) (*Client, error) {
 
 }
 
+// Close closes the Redis client connection.
 func (c *Client) Close() error {
 	if c.Rdb != nil {
 		return c.Rdb.Close()
