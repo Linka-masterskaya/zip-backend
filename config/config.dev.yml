@@ -81,6 +81,8 @@ pictures_bank:
 smtp:
   smtp_host: "smtp.yandex.ru"
   smtp_port: 587
+  smtp_username: "noreply@yandex.com"
+  smtp_password: "your-app-password"
   from_email: "noreply@yandex.com"
   tls: true
 
