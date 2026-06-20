@@ -71,7 +71,7 @@ func main() {
 	}
 
 	mainMux := http.NewServeMux()
-	wrappedHandler := middleware.Metrics(mainMux)
+	wrappedHandler := middleware.RecoveryMiddleware(middleware.Metrics(mainMux))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.App.Port,
