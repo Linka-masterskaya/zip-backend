@@ -176,11 +176,14 @@ func (c *Client) RotateRefresh(ctx context.Context, req RotateRefreshRequest) er
 // getHash loads the hash at key into dest, or returns ErrNotFound.
 func (c *Client) getHash(ctx context.Context, key string, dest any) error {
 	res := c.rdb.HGetAll(ctx, key)
+	if err := res.Err(); err != nil {
+		return fmt.Errorf("redis.getHash: %w", err)
+	}
 	if len(res.Val()) == 0 {
 		return ErrNotFound
 	}
 	if err := res.Scan(dest); err != nil {
-		return fmt.Errorf("redis.getHash: %w", err)
+		return fmt.Errorf("redis.getHash: scan: %w", err)
 	}
 	return nil
 }

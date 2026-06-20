@@ -7,6 +7,8 @@ db:
 
 redis:
   url: "redis://localhost:6379/0"
+  client_name: "zip-backend"
+  pool_size: 10
 
 nats:
   connection:
