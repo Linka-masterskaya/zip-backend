@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/db"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/redis"
@@ -43,6 +44,15 @@ func main() {
 		slog.Error("redis initialization failed:", "err", err)
 		os.Exit(1)
 	}
+
+	// Postgres. Инициализация
+	dbPool, err := db.New(cfg.DB)
+	if err != nil {
+		slog.Error("postgres initialization failed:", "err", err)
+		os.Exit(1)
+	}
+
+	slog.Info("database connected", "pool_size", cfg.DB.MaxConns)
 
 	mainMux := http.NewServeMux()
 	wrappedHandler := middleware.Metrics(mainMux)
@@ -119,6 +129,8 @@ func main() {
 		slog.Error("redis close error", "err", err)
 	}
 
+	// Postgres. закрываем пул соединений
+	dbPool.Close()
 }
 
 func newLogger(env string) *slog.Logger {

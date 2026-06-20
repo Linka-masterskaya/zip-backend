@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -27,7 +28,11 @@ type AppConfig struct {
 
 // DBConfig contains database connection settings.
 type DBConfig struct {
-	URL string `mapstructure:"url"`
+	URL               string        `mapstructure:"url"`
+	MaxConns          int32         `mapstructure:"max_conns"`
+	MinConns          int32         `mapstructure:"min_conns"`
+	MaxConnLifetime   time.Duration `mapstructure:"max_conn_lifetime"`
+	HealthCheckPeriod time.Duration `mapstructure:"healthcheck_period"`
 }
 
 // RedisConfig contains Redis connection settings.
