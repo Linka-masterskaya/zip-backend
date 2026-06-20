@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -154,12 +155,12 @@ type AuthConfig struct {
 
 // CORSConfig contains CORS settings.
 type CORSConfig struct {
-	AllowOrigin      string `mapstructure:"allow_origin"`
-	AllowMethods     string `mapstructure:"allow_methods"`
-	AllowHeaders     string `mapstructure:"allow_headers"`
-	ExposeHeaders    string `mapstructure:"expose_headers"`
-	AllowCredentials string `mapstructure:"allow_credentials"`
-	MaxAge           string `mapstructure:"max_age"`
+	AllowOrigins     []string `mapstructure:"allow_origins"`
+	AllowMethods     []string `mapstructure:"allow_methods"`
+	AllowHeaders     []string `mapstructure:"allow_headers"`
+	ExposeHeaders    []string `mapstructure:"expose_headers"`
+	AllowCredentials bool     `mapstructure:"allow_credentials"`
+	MaxAge           int      `mapstructure:"max_age"`
 }
 
 // Load reads configuration from a file and applies environment overrides.
@@ -172,8 +173,9 @@ func Load(path string) (*Config, error) {
 	// Set defaults
 	setDefaults(v)
 
-	// Bind environment variables
-	bindEnvs(v)
+	// Environment variables override YAML keys, for example APP_PORT overrides app.port.
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -262,7 +264,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pictures_bank.url", "")
 
 	// SMTP defaults
-	v.SetDefault("smtp.smtp_host", "smtp.gmail.com")
+	v.SetDefault("smtp.smtp_host", "smtp.yandex.ru")
 	v.SetDefault("smtp.smtp_port", 587)
 	v.SetDefault("smtp.tls", true)
 
@@ -277,71 +279,34 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.require_email_verification", false)
 
 	// CORS defaults
-	v.SetDefault("cors.allow_origin", "*")
-	v.SetDefault("cors.allow_methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
-	v.SetDefault("cors.allow_headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-	v.SetDefault("cors.expose_headers", "Content-Length, Content-Type, Date, X-Total-Count")
-	v.SetDefault("cors.allow_credentials", "true")
-	v.SetDefault("cors.max_age", "86400")
-}
-
-// bindEnvs binds environment variables to configuration keys.
-func bindEnvs(v *viper.Viper) {
-	bindings := []struct {
-		key string
-		env string
-	}{
-		// App
-		{"app.env", "APP_ENV"},
-		{"app.port", "APP_PORT"},
-
-		// DB
-		{"db.url", "DB_URL"},
-
-		// Redis
-		{"redis.url", "REDIS_URL"},
-
-		// NATS
-		{"nats.connection.url", "NATS_URL"},
-
-		// MinIO
-		{"minio.endpoint", "MINIO_ENDPOINT"},
-		{"minio.access_key", "MINIO_ACCESS_KEY"},
-		{"minio.secret_key", "MINIO_SECRET_KEY"},
-		{"minio.bucket", "MINIO_BUCKET"},
-		{"minio.use_ssl", "MINIO_USE_SSL"},
-
-		// JWT
-		{"jwt.secret", "JWT_SECRET"},
-		{"jwt.access_ttl", "JWT_ACCESS_TTL"},
-		{"jwt.refresh_ttl", "JWT_REFRESH_TTL"},
-
-		// Yandex
-		{"yandex.client_id", "YANDEX_CLIENT_ID"},
-		{"yandex.client_secret", "YANDEX_CLIENT_SECRET"},
-		{"yandex.redirect_url", "YANDEX_REDIRECT_URL"},
-
-		// OpenAI
-		{"openai.api_key", "OPENAI_API_KEY"},
-		{"openai.base_url", "OPENAI_BASE_URL"},
-		{"openai.org_id", "OPENAI_ORG_ID"},
-
-		// Pictures Bank
-		{"pictures_bank.url", "PICTURES_BANK_URL"},
-
-		// SMTP
-		{"smtp.smtp_host", "SMTP_HOST"},
-		{"smtp.smtp_port", "SMTP_PORT"},
-		{"smtp.from_email", "SMTP_FROM_EMAIL"},
-		{"smtp.tls", "SMTP_TLS"},
-	}
-
-	for _, b := range bindings {
-		if err := v.BindEnv(b.key, b.env); err != nil {
-			fmt.Printf("WARN: failed to bind environment variable: config_key=%s env_var=%s error=%v\n",
-				b.key, b.env, err)
-		}
-	}
+	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})
+	v.SetDefault("cors.allow_methods", []string{
+		"GET",
+		"POST",
+		"PUT",
+		"DELETE",
+		"OPTIONS",
+		"PATCH",
+	})
+	v.SetDefault("cors.allow_headers", []string{
+		"Content-Type",
+		"Content-Length",
+		"Accept-Encoding",
+		"X-CSRF-Token",
+		"Authorization",
+		"Accept",
+		"Origin",
+		"Cache-Control",
+		"X-Requested-With",
+	})
+	v.SetDefault("cors.expose_headers", []string{
+		"Content-Length",
+		"Content-Type",
+		"Date",
+		"X-Total-Count",
+	})
+	v.SetDefault("cors.allow_credentials", true)
+	v.SetDefault("cors.max_age", 86400)
 }
 
 // validateConfig validates required configuration fields.
