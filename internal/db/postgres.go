@@ -23,6 +23,10 @@ func New(cfg config.DBConfig) (*pgxpool.Pool, error) {
 
 	dbpool, err := pgxpool.NewWithConfig(context.Background(), config)
 
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pgxpool: %w", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
