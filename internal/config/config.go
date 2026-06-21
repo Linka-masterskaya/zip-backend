@@ -135,10 +135,10 @@ type PicturesBankConfig struct {
 
 // SMTPConfig contains Email settings.
 type SMTPConfig struct {
-	Host     string `mapstructure:"smtp_host"`
-	Port     int    `mapstructure:"smtp_port"`
-	Username string `mapstructure:"smtp_username"`
-	Password string `mapstructure:"smtp_password"`
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
 	From     string `mapstructure:"from_email"`
 	TLS      bool   `mapstructure:"tls"`
 }
@@ -266,10 +266,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pictures_bank.url", "")
 
 	// SMTP defaults
-	v.SetDefault("smtp.smtp_host", "smtp.yandex.ru")
-	v.SetDefault("smtp.smtp_port", 587)
-	v.SetDefault("smtp.smtp_username", "noreply@yandex.com")
-	v.SetDefault("smtp.smtp_password", "your-app-password")
+	v.SetDefault("smtp.host", "smtp.yandex.ru")
+	v.SetDefault("smtp.port", 587)
+	v.SetDefault("smtp.username", "noreply@yandex.com")
+	v.SetDefault("smtp.password", "your-app-password")
 	v.SetDefault("smtp.from_email", "noreply@yandex.com")
 	v.SetDefault("smtp.tls", true)
 
