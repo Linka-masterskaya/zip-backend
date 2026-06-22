@@ -88,7 +88,9 @@ func NewRedis(t *testing.T) (*redis.Client, func()) {
 	})
 	// Verify that Redis is actually reachable before returning the client.
 	if err := client.Ping(ctx).Err(); err != nil {
-		client.Close()
+		if err := client.Close(); err != nil {
+			t.Logf("close redis client: %v", err)
+		}
 		if err := redisContainer.Terminate(ctx); err != nil {
 			t.Logf("failed to terminate Redis container after ping error: %v", err)
 		}
@@ -96,7 +98,9 @@ func NewRedis(t *testing.T) (*redis.Client, func()) {
 	}
 	// Cleanup closes the Redis client and removes the container.
 	cleanup := func() {
-		client.Close()
+		if err := client.Close(); err != nil {
+			t.Logf("close redis client: %v", err)
+		}
 		if err := redisContainer.Terminate(ctx); err != nil {
 			t.Logf("failed to terminate Redis container: %v", err)
 		}
