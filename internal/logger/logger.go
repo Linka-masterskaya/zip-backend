@@ -21,11 +21,9 @@ type ContextHandler struct {
 // Handle вызывается на каждую запись лога. Именно сюда приходит ctx,
 // переданный через logger.InfoContext(ctx, ...).
 func (h ContextHandler) Handle(ctx context.Context, r slog.Record) error {
-	reqId := middleware.GetRequestID(ctx) // будет доступно после слияния AB-17
-
-	if reqId != nil {
-		r.AddAttrs(slog.String("requestID", reqId.(string)))
-	}
+	if reqId := middleware.GetRequestID(ctx); reqId != "" {
+		r.AddAttrs(slog.String("requestID", reqId))
+	} // будет доступно после слияния AB-17
 
 	return h.Handler.Handle(ctx, r)
 }
@@ -44,6 +42,10 @@ func Init(env string) {
 		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})
+	default:
+		slog.Error("не задан или передан неверный env",
+			slog.String("env", env),
+		)
 	}
 
 	slog.SetDefault(slog.New(ContextHandler{handler}))
