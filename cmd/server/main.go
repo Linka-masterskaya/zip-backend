@@ -12,13 +12,15 @@ import (
 	"syscall"
 	"time"
 
-	broker "github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
-	"github.com/Linka-masterskaya/zip-backend/internal/redis"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
 
 var (
@@ -40,6 +42,16 @@ func main() {
 
 	slog.SetDefault(newLogger(cfg.App.Env))
 
+	metrics.Initialize()
+
+	// Пока инициализируем MinIO только для проверки подключения и создания bucket при старте
+	// Клиент будет сохранен и передан в сервисы позже, когда появятся операции с объектами
+	if _, err := storage.New(cfg.MinIO); err != nil {
+		slog.Error("minio connect failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("minio connected", "bucket", cfg.MinIO.Bucket)
+
 	nc, publisher, err := initNATS(cfg.NATS)
 	if err != nil {
 		slog.Error("failed to init nats", "err", err)
@@ -52,9 +64,7 @@ func main() {
 	}()
 	_ = publisher // временно, пока нет хендлеров в server
 
-	metrics.Initialize()
-
-	redisClient, err := redis.NewClient(cfg.Redis.URL)
+	redisClient, err := cache.NewClient(cfg.Redis)
 	if err != nil {
 		slog.Error("redis initialization failed:", "err", err)
 		os.Exit(1)
@@ -73,16 +83,8 @@ func main() {
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("GET /metrics", metrics.NewHandler())
-
-	metricsMux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{
-			"status": "ok",
-			"env":    cfg.App.Env,
-		}); err != nil {
-			slog.Error("health response encode failed", "err", err)
-		}
-	})
+	metricsMux.HandleFunc("GET /health", healthHandler(cfg.App.Env))
+	metricsMux.HandleFunc("GET /readyz", readyzHandler(redisClient))
 
 	metricsSrv := &http.Server{
 		Addr:         ":9090",
@@ -164,4 +166,35 @@ func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
 	publisher := broker.NewPublisher(js)
 
 	return nc, publisher, nil
+}
+
+func healthHandler(env string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok", "env": env}); err != nil {
+			slog.Error("health response encode failed", "err", err)
+		}
+	}
+}
+
+func readyzHandler(redisClient *cache.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if err := redisClient.Ping(ctx); err != nil {
+			slog.Error("readyz: redis unavailable", "err", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			if err := json.NewEncoder(w).Encode(map[string]string{"status": "redis unavailable"}); err != nil {
+				slog.Error("readyz response encode failed", "err", err)
+			}
+			return
+		}
+
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ready"}); err != nil {
+			slog.Error("readyz response encode failed", "err", err)
+		}
+	}
 }

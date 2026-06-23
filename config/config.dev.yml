@@ -25,6 +25,7 @@ redis:
   max_retries: 3
   min_retry_backoff: "8ms"
   max_retry_backoff: "512ms"
+  client_name: "zip-backend"  
 
 nats:
   connection:
@@ -59,6 +60,7 @@ minio:
   secret_key: "minioadmin"
   bucket: "linka-media"
   use_ssl: false
+  timeout: "15s"
 
 jwt:
   secret: "changeme-min-32-chars-secret-key"

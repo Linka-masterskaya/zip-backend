@@ -57,6 +57,7 @@ type RedisConfig struct {
 	MaxRetries      int           `mapstructure:"max_retries"`
 	MinRetryBackoff time.Duration `mapstructure:"min_retry_backoff"`
 	MaxRetryBackoff time.Duration `mapstructure:"max_retry_backoff"`
+	ClientName      string        `mapstructure:"client_name"`	
 }
 
 // NATSConfig contains NATS connection settings.
@@ -105,6 +106,7 @@ type MinIOConfig struct {
 	SecretKey string `mapstructure:"secret_key"`
 	Bucket    string `mapstructure:"bucket"`
 	UseSSL    bool   `mapstructure:"use_ssl"`
+	Timeout   string `mapstructure:"timeout"`
 }
 
 // JWTConfig contains JWT signing and expiration settings.
