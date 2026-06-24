@@ -7,21 +7,24 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     # если Postgresql уже установлен локально, используй другой порт на хост-машине (например "5433:5432")
-    # если меняется порт, не забудь изменить его в DB_URL внутри локального .env
+    # если меняется порт, не забудь изменить его в DB_URL внутри локального .env или ./config/fonfig.dev.yml
     ports:
       - "5432:5432"
     volumes:
       - local-postgres-volume:/var/lib/postgresql/data
     environment:
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=linka
+      - POSTGRES_PASSWORD=linka
+      - POSTGRES_DB=linka
     networks:
       - linka-net
     healthcheck:
       # Без доп. ключей. В хелсчеке утилита pg_isready по умолчанию использует дефолтные креды к БД
-      test: [ "CMD-SHELL", "pg_isready" ]
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
 
   minio:
     container_name: local-minio

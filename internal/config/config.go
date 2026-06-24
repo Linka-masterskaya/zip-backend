@@ -36,11 +36,11 @@ type AppConfig struct {
 
 // DBConfig contains database connection settings.
 type DBConfig struct {
-	URL             string `mapstructure:"url"`
-	MaxOpenConns    int    `mapstructure:"max_open_conns"`
-	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
-	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`
-	ConnMaxIdleTime int    `mapstructure:"conn_max_idle_time"`
+	URL               string        `mapstructure:"url"`
+	MaxConns          int32         `mapstructure:"max_conns"`
+	MinConns          int32         `mapstructure:"min_conns"`
+	MaxConnLifetime   time.Duration `mapstructure:"max_conn_lifetime"`
+	HealthCheckPeriod time.Duration `mapstructure:"healthcheck_period"`
 }
 
 // RedisConfig contains Redis connection settings.
@@ -57,7 +57,7 @@ type RedisConfig struct {
 	MaxRetries      int           `mapstructure:"max_retries"`
 	MinRetryBackoff time.Duration `mapstructure:"min_retry_backoff"`
 	MaxRetryBackoff time.Duration `mapstructure:"max_retry_backoff"`
-	ClientName      string        `mapstructure:"client_name"`	
+	ClientName      string        `mapstructure:"client_name"`
 }
 
 // NATSConfig contains NATS connection settings.
