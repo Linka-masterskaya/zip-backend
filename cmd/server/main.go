@@ -78,6 +78,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Postgres. закрываем пул соединений
+	defer dbPool.Close()
+
 	slog.Info("database connected", "pool_size", cfg.DB.MaxConns)
 
 	mainMux := http.NewServeMux()
@@ -155,8 +158,6 @@ func main() {
 		slog.Error("redis close error", "err", err)
 	}
 
-	// Postgres. закрываем пул соединений
-	dbPool.Close()
 }
 
 func newLogger(env string) *slog.Logger {
