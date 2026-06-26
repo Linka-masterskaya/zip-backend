@@ -10,7 +10,6 @@ import (
 	"runtime/debug"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/google/uuid"
 )
 
 // AppHandler описывает сигнатуру стандартной функции-хендлера, возвращающей ошибку.
@@ -26,22 +25,6 @@ func GetRequestID(ctx context.Context) string {
 		return id
 	}
 	return ""
-}
-
-// RequestIDMiddleware проверяет заголовок X-Request-Id. Если его нет — генерирует новый UUID.
-// Помещает ID в контекст запроса и добавляет его в Response Headers.
-func RequestIDMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reqID := r.Header.Get("X-Request-Id")
-		if reqID == "" {
-			reqID = uuid.New().String()
-		}
-
-		ctx := context.WithValue(r.Context(), requestIDKey, reqID)
-		w.Header().Set("X-Request-Id", reqID)
-
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
 }
 
 // RecoveryMiddleware перехватывает panic и возвращает внутреннюю ошибку сервера.
