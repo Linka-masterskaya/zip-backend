@@ -84,6 +84,8 @@ func main() {
 		slog.Error("postgres initialization failed:", "err", err)
 		os.Exit(1)
 	}
+
+	// Postgres. закрываем пул соединений
 	defer dbPool.Close()
 
 	slog.Info("database connected", "pool_size", cfg.DB.MaxConns)
@@ -226,6 +228,7 @@ func readyzHandler(redisClient *cache.Client) http.HandlerFunc {
 	}
 }
 
+// runMigrationsIfNeeded проверяет флаг --migrate и выполняет миграции, если он установлен.
 func runMigrationsIfNeeded(cfg *config.Config) {
 	migrateFlag := flag.Bool("migrate", false, "Run database migrations and exit")
 	flag.Parse()
@@ -234,6 +237,7 @@ func runMigrationsIfNeeded(cfg *config.Config) {
 		return
 	}
 
+	// Подключаемся к БД только для миграций
 	dbConn, err := sql.Open("postgres", cfg.DB.URL)
 	if err != nil {
 		slog.Error("failed to connect to postgres for migration", "err", err)

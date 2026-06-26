@@ -7,21 +7,24 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     # если Postgresql уже установлен локально, используй другой порт на хост-машине (например "5433:5432")
-    # если меняется порт, не забудь изменить его в DB_URL внутри локального .env
+    # если меняется порт, не забудь изменить его в DB_URL внутри локального .env или ./config/fonfig.dev.yml
     ports:
       - "5432:5432"
     volumes:
       - local-postgres-volume:/var/lib/postgresql/data
     environment:
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=linka
+      - POSTGRES_PASSWORD=linka
+      - POSTGRES_DB=linka
     networks:
       - linka-net
     healthcheck:
       # Без доп. ключей. В хелсчеке утилита pg_isready по умолчанию использует дефолтные креды к БД
-      test: [ "CMD-SHELL", "pg_isready" ]
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
 
   minio:
     container_name: local-minio
@@ -66,6 +69,46 @@ services:
     # js включает JetStream, -m включает мониторинг, --sd задает папку хранения сообщений
     command: [ "-js", "-m", "8222", "--sd", "/data" ]
 
+  loki:
+    image: grafana/loki:3.7.0
+    container_name: local-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - local-loki-volume:/loki
+      - ./deploy/loki/loki-config.yml:/etc/loki/config.yml
+    networks:
+      - linka-net
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "/usr/bin/loki", "-health" ]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: -config.file=/etc/loki/config.yml
+
+  alloy:
+    image: grafana/alloy:v1.17.0
+    container_name: local-alloy
+    volumes:
+      - ./deploy/alloy/alloy-config.alloy:/etc/alloy/config.alloy
+      - /var/run/docker.sock:/var/run/docker.sock
+      - local-alloy-volume:/var/lib/alloy/data
+    depends_on:
+      loki:
+        condition: service_healthy
+    networks:
+      - linka-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/12345"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    command: run --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
+
   redis:
     container_name: local-redis
     image: redis:7-alpine
@@ -81,11 +124,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 5s
 
 volumes:
   local-postgres-volume:
   local-minio-volume:
   local-nats-volume:
+  local-loki-volume:
+  local-alloy-volume:
   local-redis-volume:
 
 

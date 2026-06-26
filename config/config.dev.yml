@@ -1,12 +1,31 @@
 app:
   env: dev
   port: "8080"
+  public_url: "http://localhost:8080"
+  frontend_url: "http://localhost:3000"
+  migrations_dir: "./migrations"
 
 db:
   url: "postgres://linka:linka@localhost:5432/linka?sslmode=disable"
+  max_conns: 25
+  min_conns: 5
+  max_conn_lifetime: "1h"
+  healthcheck_period: "30s"
 
 redis:
   url: "redis://localhost:6379/0"
+  pool_size: 10
+  min_idle_conns: 2
+  max_idle_conns: 5
+  conn_max_idle_time: "5m"
+  conn_max_lifetime: "1h"
+  dial_timeout: "5s"
+  read_timeout: "3s"
+  write_timeout: "3s"
+  max_retries: 3
+  min_retry_backoff: "8ms"
+  max_retry_backoff: "512ms"
+  client_name: "zip-backend"  
 
 nats:
   connection:
@@ -19,7 +38,7 @@ nats:
     name: "AI_JOBS"
     init_timeout: "10s"
     max_age: "24h"
-    max_bytes: 104857600  # 100MB
+    max_bytes: 104857600 # 100MB
     max_msgs: 100000
     duplicates: "5m"
 
@@ -48,7 +67,61 @@ jwt:
   access_ttl: "15m"
   refresh_ttl: "720h"
 
-google:
+yandex:
   client_id: ""
   client_secret: ""
-  redirect_url: "http://localhost:8080/auth/google/callback"
+  redirect_url: "http://localhost:8080/auth/yandex/callback"
+
+openai:
+  api_key: ""
+  base_url: "https://api.openai.com/v1"
+  org_id: ""
+
+pictures_bank:
+  url: ""
+
+smtp:
+  host: "smtp.yandex.ru"
+  port: 587
+  username: "noreply@yandex.com"
+  password: "your-app-password"
+  from_email: "noreply@yandex.com"
+  tls: true
+
+auth:
+  access_token_ttl: 15m
+  refresh_token_ttl: 720h
+  verify_email_token_ttl: 24h
+  reset_password_token_ttl: 1h
+  email_change_token_ttl: 1h
+  bcrypt_cost: 12
+  login_rate_limit: 5
+  require_email_verification: false
+
+cors:
+  allow_origins:
+    - "http://localhost:8080"
+  allow_methods:
+    - "GET"
+    - "POST"
+    - "PUT"
+    - "DELETE"
+    - "OPTIONS"
+    - "PATCH"
+  allow_headers:
+    - "Content-Type"
+    - "Content-Length"
+    - "Accept-Encoding"
+    - "X-CSRF-Token"
+    - "Authorization"
+    - "Accept"
+    - "Origin"
+    - "Cache-Control"
+    - "X-Requested-With"
+  expose_headers:
+    - "Content-Length"
+    - "Content-Type"
+    - "Date"
+    - "X-Total-Count"
+  allow_credentials: true
+  max_age: 86400

@@ -32,12 +32,28 @@ func startTestNATS(t *testing.T) string {
 	return s.ClientURL()
 }
 
-func loadTestNATSConfig(t *testing.T, url string) config.NATSConfig {
-	cfg, err := config.Load("../../config/config.dev.yml")
-	require.NoError(t, err)
-
-	cfg.NATS.Connection.URL = url
-	return cfg.NATS
+// testNATSConfig builds a minimal static NATS config for tests (no file/config.Load dependency).
+func testNATSConfig(url string) config.NATSConfig {
+	return config.NATSConfig{
+		Connection: config.ConnectionConfig{
+			URL:                 url,
+			MaxReconnect:        -1,
+			PingInterval:        2 * time.Second,
+			MaxPingsOutstanding: 2,
+		},
+		Stream: config.StreamConfig{
+			Name:        "AI_JOBS",
+			InitTimeout: 5 * time.Second,
+			MaxAge:      24 * time.Hour,
+			MaxBytes:    100 << 20,
+			MaxMsgs:     100000,
+			Duplicates:  5 * time.Minute,
+		},
+		Consumers: config.ConsumersConfig{
+			TTS:    config.ConsumerSettings{Durable: "test-tts", AckWait: 30 * time.Second, MaxDeliver: 3, FetchMaxWait: time.Second},
+			ClamAV: config.ConsumerSettings{Durable: "test-clamav", AckWait: 30 * time.Second, MaxDeliver: 3, FetchMaxWait: time.Second},
+		},
+	}
 }
 
 func setupBroker(t *testing.T, natsCfg config.NATSConfig) (*nats.Conn, jetstream.JetStream) {
@@ -57,7 +73,7 @@ func setupBroker(t *testing.T, natsCfg config.NATSConfig) (*nats.Conn, jetstream
 
 func TestInitStreams(t *testing.T) {
 	url := startTestNATS(t)
-	natsCfg := loadTestNATSConfig(t, url)
+	natsCfg := testNATSConfig(url)
 
 	_, js := setupBroker(t, natsCfg)
 
@@ -71,7 +87,7 @@ func TestInitStreams(t *testing.T) {
 
 func TestPublishAndConsumeTTS(t *testing.T) {
 	url := startTestNATS(t)
-	natsCfg := loadTestNATSConfig(t, url)
+	natsCfg := testNATSConfig(url)
 
 	_, js := setupBroker(t, natsCfg)
 
@@ -102,7 +118,7 @@ func TestPublishAndConsumeTTS(t *testing.T) {
 
 func TestPublishAndConsumeClamAV(t *testing.T) {
 	url := startTestNATS(t)
-	natsCfg := loadTestNATSConfig(t, url)
+	natsCfg := testNATSConfig(url)
 
 	_, js := setupBroker(t, natsCfg)
 

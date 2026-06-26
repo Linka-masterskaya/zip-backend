@@ -21,6 +21,12 @@ linters:
       check-blank: true
     gocyclo:
       min-complexity: 15
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true 
   exclusions:
     generated: strict
     rules:

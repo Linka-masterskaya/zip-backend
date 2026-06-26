@@ -19,6 +19,7 @@ services:
     container_name: grafana
     restart: unless-stopped
     environment:
+      - GF_LOG_LEVEL=warn
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
     volumes:
@@ -35,5 +36,25 @@ services:
       timeout: 5s
       retries: 3
 
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=linka
+      - POSTGRES_PASSWORD=linka
+      - POSTGRES_DB=linka
+    volumes:
+    - postgres_data:/var/lib/postgresql/data
+    ports:
+    - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+      
 volumes:
   grafana_data:
+  postgres_data:
