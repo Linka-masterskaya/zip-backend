@@ -73,10 +73,10 @@ func main() {
 	mainMux := http.NewServeMux()
 	wrappedHandler := middleware.Chain(
 		mainMux,
-		middleware.CORSMiddleware(cfg.App.FrontendURL),
 		middleware.RequestIDMiddleware,
-		middleware.RecoveryMiddleware,
+		middleware.CORSMiddleware(cfg.App.FrontendURL),
 		middleware.Metrics,
+		middleware.RecoveryMiddleware,
 	)
 
 	srv := &http.Server{
