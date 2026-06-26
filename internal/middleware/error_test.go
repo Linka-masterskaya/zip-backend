@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,13 +11,16 @@ import (
 )
 
 func TestErrorMiddleware_AppError(t *testing.T) {
-	handler := AppHandler(func(w http.ResponseWriter, r *http.Request) error {
+	handler := AppHandler(func(_ http.ResponseWriter, _ *http.Request) error {
 		return apperr.ErrNotFound.WithMessage("pack not found")
 	})
 
-	mw := ErrorMiddleware(handler)
+	mw := RequestIDMiddleware(ErrorMiddleware(handler))
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "/test", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	req.Header.Set("X-Request-Id", "abc-123")
 	rec := httptest.NewRecorder()
 
@@ -43,13 +47,16 @@ func TestErrorMiddleware_AppError(t *testing.T) {
 }
 
 func TestRecoveryMiddleware(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		panic("something went critically wrong")
 	})
 
 	mw := RecoveryMiddleware(handler)
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "/test", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	rec := httptest.NewRecorder()
 
 	mw.ServeHTTP(rec, req)

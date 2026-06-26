@@ -1,7 +1,9 @@
+// Package apperr содержит стандартные типы ошибок приложения.
 package apperr
 
 import "fmt"
 
+// AppError описывает кастомную ошибку приложения с HTTP-статусом.
 type AppError struct {
 	Code       string `json:"code"`
 	Message    string `json:"message"`
@@ -9,6 +11,7 @@ type AppError struct {
 	Err        error  `json:"-"`
 }
 
+// Стандартные ошибки приложения для использования в хендлерах.
 var (
 	ErrNotFound     = &AppError{Code: "NOT_FOUND", HTTPStatus: 404, Message: "resource not found"}
 	ErrUnauthorized = &AppError{Code: "UNAUTHORIZED", HTTPStatus: 401, Message: "unauthorized"}
@@ -29,6 +32,7 @@ func (e *AppError) Unwrap() error {
 	return e.Err
 }
 
+// WithMessage возвращает копию ошибки с новым сообщением.
 func (e *AppError) WithMessage(msg string) *AppError {
 	return &AppError{
 		Code:       e.Code,
@@ -38,6 +42,7 @@ func (e *AppError) WithMessage(msg string) *AppError {
 	}
 }
 
+// WithError возвращает копию ошибки с обернутой оригинальной ошибкой.
 func (e *AppError) WithError(err error) *AppError {
 	return &AppError{
 		Code:       e.Code,
