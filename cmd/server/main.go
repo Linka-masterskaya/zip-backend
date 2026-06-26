@@ -78,13 +78,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Postgres. Инициализация из main
+	// Postgres. Инициализация
 	dbPool, err := db.New(cfg.DB)
 	if err != nil {
 		slog.Error("postgres initialization failed:", "err", err)
 		os.Exit(1)
 	}
 	defer dbPool.Close()
+
 	slog.Info("database connected", "pool_size", cfg.DB.MaxConns)
 
 	// Инициализация слоя паков
