@@ -1,5 +1,12 @@
 .PHONY: build run test lint mock dev-up dev-down dev-reset migrate migrate-down
 
+# ── Environment ──────────────────────────────────────────────────────────────
+# Load variables from .env file (if exists) and export them for subprocesses
+ifneq (,$(wildcard .env))
+    include .env
+    export
+endif
+
 # ── Build ────────────────────────────────────────────────────────────────────
 build:
 	go build -o bin/server ./cmd/server
@@ -42,3 +49,27 @@ migrate:
 
 migrate-down:
 	goose -dir migrations postgres "$(DB_URL)" down
+
+migration-generate:
+	@if [ -z "$(NAME)" ]; then \
+		echo "Error: specify the migration name"; \
+		echo "Ex: make migration-generate NAME=create_users_table"; \
+		exit 1; \
+	fi
+	@mkdir -p migrations
+	@TIMESTAMP=$$(date +%Y%m%d%H%M%S); \
+	FILENAME="migrations/$${TIMESTAMP}_$(NAME).sql"; \
+	echo "-- +goose Up" > $$FILENAME; \
+	echo "" >> $$FILENAME; \
+	echo "-- +goose Down" >> $$FILENAME; \
+	echo "Migration created: $$FILENAME"
+	@echo "Now add the SQL queries to the file"
+
+migration-help:
+	@echo "Migration management (goose):"
+	@echo "*  make migration-generate NAME=<name>   Create a new migration"
+	@echo "*  make migrate                          Apply all new migrations"
+	@echo "*  make migrate-down                     Roll back the last migration"
+
+migrate-embed:
+	go run ./cmd/server --migrate

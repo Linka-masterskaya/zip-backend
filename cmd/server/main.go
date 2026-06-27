@@ -3,8 +3,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/lib/pq"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -22,6 +26,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
+	"github.com/Linka-masterskaya/zip-backend/migrations"
 )
 
 var (
@@ -40,6 +45,9 @@ func main() {
 		slog.Error("config load failed", "err", err)
 		os.Exit(1)
 	}
+
+	// Обработка флага --migrate
+	runMigrationsIfNeeded(cfg)
 
 	slog.SetDefault(newLogger(cfg.App.Env))
 
@@ -149,7 +157,6 @@ func main() {
 	if err := redisClient.Close(); err != nil {
 		slog.Error("redis close error", "err", err)
 	}
-
 }
 
 func newLogger(env string) *slog.Logger {
@@ -210,4 +217,32 @@ func readyzHandler(redisClient *cache.Client) http.HandlerFunc {
 			slog.Error("readyz response encode failed", "err", err)
 		}
 	}
+}
+
+// runMigrationsIfNeeded проверяет флаг --migrate и выполняет миграции, если он установлен.
+func runMigrationsIfNeeded(cfg *config.Config) {
+	migrateFlag := flag.Bool("migrate", false, "Run database migrations and exit")
+	flag.Parse()
+
+	if !*migrateFlag {
+		return
+	}
+
+	// Подключаемся к БД только для миграций
+	dbConn, err := sql.Open("postgres", cfg.DB.URL)
+	if err != nil {
+		slog.Error("failed to connect to postgres for migration", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := dbConn.Close(); err != nil {
+			slog.Error("failed to close db connection after migration", "err", err)
+		}
+	}()
+
+	if err := migrations.Run(dbConn); err != nil {
+		log.Fatalf("Migration failed: %v", err)
+	}
+	log.Println("Migrations completed. Exiting.")
+	os.Exit(0)
 }
