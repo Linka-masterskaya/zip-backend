@@ -17,7 +17,6 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.42.0
 	github.com/wneessen/go-mail v0.7.3
-	go.uber.org/zap v1.27.0
 )
 
 require (
