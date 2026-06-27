@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+</head>
+
+<body>
+    <h2>Подтверждение email</h2>
+    <p>Здравствуйте{{if .Username}}, {{.Username}}{{end}}!</p>
+    <p>Для подтверждения email перейдите по ссылке:</p>
+    <p>
+        <a href="{{.FrontendURL}}/verify-email?token={{.Token}}">
+            {{.FrontendURL}}/verify-email?token={{.Token}}
+        </a>
+    </p>
+    <p>Ссылка действительна 24 часа.</p>
+    <p>Если вы не регистрировались, проигнорируйте это письмо.</p>
+</body>
+
+</html>
