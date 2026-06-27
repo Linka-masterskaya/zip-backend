@@ -46,6 +46,7 @@ func Init(env string) {
 		slog.Error("не задан или передан неверный env",
 			slog.String("env", env),
 		)
+		os.Exit(1)
 	}
 
 	slog.SetDefault(slog.New(ContextHandler{handler}))
