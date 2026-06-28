@@ -43,7 +43,7 @@ func main() {
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		slog.Error("config load failed", "err", err)
+		slog.Error("config load failed", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
 
@@ -57,40 +57,40 @@ func main() {
 	// Пока инициализируем MinIO только для проверки подключения и создания bucket при старте
 	// Клиент будет сохранен и передан в сервисы позже, когда появятся операции с объектами
 	if _, err := storage.New(cfg.MinIO); err != nil {
-		slog.Error("minio connect failed", "err", err)
+		slog.Error("minio connect failed", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
-	slog.Info("minio connected", "bucket", cfg.MinIO.Bucket)
+	slog.Info("minio connected", "bucket", cfg.MinIO.Bucket) //nolint:gosec // ошибка на старте приложения.
 
 	nc, publisher, err := initNATS(cfg.NATS)
 	if err != nil {
-		slog.Error("failed to init nats", "err", err)
+		slog.Error("failed to init nats", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
 	defer func() {
 		if err := nc.Drain(); err != nil {
-			slog.Error("nats drain", "err", err)
+			slog.Error("nats drain", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		}
 	}()
 	_ = publisher // временно, пока нет хендлеров в server
 
 	redisClient, err := cache.NewClient(cfg.Redis)
 	if err != nil {
-		slog.Error("redis initialization failed:", "err", err)
+		slog.Error("redis initialization failed:", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
 
 	// Postgres. Инициализация
 	dbPool, err := db.New(cfg.DB)
 	if err != nil {
-		slog.Error("postgres initialization failed:", "err", err)
+		slog.Error("postgres initialization failed:", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
 
 	// Postgres. закрываем пул соединений
 	defer dbPool.Close()
 
-	slog.Info("database connected", "pool_size", cfg.DB.MaxConns)
+	slog.Info("database connected", "pool_size", cfg.DB.MaxConns) //nolint:gosec // ошибка на старте приложения.
 
 	mainMux := http.NewServeMux()
 	wrappedHandler := middleware.Metrics(mainMux)
@@ -115,7 +115,7 @@ func main() {
 		WriteTimeout: 5 * time.Second,
 	}
 
-	slog.Info("starting server",
+	slog.Info("starting server", //nolint:gosec // ошибка на старте приложения.
 		"addr", srv.Addr,
 		"env", cfg.App.Env,
 		"version", version,
@@ -156,7 +156,7 @@ func main() {
 
 	// Redis. Закрываем соединение
 	if err := redisClient.Close(); err != nil {
-		slog.Error("redis close error", "err", err)
+		slog.Error("redis close error", logger.Err(err)) //nolint:gosec // ошибка на останове приложения.
 	}
 }
 
@@ -186,7 +186,7 @@ func healthHandler(env string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok", "env": env}); err != nil {
-			slog.Error("health response encode failed", "err", err)
+			slog.Error("health response encode failed", logger.Err(err))
 		}
 	}
 }
@@ -199,16 +199,16 @@ func readyzHandler(redisClient *cache.Client) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 
 		if err := redisClient.Ping(ctx); err != nil {
-			slog.Error("readyz: redis unavailable", "err", err)
+			slog.Error("readyz: redis unavailable", logger.Err(err)) //nolint:gosec // ошибка на останове приложения.
 			w.WriteHeader(http.StatusServiceUnavailable)
 			if err := json.NewEncoder(w).Encode(map[string]string{"status": "redis unavailable"}); err != nil {
-				slog.Error("readyz response encode failed", "err", err)
+				slog.Error("readyz response encode failed", logger.Err(err))
 			}
 			return
 		}
 
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ready"}); err != nil {
-			slog.Error("readyz response encode failed", "err", err)
+			slog.Error("readyz response encode failed", logger.Err(err))
 		}
 	}
 }
@@ -225,12 +225,12 @@ func runMigrationsIfNeeded(cfg *config.Config) {
 	// Подключаемся к БД только для миграций
 	dbConn, err := sql.Open("postgres", cfg.DB.URL)
 	if err != nil {
-		slog.Error("failed to connect to postgres for migration", "err", err)
+		slog.Error("failed to connect to postgres for migration", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
 	defer func() {
 		if err := dbConn.Close(); err != nil {
-			slog.Error("failed to close db connection after migration", "err", err)
+			slog.Error("failed to close db connection after migration", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		}
 	}()
 
