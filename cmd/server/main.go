@@ -108,16 +108,6 @@ func main() {
 	metricsMux.HandleFunc("GET /health", healthHandler(cfg.App.Env))
 	metricsMux.HandleFunc("GET /readyz", readyzHandler(redisClient))
 
-	metricsMux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{
-			"status": "ok",
-			"env":    cfg.App.Env,
-		}); err != nil {
-			slog.Error("health response encode failed", logger.Err(err))
-		}
-	})
-
 	metricsSrv := &http.Server{
 		Addr:         ":9090",
 		Handler:      metricsMux,
