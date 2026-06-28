@@ -6,13 +6,11 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
 )
 
-// Service описывает бизнес-логику работы с паками.
 type Service struct {
 	repo      *Repository
 	publisher *broker.Publisher
 }
 
-// NewService создает новый экземпляр Service.
 func NewService(repo *Repository, publisher *broker.Publisher) *Service {
 	return &Service{
 		repo:      repo,
@@ -20,19 +18,19 @@ func NewService(repo *Repository, publisher *broker.Publisher) *Service {
 	}
 }
 
-// Create создает новый пак и отправляет событие в брокер.
+// Create — заглушка (stub) для создания нового пака.
 func (s *Service) Create(ctx context.Context, name string) (*Pack, error) {
 	_ = ctx
 	return &Pack{ID: "stub-id", Name: name}, nil
 }
 
-// Get возвращает пак по его идентификатору.
+// Get — заглушка (stub) для получения пака по идентификатору.
 func (s *Service) Get(ctx context.Context, id string) (*Pack, error) {
 	_ = ctx
 	return &Pack{ID: id, Name: "stub-name"}, nil
 }
 
-// List возвращает список всех существующих паков.
+// List — заглушка (stub) для получения списка всех паков.
 func (s *Service) List(ctx context.Context) ([]*Pack, error) {
 	_ = ctx
 	return []*Pack{}, nil

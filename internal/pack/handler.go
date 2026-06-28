@@ -2,17 +2,16 @@ package pack
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 )
 
-// Handler обрабатывает входящие HTTP-запросы для выполнения операций над паками.
 type Handler struct {
 	service *Service
 }
 
-// NewHandler создает новый экземпляр контроллера Handler.
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
@@ -21,7 +20,6 @@ type createPackRequest struct {
 	Name string `json:"name"`
 }
 
-// CreatePack парсит тело запроса, валидирует данные и инициирует создание пака.
 func (h *Handler) CreatePack(w http.ResponseWriter, r *http.Request) error {
 	var req createPackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -39,16 +37,14 @@ func (h *Handler) CreatePack(w http.ResponseWriter, r *http.Request) error {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	return json.NewEncoder(w).Encode(res)
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		slog.Error("failed to encode response", "err", err)
+	}
+	return nil
 }
 
-// GetPack извлекает идентификатор из пути запроса и запрашивает данные пака.
 func (h *Handler) GetPack(w http.ResponseWriter, r *http.Request) error {
 	id := r.PathValue("id")
-	if id == "" {
-		id = r.URL.Query().Get("id")
-	}
-
 	if id == "" {
 		return apperr.ErrBadRequest
 	}
@@ -60,10 +56,12 @@ func (h *Handler) GetPack(w http.ResponseWriter, r *http.Request) error {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	return json.NewEncoder(w).Encode(res)
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		slog.Error("failed to encode response", "err", err)
+	}
+	return nil
 }
 
-// ListPacks запрашивает список паков у сервисного слоя и отдает клиенту в формате JSON.
 func (h *Handler) ListPacks(w http.ResponseWriter, r *http.Request) error {
 	res, err := h.service.List(r.Context())
 	if err != nil {
@@ -72,5 +70,8 @@ func (h *Handler) ListPacks(w http.ResponseWriter, r *http.Request) error {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	return json.NewEncoder(w).Encode(res)
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		slog.Error("failed to encode response", "err", err)
+	}
+	return nil
 }

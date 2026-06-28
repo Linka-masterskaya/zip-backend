@@ -2,6 +2,7 @@ package pack
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,7 +10,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 )
 
-func TestHandler_ErrorMiddleware_NotFound(t *testing.T) {
+func TestHandler_ErrorMiddleware_Internal(t *testing.T) {
 	handler := middleware.AppHandler(func(w http.ResponseWriter, r *http.Request) error {
 		return http.ErrNotSupported
 	})
@@ -23,6 +24,15 @@ func TestHandler_ErrorMiddleware_NotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	mw.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+
+	var errorResponse map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &errorResponse); err != nil {
+		t.Fatalf("failed to unmarshal error response: %v", err)
+	}
 }
 
 func TestHandler_ErrorMiddleware_Panic(t *testing.T) {

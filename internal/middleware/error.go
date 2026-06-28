@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"runtime/debug"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 )
@@ -33,12 +32,10 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				reqID := GetRequestID(r.Context())
-				stack := debug.Stack()
 
 				slog.Error("panic recovered",
 					"panic", rec,
 					"request_id", reqID,
-					"stack", string(stack),
 				)
 
 				sendJSONError(w, apperr.ErrInternal, reqID)
@@ -65,7 +62,6 @@ func ErrorMiddleware(next AppHandler) http.Handler {
 					"code", appErr.Code,
 					"err", appErr.Error(),
 					"request_id", reqID,
-					"stack", string(debug.Stack()),
 				)
 			} else {
 				slog.Warn("client error occurred",
