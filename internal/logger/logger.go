@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
 )
 
 const (
@@ -21,7 +21,7 @@ type ContextHandler struct {
 // Handle вызывается на каждую запись лога. Именно сюда приходит ctx,
 // переданный через logger.InfoContext(ctx, ...).
 func (h ContextHandler) Handle(ctx context.Context, r slog.Record) error {
-	if reqId := middleware.GetRequestID(ctx); reqId != "" {
+	if reqId := reqctx.GetRequestID(ctx); reqId != "" {
 		r.AddAttrs(slog.String("requestID", reqId))
 	} // будет доступно после слияния AB-17
 
