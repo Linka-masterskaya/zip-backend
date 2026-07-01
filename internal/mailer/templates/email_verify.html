@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Подтверждение email</title>
+</head>
+
+<body>
+    <h2>Подтверждение email</h2>
+
+    <p>Здравствуйте{{if .Username}}, {{.Username}}{{end}}!</p>
+
+    <p>Для подтверждения email перейдите по ссылке:</p>
+
+    <p>
+        <a href="{{.FrontendURL}}/verify-email?token={{.Token}}">
+            Подтвердить email
+        </a>
+    </p>
+
+    <p style="font-size: 13px; color: #888;">
+        Если вы не регистрировались, проигнорируйте это письмо.
+    </p>
+</body>
+
+</html>
