@@ -19,7 +19,14 @@ import (
 
 // isMailpitAvailable checks if Mailpit SMTP server is available.
 func isMailpitAvailable() bool {
-	conn, err := net.DialTimeout("tcp", "localhost:1025", 2*time.Second)
+	dialer := net.Dialer{
+		Timeout: 2 * time.Second,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, err := dialer.DialContext(ctx, "tcp", "localhost:1025")
 	if err != nil {
 		return false
 	}
