@@ -19,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
@@ -93,6 +94,24 @@ func main() {
 
 	mainMux := http.NewServeMux()
 	wrappedHandler := middleware.Metrics(mainMux)
+
+	serviceCfg := &auth.ServiceConfig{
+		JWTSecret:                cfg.JWT.Secret,
+		AccessTokenTTL:           cfg.Auth.AccessTokenTTL,
+		RefreshTokenTTL:          cfg.Auth.RefreshTokenTTL,
+		RequireEmailVerification: cfg.Auth.RequireEmailVerification,
+	}
+
+	authRepo := auth.NewRepository(dbPool)
+
+	authService := auth.NewService(
+		authRepo,
+		redisClient,
+		serviceCfg,
+	)
+
+	authHandler := auth.NewAuthHandler(authService)
+	mainMux.HandleFunc("POST /auth/login", authHandler.Login)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.App.Port,
