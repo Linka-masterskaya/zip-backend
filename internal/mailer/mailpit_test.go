@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,16 @@ import (
 // ============================================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================
+
+// isMailpitAvailable checks if Mailpit SMTP server is available.
+func isMailpitAvailable() bool {
+	conn, err := net.DialTimeout("tcp", "localhost:1025", 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
 
 // GetMailpitConfig returns the Mailpit configuration for tests.
 func GetMailpitConfig() config.SMTPConfig {
@@ -34,6 +45,10 @@ func GetMailpitConfig() config.SMTPConfig {
 // ============================================================
 
 func TestMailpit_SendEmailVerify(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -53,6 +68,10 @@ func TestMailpit_SendEmailVerify(t *testing.T) {
 }
 
 func TestMailpit_SendPasswordReset(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -72,6 +91,10 @@ func TestMailpit_SendPasswordReset(t *testing.T) {
 }
 
 func TestMailpit_SendEmailChange(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -92,6 +115,10 @@ func TestMailpit_SendEmailChange(t *testing.T) {
 }
 
 func TestMailpit_SendAllTemplates(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -146,6 +173,10 @@ func TestMailpit_SendAllTemplates(t *testing.T) {
 }
 
 func TestMailpit_SendWithSpecialCharacters(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -172,12 +203,15 @@ func TestMailpit_SendWithSpecialCharacters(t *testing.T) {
 }
 
 func TestMailpit_SendWithEmptyData(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
 	defer sender.Close()
 
-	// Отправляем письмо с минимальными данными
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -191,6 +225,10 @@ func TestMailpit_SendWithEmptyData(t *testing.T) {
 }
 
 func TestMailpit_SendMultipleRecipients(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -220,6 +258,10 @@ func TestMailpit_SendMultipleRecipients(t *testing.T) {
 }
 
 func TestMailpit_ConcurrentSends(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -256,7 +298,6 @@ func TestMailpit_ConcurrentSends(t *testing.T) {
 	wg.Wait()
 	close(errors)
 
-	// Проверяем, что нет ошибок
 	var errs []error
 	for err := range errors {
 		errs = append(errs, err)
@@ -267,6 +308,10 @@ func TestMailpit_ConcurrentSends(t *testing.T) {
 }
 
 func TestMailpit_InvalidEmail(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -287,6 +332,10 @@ func TestMailpit_InvalidEmail(t *testing.T) {
 }
 
 func TestMailpit_TemplateNotFound(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
@@ -308,24 +357,24 @@ func TestMailpit_TemplateNotFound(t *testing.T) {
 }
 
 func TestMailpit_EmptyHTML(t *testing.T) {
+	if !isMailpitAvailable() {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
 	defer sender.Close()
 
-	// Создаем тестовый случай с пустым шаблоном
-	// (в реальности это может произойти, если шаблон не содержит данных)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Отправляем с пустыми данными, но шаблон все равно должен что-то сгенерировать
 	err = sender.Send(ctx, "test@example.com", domain.EmailVerify, domain.EmailData{
-		Token:    "", // Пустой токен
-		Username: "", // Пустое имя
+		Token:    "",
+		Username: "",
 		Email:    "",
 	})
 
-	// Шаблон все равно должен сгенерировать HTML, даже с пустыми данными
 	assert.NoError(t, err, "Should handle empty data gracefully")
 	t.Log("✓ Empty data handled gracefully")
 }
