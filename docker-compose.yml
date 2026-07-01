@@ -70,7 +70,7 @@ services:
     volumes:
       - mailpit-data:/data
     healthcheck:
-      test: ["CMD", "mailpit", "status"]
+      test: ["CMD", "curl", "-f", "http://localhost:8025"]
       interval: 10s
       timeout: 5s
       retries: 3

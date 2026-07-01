@@ -137,12 +137,13 @@ type PicturesBankConfig struct {
 
 // SMTPConfig contains Email settings.
 type SMTPConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	Username string `mapstructure:"username"`
-	Password string `mapstructure:"password"`
-	From     string `mapstructure:"from_email"`
-	TLS      bool   `mapstructure:"tls"`
+	Host     string        `mapstructure:"host"`
+	Port     int           `mapstructure:"port"`
+	Username string        `mapstructure:"username"`
+	Password string        `mapstructure:"password"`
+	From     string        `mapstructure:"from_email"`
+	TLS      bool          `mapstructure:"tls"`
+	Timeout  time.Duration `mapstructure:"timeout"`
 }
 
 // AuthConfig contains authentication and security settings.
@@ -274,6 +275,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("smtp.password", "your-app-password")
 	v.SetDefault("smtp.from_email", "noreply@yandex.com")
 	v.SetDefault("smtp.tls", true)
+	v.SetDefault("smtp.timeout", "10s")
 
 	// Auth defaults
 	v.SetDefault("auth.access_token_ttl", "15m")

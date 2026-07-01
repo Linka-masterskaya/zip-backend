@@ -5,13 +5,15 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/domain"
 
-	"github.com/wneessen/go-mail"
+	gomail "github.com/wneessen/go-mail"
 )
 
 //go:embed templates/*.html
@@ -19,30 +21,48 @@ var templatesFS embed.FS
 
 // SMTPSender — implementing email sending via SMTP.
 type SMTPSender struct {
-	client      *mail.Client
+	client      *gomail.Client
 	from        string
 	frontendURL string
 	templates   map[domain.Template]*template.Template
+	mu          sync.RWMutex
+	closed      bool
 }
 
 // NewSMTPSender - creates a new instance of 'SMTPSender'.
-func NewSMTPSender(cfg config.SMTPConfig, FrontendURL string) (*SMTPSender, error) {
-	client, err := mail.NewClient(
-		cfg.Host,
-		mail.WithPort(cfg.Port),
-		mail.WithSMTPAuth(mail.SMTPAuthPlain),
-		mail.WithUsername(cfg.Username),
-		mail.WithPassword(cfg.Password),
-		mail.WithTimeout(10*time.Second),
+func NewSMTPSender(cfg config.SMTPConfig, frontendURL string) (*SMTPSender, error) {
+	if err := validateSMTPConfig(cfg); err != nil {
+		return nil, fmt.Errorf("invalid SMTP config: %w", err)
+	}
+
+	var opts []gomail.Option
+	opts = append(opts,
+		gomail.WithPort(cfg.Port),
+		gomail.WithSMTPAuth(gomail.SMTPAuthPlain),
+		gomail.WithUsername(cfg.Username),
+		gomail.WithPassword(cfg.Password),
+		gomail.WithTimeout(cfg.Timeout),
 	)
+
+	if cfg.TLS {
+		opts = append(opts, gomail.WithTLSPolicy(gomail.TLSMandatory))
+	} else {
+		opts = append(opts, gomail.WithTLSPolicy(gomail.NoTLS))
+	}
+
+	client, err := gomail.NewClient(cfg.Host, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create smtp client: %w", err)
+	}
+
+	if frontendURL == "" {
+		return nil, fmt.Errorf("create smtp client: 'frontendURL' is empty")
 	}
 
 	s := &SMTPSender{
 		client:      client,
 		from:        cfg.From,
-		frontendURL: FrontendURL,
+		frontendURL: frontendURL,
 
 		templates: make(map[domain.Template]*template.Template),
 	}
@@ -57,7 +77,7 @@ func NewSMTPSender(cfg config.SMTPConfig, FrontendURL string) (*SMTPSender, erro
 func (s *SMTPSender) loadTemplates() error {
 	entries, err := templatesFS.ReadDir("templates")
 	if err != nil {
-		return err
+		return fmt.Errorf("read templates directory: %w", err)
 	}
 
 	for _, entry := range entries {
@@ -85,33 +105,52 @@ func (s *SMTPSender) Send(
 	ctx context.Context,
 	to string,
 	tmpl domain.Template,
-	data map[string]any,
+	data domain.EmailData,
 ) error {
+	if _, err := mail.ParseAddress(to); err != nil {
+		return fmt.Errorf("invalid recipient email: %w", err)
+	}
+
 	t, ok := s.templates[tmpl]
 	if !ok {
 		return fmt.Errorf("template not found: %s", tmpl)
 	}
 
-	if data == nil {
-		data = make(map[string]any)
+	templateData := map[string]any{
+		"Token":       data.Token,
+		"Username":    data.Username,
+		"Email":       data.Email,
+		"NewEmail":    data.NewEmail,
+		"FrontendURL": s.frontendURL,
 	}
-	data["FrontendURL"] = s.frontendURL
 
 	var html strings.Builder
-	if err := t.Execute(&html, data); err != nil {
+	if err := t.Execute(&html, templateData); err != nil {
 		return fmt.Errorf("execute template: %w", err)
 	}
 
-	msg := mail.NewMsg()
-	if err := msg.From(s.from); err != nil {
-		return err
+	if html.Len() == 0 {
+		return fmt.Errorf("generated email body is empty")
 	}
+
+	msg := gomail.NewMsg()
+	if err := msg.From(s.from); err != nil {
+		return fmt.Errorf("set from: %w", err)
+	}
+
 	if err := msg.To(to); err != nil {
-		return err
+		return fmt.Errorf("set to: %w", err)
 	}
 
 	msg.Subject(s.getSubject(tmpl))
-	msg.SetBodyString(mail.TypeTextHTML, html.String())
+	msg.SetBodyString(gomail.TypeTextHTML, html.String())
+
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return fmt.Errorf("smtp sender is closed")
+	}
+	s.mu.RUnlock()
 
 	err := s.client.DialAndSendWithContext(ctx, msg)
 	if err != nil {
@@ -127,5 +166,84 @@ func (s *SMTPSender) getSubject(tmpl domain.Template) string {
 		domain.PasswordReset: "Сброс пароля",
 		domain.EmailChange:   "Смена email",
 	}
-	return subjects[tmpl]
+
+	subject, ok := subjects[tmpl]
+	if !ok {
+		return "Уведомление от Linka"
+	}
+	return subject
+}
+
+// Close - closes SMTP sender.
+func (s *SMTPSender) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+
+	s.closed = true
+	return s.client.Close()
+}
+
+// validateSMTPConfig - validates SMTP configuration.
+func validateSMTPConfig(cfg config.SMTPConfig) error {
+	if cfg.Host == "" {
+		return fmt.Errorf("SMTP host is required")
+	}
+	if cfg.Port == 0 {
+		return fmt.Errorf("SMTP port is required")
+	}
+	if cfg.From == "" {
+		return fmt.Errorf("SMTP from email is required")
+	}
+	if cfg.Timeout == 0 {
+		return fmt.Errorf("SMTP timeout is required")
+	}
+
+	if _, err := mail.ParseAddress(cfg.From); err != nil {
+		return fmt.Errorf("invalid from email '%s': %w", cfg.From, err)
+	}
+
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return fmt.Errorf("invalid SMTP port: %d (must be between 1 and 65535)", cfg.Port)
+	}
+
+	if !isLocalSMTP(cfg.Host) {
+		if cfg.Username == "" {
+			return fmt.Errorf("SMTP username is required for external server: %s", cfg.Host)
+		}
+		if cfg.Password == "" {
+			return fmt.Errorf("SMTP password is required for external server: %s", cfg.Host)
+		}
+	}
+
+	if cfg.Timeout < time.Second {
+		return fmt.Errorf("SMTP timeout is too small: %v (minimum 1s)", cfg.Timeout)
+	}
+	if cfg.Timeout > time.Minute {
+		return fmt.Errorf("SMTP timeout is too large: %v (maximum 1m)", cfg.Timeout)
+	}
+
+	return nil
+}
+
+// isLocalSMTP - checks if host is local development SMTP.
+func isLocalSMTP(host string) bool {
+	localHosts := []string{
+		"localhost",
+		"127.0.0.1",
+		"::1",
+		"mailpit",
+		"mailhog",
+		"smtp",
+	}
+
+	for _, local := range localHosts {
+		if host == local {
+			return true
+		}
+	}
+	return false
 }

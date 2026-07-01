@@ -1,10 +1,12 @@
 package domain
 
-import "context"
+import (
+	"context"
+)
 
 // EmailSender — interface for sending emails.
 type EmailSender interface {
-	Send(ctx context.Context, to string, tmpl string, data map[string]any) error
+	Send(ctx context.Context, to string, tmpl Template, data EmailData) error
 }
 
 // Template — type of letter template.
@@ -16,3 +18,11 @@ const (
 	PasswordReset Template = "password_reset"
 	EmailChange   Template = "email_change"
 )
+
+// EmailData - email data.
+type EmailData struct {
+	Token    string
+	Username string
+	Email    string
+	NewEmail string
+}

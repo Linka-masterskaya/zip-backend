@@ -25,7 +25,7 @@ redis:
   max_retries: 3
   min_retry_backoff: "8ms"
   max_retry_backoff: "512ms"
-  client_name: "zip-backend"  
+  client_name: "zip-backend"
 
 nats:
   connection:
@@ -87,6 +87,7 @@ smtp:
   password: "your-app-password"
   from_email: "noreply@yandex.com"
   tls: true
+  timeout: "10s"
 
 auth:
   access_token_ttl: 15m

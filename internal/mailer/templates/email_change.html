@@ -1,20 +1,29 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 
 <head>
     <meta charset="UTF-8">
+    <title>Смена email</title>
 </head>
 
 <body>
     <h2>Смена email</h2>
+
     <p>Здравствуйте{{if .Username}}, {{.Username}}{{end}}!</p>
-    <p>Для подтверждения смены email перейдите по ссылке:</p>
+
+    <p>
+        Подтвердите смену email с <strong>{{.Email}}</strong> на <strong>{{.NewEmail}}</strong>:
+    </p>
+
     <p>
         <a href="{{.FrontendURL}}/confirm-email-change?token={{.Token}}">
-            {{.FrontendURL}}/confirm-email-change?token={{.Token}}
+            Подтвердить смену email
         </a>
     </p>
-    <p>Если вы не меняли email, проигнорируйте это письмо.</p>
+
+    <p style="font-size: 13px; color: #888;">
+        Если вы не запрашивали смену — проигнорируйте письмо.
+    </p>
 </body>
 
 </html>
