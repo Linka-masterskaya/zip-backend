@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/pkg/linka/cryptox"
 	"github.com/google/uuid"
 )
 
@@ -40,9 +41,10 @@ type UserIdentity struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-func NewService(repo *Repository, jwtSecret string) *Service {
+func NewService(repo *Repository, crypto *cryptox.Crypto, jwtSecret string) *Service {
 	return &Service{
 		repo:      repo,
+		crypto:    crypto,
 		jwtSecret: jwtSecret,
 	}
 }
@@ -69,20 +71,19 @@ func (s *Service) UpsertUser(ctx context.Context, email, name, yandexID string) 
 			return nil, nil, fmt.Errorf("update user: %w", err)
 		}
 
-		cred, err := s.repo.FindUserAuthByUserID(ctx, user.ID)
+		cred, err := s.repo.FindUserCredByUserID(ctx, user.ID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("find userAuth by user_id: %w", err)
 		}
 		return user, cred, nil
 	}
 
-	cred, err := s.repo.FindUserAuthByEmail(ctx, email)
+	emailHash := s.crypto.Hash([]byte(email))
+	cred, err := s.repo.FindUserCredByEmailHash(ctx, emailHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("find userAuth by email: %w", err)
+		return nil, nil, fmt.Errorf("find userCred by email_hash: %w", err)
 	}
-
 	if cred != nil {
-
 		user, err := s.repo.FindUserByID(ctx, cred.UserID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("find user by id: %w", err)
@@ -103,40 +104,66 @@ func (s *Service) UpsertUser(ctx context.Context, email, name, yandexID string) 
 			return nil, nil, fmt.Errorf("create identity: %w", err)
 		}
 
-		cred, err = s.repo.FindUserAuthByUserID(ctx, user.ID)
+		cred, err = s.repo.FindUserCredByUserID(ctx, user.ID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("find userAuth by user_id: %w", err)
+			return nil, nil, fmt.Errorf("find userCred by user_id: %w", err)
 		}
 		return user, cred, nil
 	}
 
-	newUser := &User{
-		ID:   uuid.New(),
-		Name: name,
+	tx, err := s.repo.pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin tx: %w", err)
 	}
-	if err := s.repo.CreateUser(ctx, newUser); err != nil {
+	defer func() { _ = tx.Rollback(ctx) }()
+	txRepo := s.repo.withTx(tx)
+
+	userID := uuid.New()
+	if err := txRepo.CreateUser(ctx, CreateUserParams{
+		ID:             userID,
+		OrganizationID: uuid.Nil,
+		Name:           name,
+	}); err != nil {
 		return nil, nil, fmt.Errorf("create user: %w", err)
 	}
 
-	newCred := &UserCred{
-		UserID:         newUser.ID,
-		EmailEncrypted: []byte(email), // TODO: зашифровать
-		EmailHash:      []byte(email), // TODO: захешировать
-		Role:           "viewer",
-	}
-	if err := s.repo.CreateUserAuth(ctx, newCred); err != nil {
-		return nil, nil, fmt.Errorf("create userAuth: %w", err)
+	emailHash = s.crypto.Hash([]byte(email))
+	emailEncrypted, err := s.crypto.Encrypt([]byte(email))
+	if err != nil {
+		return nil, nil, fmt.Errorf("encrypt email: %w", err)
 	}
 
-	newIdentity := &UserIdentity{
+	if err := txRepo.CreateAuthCred(ctx, CreateAuthCredParams{
+		UserID:         userID,
+		EmailHash:      emailHash,
+		EmailEncrypted: emailEncrypted,
+		PasswordHash:   "",
+		Role:           "viewer",
+	}); err != nil {
+		return nil, nil, fmt.Errorf("create authCred: %w", err)
+	}
+
+	if err := txRepo.CreateIdentity(ctx, &UserIdentity{
 		ID:          uuid.New(),
-		UserID:      newUser.ID,
+		UserID:      userID,
 		Provider:    "yandex",
 		ProviderUID: yandexID,
-	}
-	if err := s.repo.CreateIdentity(ctx, newIdentity); err != nil {
+	}); err != nil {
 		return nil, nil, fmt.Errorf("create identity: %w", err)
 	}
 
-	return newUser, newCred, nil
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit tx: %w", err)
+	}
+
+	user, err := s.repo.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find created user: %w", err)
+	}
+	cred, err = s.repo.FindUserCredByUserID(ctx, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find created userCred: %w", err)
+	}
+
+	return user, cred, nil
 }
