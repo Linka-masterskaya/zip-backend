@@ -1,15 +1,24 @@
+// Package auth contains authentication handlers and services.
 package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 )
 
 //go:generate go run go.uber.org/mock/mockgen -source=handler.go -destination=mock_service_test.go -package=auth
@@ -29,7 +38,6 @@ type Handler struct {
 	svc             authServiceIface
 	refreshTokenTTL time.Duration
 	cookieSecure    bool
-	frontendOrigin  string
 }
 
 // NewHandler creates an auth HTTP handler.
@@ -41,7 +49,6 @@ func NewHandler(svc authServiceIface, cfg ...Config) *Handler {
 	if len(cfg) > 0 {
 		h.refreshTokenTTL = cfg[0].RefreshTokenTTL
 		h.cookieSecure = cfg[0].CookieSecure
-		h.frontendOrigin = originOf(cfg[0].FrontendURL)
 	}
 
 	return h
@@ -95,34 +102,123 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	resp := LoginResponse{
-		AccessToken: result.AccessToken,
-	}
-
-	//nolint:gosec // The access token is intentionally serialized into the API response.
-	body, err := json.Marshal(resp)
-	if err != nil {
-		return fmt.Errorf("marshal login response: %w", err)
-	}
-
 	//nolint:gosec // Secure is configured separately for local and production environments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    result.RefreshToken,
-		Path:     "/api/v1/auth",
+		Path:     "/",
 		MaxAge:   int(h.refreshTokenTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	w.Header().Set("Content-Type", "application/json")
 
-	//nolint:gosec // The access token is intentionally returned in the response.
-	if _, err := w.Write(body); err != nil {
-		return fmt.Errorf("write login response: %w", err)
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
 	}
 
+	//nolint:gosec // The access token is intentionally returned in the response.
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		return fmt.Errorf("encode login response: %w", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil {
+		return apperr.ErrUnauthorized
+	}
+
+	result, err := h.svc.Refresh(r.Context(), cookie.Value)
+	if err != nil {
+		return err
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    result.RefreshToken,
+		Path:     "/",
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
+	}
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		return fmt.Errorf("encode refresh response: %w", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) error {
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil {
+		return apperr.ErrUnauthorized
+	}
+
+	if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+		return err
+	}
+
+	// Удаляем cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) error {
+	var req ForgotPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
+	}
+
+	if err := h.svc.ForgotPassword(r.Context(), req.Email); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	return nil
+}
+
+func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) error {
+	var req ResetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	if err := ValidatePassword(req.NewPassword); err != nil {
+		return err
+	}
+
+	if err := h.svc.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 
@@ -153,7 +249,11 @@ func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) error {
 func (h *Handler) ResendEmail(w http.ResponseWriter, r *http.Request) error {
 	var req ResendEmailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
+		return apperr.ErrBadRequest
+	}
+
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
 	}
 
 	if err := h.svc.resendEmail(r.Context(), req.Email); err != nil {
@@ -164,143 +264,224 @@ func (h *Handler) ResendEmail(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) error {
-	var req ForgotPasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
+func (h *Handler) RegisterRoutes(
+	mux *http.ServeMux,
+	authMW *middleware.AuthMW,
+	cacheClient *cache.Client,
+	cfg *config.Config,
+) {
+	verifyEmailIPLimit := middleware.RateLimit(
+		cacheClient,
+		"email-confirm",
+		int64(cfg.Auth.EmailConfirmRateLimit),
+		time.Minute,
+		cfg.App.TrustedProxies,
+	)
+
+	verifyResendIPLimit := middleware.RateLimit(
+		cacheClient,
+		"verify-resend",
+		int64(cfg.Auth.VerifyResendRateLimit),
+		time.Minute,
+		cfg.App.TrustedProxies,
+	)
+
+	resendPolicy := middleware.RateLimitPolicy{
+		Scope:  cfg.RateLimit.Resend.Scope,
+		Limit:  cfg.RateLimit.Resend.Limit,
+		Window: cfg.RateLimit.Resend.Window,
 	}
 
-	if err := h.svc.ForgotPassword(r.Context(), req.Email); err != nil {
-		return err
-	}
+	mux.Handle(
+		"POST /api/v1/auth/email-confirm",
+		verifyEmailIPLimit(
+			middleware.ErrorMiddleware(h.VerifyEmail),
+		),
+	)
 
-	w.WriteHeader(http.StatusAccepted)
-	return nil
+	mux.Handle(
+		"POST /api/v1/auth/verify-resend",
+		verifyResendIPLimit(
+			middleware.ErrorMiddleware(
+				authMW.AuthMiddleware(
+					middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
+				),
+			),
+		),
+	)
 }
 
-func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) error {
-	var req ResetPasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
-	}
+// ==================== OAuth Handler ====================
 
-	if err := h.svc.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
-		return err
-	}
+var ErrEmailAlreadyRegistered = errors.New("email already registered")
 
-	w.WriteHeader(http.StatusNoContent)
-	return nil
+type yandexUserInfo struct {
+	ID        string `json:"id"`
+	Email     string `json:"default_email"`
+	Name      string `json:"display_name"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
 }
 
-func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
-	if err := h.checkOrigin(r); err != nil {
-		return err
+type OAuthHandler struct {
+	service     *authService
+	cache       *cache.Client
+	oauthCfg    *oauth2.Config
+	frontendURL string
+}
+
+func NewOAuthHandler(service *authService, cache *cache.Client, oauthCfg *oauth2.Config, frontendURL string) *OAuthHandler {
+	return &OAuthHandler{
+		service:     service,
+		cache:       cache,
+		oauthCfg:    oauthCfg,
+		frontendURL: frontendURL,
+	}
+}
+
+func (h *OAuthHandler) YandexLogin(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	stateBytes := make([]byte, 16)
+	if _, err := rand.Read(stateBytes); err != nil {
+		http.Error(w, "Failed to generate state", http.StatusInternalServerError)
+		return
+	}
+	state := hex.EncodeToString(stateBytes)
+	if err := h.cache.SaveOAuthState(ctx, state, 5*time.Minute); err != nil {
+		http.Error(w, "Failed to save state", http.StatusInternalServerError)
+		return
+	}
+	url := h.oauthCfg.AuthCodeURL(state)
+	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+}
+
+func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+
+	if code == "" || state == "" {
+		http.Error(w, "Missing code or state", http.StatusBadRequest)
+		return
 	}
 
-	cookie, err := r.Cookie("refresh_token")
-	if errors.Is(err, http.ErrNoCookie) {
-		return apperr.ErrUnauthorized
+	if err := h.validateState(ctx, state); err != nil {
+		http.Error(w, "Invalid or expired state", http.StatusForbidden)
+		return
 	}
+
+	token, err := h.exchangeCode(ctx, code)
 	if err != nil {
-		return fmt.Errorf("get refresh cookie: %w", err)
+		slog.Error("failed to exchange token", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
-	if cookie.Value == "" {
-		return apperr.ErrUnauthorized
-	}
-	result, err := h.svc.Refresh(r.Context(), cookie.Value)
+
+	yandexUser, err := h.fetchUserInfo(ctx, token)
 	if err != nil {
-		return err
+		slog.Error("failed to fetch user info", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	resp := LoginResponse{
-		AccessToken: result.AccessToken,
-	}
-
-	//nolint:gosec // The access token is intentionally serialized into the API response.
-	body, err := json.Marshal(resp)
+	name := h.buildDisplayName(yandexUser)
+	user, userAuth, err := h.service.UpsertUser(ctx, yandexUser.Email, name, yandexUser.ID)
 	if err != nil {
-		return fmt.Errorf("marshal refresh response: %w", err)
+		slog.Error("failed to upsert user", "error", err)
+		if errors.Is(err, ErrEmailAlreadyRegistered) {
+			http.Redirect(w, r, h.frontendURL+"/login?email_exists=true", http.StatusSeeOther)
+			return
+		}
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	//nolint:gosec // Secure is configured separately for local and production environments.
+	if !user.EmailVerified {
+		userID, err := uuid.Parse(user.ID)
+		if err != nil {
+			slog.Error("invalid user ID format", "user_id", user.ID, "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if err := h.service.SendVerificationEmail(ctx, userID); err != nil {
+			slog.Error("failed to send verification email", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, h.frontendURL+"/verify-email", http.StatusSeeOther)
+		return
+	}
+
+	tokenString, err := h.service.GenerateOAuthJWT(user, userAuth)
+	if err != nil {
+		slog.Error("failed to generate JWT", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    result.RefreshToken,
-		Path:     "/api/v1/auth",
-		MaxAge:   int(h.refreshTokenTTL.Seconds()),
+		Name:     "token",
+		Value:    tokenString,
 		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   true,
+		Path:     "/",
+		MaxAge:   86400,
 	})
+	http.Redirect(w, r, h.frontendURL, http.StatusSeeOther)
+}
 
-	w.Header().Set("Content-Type", "application/json")
-
-	//nolint:gosec // Returning the access token is the expected API behavior.
-	if _, err := w.Write(body); err != nil {
-		return fmt.Errorf("write refresh response: %w", err)
+func (h *OAuthHandler) validateState(ctx context.Context, state string) error {
+	savedState, err := h.cache.GetOAuthState(ctx, state)
+	if err != nil {
+		return fmt.Errorf("invalid or expired state")
 	}
-
+	if savedState != state {
+		return fmt.Errorf("state mismatch")
+	}
+	if err := h.cache.DeleteOAuthState(ctx, state); err != nil {
+		slog.Warn("failed to delete oauth state", "error", err)
+	}
 	return nil
 }
 
-// Logout revokes the refresh token family and clears the cookie.
-func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) error {
-	if err := h.checkOrigin(r); err != nil {
-		return err
+func (h *OAuthHandler) exchangeCode(ctx context.Context, code string) (*oauth2.Token, error) {
+	return h.oauthCfg.Exchange(ctx, code)
+}
+
+func (h *OAuthHandler) fetchUserInfo(ctx context.Context, token *oauth2.Token) (*yandexUserInfo, error) {
+	client := h.oauthCfg.Client(ctx, token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://login.yandex.ru/info?format=json", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	if cookie, err := r.Cookie("refresh_token"); err == nil {
-		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
-			return err
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("yandex API error: %s", resp.Status)
+	}
+
+	var yandexUser yandexUserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&yandexUser); err != nil {
+		return nil, fmt.Errorf("failed to parse user info: %w", err)
+	}
+	return &yandexUser, nil
+}
+
+func (h *OAuthHandler) buildDisplayName(user *yandexUserInfo) string {
+	if user.Name != "" {
+		return user.Name
+	}
+	if user.FirstName != "" || user.LastName != "" {
+		name := strings.TrimSpace(user.FirstName + " " + user.LastName)
+		if name != "" {
+			return name
 		}
 	}
-
-	//nolint:gosec // Secure is configured separately for local and production environments.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    "",
-		Path:     "/api/v1/auth",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteStrictMode,
-	})
-
-	w.WriteHeader(http.StatusNoContent)
-	return nil
-}
-
-// checkOrigin rejects cross-site refresh requests by comparing the Origin
-// (falling back to Referer) request header against app.frontend_url. It is
-// a defense-in-depth measure against CSRF alongside the SameSite=Strict
-// refresh cookie.
-func (h *Handler) checkOrigin(r *http.Request) error {
-	if h.frontendOrigin == "" {
-		return nil
-	}
-
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		if referer := r.Header.Get("Referer"); referer != "" {
-			origin = originOf(referer)
-		}
-	}
-
-	if origin == "" || origin != h.frontendOrigin {
-		return apperr.ErrForbidden
-	}
-
-	return nil
-}
-
-// originOf returns the URL scheme and host,
-// which is necessary for comparison with the Origin request header.
-func originOf(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return ""
-	}
-
-	return u.Scheme + "://" + u.Host
+	return user.Email
 }
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
