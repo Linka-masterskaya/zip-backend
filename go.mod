@@ -18,11 +18,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.42.0
-	github.com/wneessen/go-mail v0.8.1
-	go.uber.org/mock v0.6.0
-	golang.org/x/crypto v0.54.0
 	golang.org/x/oauth2 v0.30.0
-	golang.org/x/sync v0.22.0
 )
 
 require (
