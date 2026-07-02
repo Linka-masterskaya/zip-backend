@@ -3,9 +3,9 @@
 CREATE TABLE users (
     id               UUID         PRIMARY KEY,
     email_verified   BOOLEAN      NOT NULL DEFAULT FALSE,
-    name             VARCHAR(255) NOT NULL,
+    display_name     VARCHAR(255),
     avatar_key       VARCHAR(512),
-    organization_id  UUID,
+    org_id           UUID,
     created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
     deleted_at       TIMESTAMPTZ
