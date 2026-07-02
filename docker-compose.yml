@@ -3,58 +3,77 @@ services:
     build: .
     ports:
       - "8080:8080"
+    networks:
+      - linka-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   prometheus:
-    image: prom/prometheus:v2.51.0
     container_name: prometheus
+    image: prom/prometheus:v2.51.0
+    depends_on:
+      - zip-backend
     ports:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    depends_on:
-      - zip-backend
+    networks:
+      - linka-net
 
   grafana:
-    image: grafana/grafana:latest
     container_name: grafana
+    image: grafana/grafana:latest
     restart: unless-stopped
-    environment:
-      - GF_LOG_LEVEL=warn
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./deploy/grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
+    environment:
+      - GF_LOG_LEVEL=warn
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+    networks:
+      - linka-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/health" ]
       interval: 10s
       timeout: 5s
       retries: 3
 
   postgres:
-    image: postgres:15-alpine
     container_name: postgres
+    image: postgres:15-alpine
     restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     environment:
       - POSTGRES_USER=linka
       - POSTGRES_PASSWORD=linka
       - POSTGRES_DB=linka
-    volumes:
-    - postgres_data:/var/lib/postgresql/data
-    ports:
-    - "5432:5432"
+    networks:
+      - linka-net
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
-      
+
 volumes:
   grafana_data:
   postgres_data:
+
+
+networks:
+  linka-net:

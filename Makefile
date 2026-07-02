@@ -37,7 +37,7 @@ dev-up:
 	docker compose -f docker-compose.yml -f compose.dev.yaml up -d
 
 dev-down:
-	docker compose -f compose.dev.yaml down
+	docker compose -f docker-compose.yml -f compose.dev.yaml down
 
 dev-reset:
 	docker compose -f compose.dev.yaml down -v
