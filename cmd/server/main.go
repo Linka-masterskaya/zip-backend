@@ -26,6 +26,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 	"github.com/Linka-masterskaya/zip-backend/migrations"
 )
@@ -72,7 +73,6 @@ func main() {
 			slog.Error("nats drain", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		}
 	}()
-	_ = publisher // временно, пока нет хендлеров в server
 
 	redisClient, err := cache.NewClient(cfg.Redis)
 	if err != nil {
@@ -86,14 +86,26 @@ func main() {
 		slog.Error("postgres initialization failed:", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
-
-	// Postgres. закрываем пул соединений
 	defer dbPool.Close()
 
 	slog.Info("database connected", "pool_size", cfg.DB.MaxConns) //nolint:gosec // ошибка на старте приложения.
 
+	packRepo := pack.NewRepository(redisClient)
+	packService := pack.NewService(packRepo, publisher)
+	packHandler := pack.NewHandler(packService)
+
 	mainMux := http.NewServeMux()
-	wrappedHandler := middleware.Metrics(mainMux)
+	mainMux.Handle("POST /api/v1/packs", middleware.ErrorMiddleware(packHandler.CreatePack))
+	mainMux.Handle("GET /api/v1/packs/{id}", middleware.ErrorMiddleware(packHandler.GetPack))
+	mainMux.Handle("GET /api/v1/packs", middleware.ErrorMiddleware(packHandler.ListPacks))
+
+	wrappedHandler := middleware.Chain(
+		mainMux,
+		middleware.RecoveryMiddleware,
+		middleware.RequestIDMiddleware,
+		middleware.Metrics,
+		middleware.CORSMiddleware(cfg.App.FrontendURL),
+	)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.App.Port,
@@ -144,11 +156,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	go func() {
-		if err := metricsSrv.Shutdown(ctx); err != nil {
-			slog.Error("metrics server shutdown error", logger.Err(err))
-		}
-	}()
+	if err := metricsSrv.Shutdown(ctx); err != nil {
+		slog.Error("metrics server shutdown error", "err", err)
+	}
 
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", logger.Err(err))
