@@ -125,7 +125,7 @@ func (c *Client) GetRefresh(ctx context.Context, jti string) (*RefreshRecord, er
 // IsFamilyRevoked reports whether the token family is revoked.
 // fail-closed: missing = revoked, Redis error returns false + err for caller to handle.
 func (c *Client) IsFamilyRevoked(ctx context.Context, fid string) (bool, error) {
-	status, err := c.getString(ctx, "refresh_family:"+fid)
+	status, err := c.GetString(ctx, "refresh_family:"+fid)
 	if errors.Is(err, ErrNotFound) {
 		return true, nil
 	}
@@ -137,7 +137,7 @@ func (c *Client) IsFamilyRevoked(ctx context.Context, fid string) (bool, error) 
 
 // RevokeFamily marks the family revoked, keeping its TTL.
 func (c *Client) RevokeFamily(ctx context.Context, fid string) error {
-	if err := c.setString(ctx, "refresh_family:"+fid, "revoked", redis.KeepTTL); err != nil {
+	if err := c.SetString(ctx, "refresh_family:"+fid, "revoked", redis.KeepTTL); err != nil {
 		return fmt.Errorf("redis.RevokeFamily: %w", err)
 	}
 	return nil
@@ -195,7 +195,7 @@ func (c *Client) getHash(ctx context.Context, key string, dest any) error {
 }
 
 // setString stores val at key with ttl.
-func (c *Client) setString(ctx context.Context, key, val string, ttl time.Duration) error {
+func (c *Client) SetString(ctx context.Context, key, val string, ttl time.Duration) error {
 	if err := c.rdb.Set(ctx, key, val, ttl).Err(); err != nil {
 		return fmt.Errorf("redis.setString: %w", err)
 	}
@@ -203,7 +203,7 @@ func (c *Client) setString(ctx context.Context, key, val string, ttl time.Durati
 }
 
 // getString returns the value at key, or ErrNotFound.
-func (c *Client) getString(ctx context.Context, key string) (string, error) {
+func (c *Client) GetString(ctx context.Context, key string) (string, error) {
 	val, err := c.rdb.Get(ctx, key).Result()
 	if errors.Is(err, redis.Nil) {
 		return "", ErrNotFound
@@ -212,6 +212,14 @@ func (c *Client) getString(ctx context.Context, key string) (string, error) {
 		return "", fmt.Errorf("redis.getString: %w", err)
 	}
 	return val, nil
+}
+
+// Del removes a key from Redis.
+func (c *Client) Del(ctx context.Context, key string) error {
+	if err := c.rdb.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("cache.Del: %w", err)
+	}
+	return nil
 }
 
 // Ping checks Redis connectivity for readiness probes.
