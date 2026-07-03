@@ -13,13 +13,18 @@ import (
 	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
+// testTimeout —  жёсткий лимит на каждый подтест. Меняй здесь, а не в команде запуска.
 const (
 	testTimeout      = 10 * time.Second
 	containerTimeout = 60 * time.Second
 )
 
+// redisImage pinned to match docker-compose and prod.
 const redisImage = "redis:7-alpine"
 
+// newRedis starts one Redis container for the whole test function and returns
+// the container plus a raw client (for FlushDB setup and TTL assertions).
+// Teardown is registered via t.Cleanup.
 func newRedis(t *testing.T) (*rediscontainer.RedisContainer, *redis.Client) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), containerTimeout)
@@ -40,6 +45,7 @@ func newRedis(t *testing.T) (*rediscontainer.RedisContainer, *redis.Client) {
 	if err != nil {
 		t.Fatalf("parse redis url: %v", err)
 	}
+	// таймауты, чтобы зависший Redis не повесил весь прогон
 	opt.ReadTimeout = 500 * time.Millisecond
 	opt.WriteTimeout = 500 * time.Millisecond
 	opt.DialTimeout = 2 * time.Second
@@ -55,6 +61,7 @@ func newRedis(t *testing.T) (*rediscontainer.RedisContainer, *redis.Client) {
 	return container, raw
 }
 
+// newClient builds a cache.Client via the real constructor (private rdb field).
 func newClient(t *testing.T, container *rediscontainer.RedisContainer) *cache.Client {
 	t.Helper()
 	uri, err := container.ConnectionString(t.Context())
@@ -69,6 +76,7 @@ func newClient(t *testing.T, container *rediscontainer.RedisContainer) *cache.Cl
 	return c
 }
 
+// subCtx returns a context bounded by both the subtest lifetime and a hard timeout.
 func subCtx(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
@@ -76,16 +84,21 @@ func subCtx(t *testing.T) context.Context {
 	return ctx
 }
 
+// flush wipes the DB so each subtest starts on a clean Redis.
 func flush(ctx context.Context, t *testing.T, raw *redis.Client) {
 	t.Helper()
 	require.NoError(t, raw.FlushDB(ctx).Err(), "flush before subtest")
 }
 
+// TestCache runs all cache tests against a single shared Redis container.
+// Subtests run sequentially (no t.Parallel) and each flushes the DB first,
+// so no subtest depends on another's state.
 func TestCache(t *testing.T) {
 	container, raw := newRedis(t)
 	c := newClient(t, container)
 
 	t.Run("StoreAndGetRefresh", func(t *testing.T) {
+		// Roundtrip: записанный токен читается обратно без искажений.
 		ctx := subCtx(t)
 		flush(ctx, t, raw)
 
@@ -98,6 +111,7 @@ func TestCache(t *testing.T) {
 	})
 
 	t.Run("GetRefresh_NotFound", func(t *testing.T) {
+		// Отсутствующий токен → доменная ошибка ErrNotFound, не пустая запись.
 		ctx := subCtx(t)
 		flush(ctx, t, raw)
 
@@ -106,6 +120,8 @@ func TestCache(t *testing.T) {
 	})
 
 	t.Run("StoreRefresh_SetsTTL", func(t *testing.T) {
+		// На ключ токена реально выставлен TTL (не вечный). Проверяем TTL > 0,
+		// не дожидаясь истечения — быстро и не флейки.
 		ctx := subCtx(t)
 		flush(ctx, t, raw)
 
@@ -117,6 +133,8 @@ func TestCache(t *testing.T) {
 	})
 
 	t.Run("IsFamilyRevoked", func(t *testing.T) {
+		// Три состояния семьи: active→false, revoked→true,
+		// отсутствует→true (fail-closed: нет записи = считаем мёртвой).
 		ctx := subCtx(t)
 		flush(ctx, t, raw)
 
@@ -136,6 +154,8 @@ func TestCache(t *testing.T) {
 	})
 
 	t.Run("RotateRefresh", func(t *testing.T) {
+		// Ротация: старый JTI → revoked, новый JTI → active, оба в Redis.
+		// Detect-reuse / атомарность (Lua) здесь не проверяется — tech debt.
 		ctx := subCtx(t)
 		flush(ctx, t, raw)
 
@@ -159,6 +179,8 @@ func TestCache(t *testing.T) {
 	})
 
 	t.Run("Allow_RateLimit", func(t *testing.T) {
+		// Лимитер фиксированного окна: первые Limit запросов проходят,
+		// следующий сверх лимита блокируется.
 		ctx := subCtx(t)
 		flush(ctx, t, raw)
 
@@ -178,6 +200,7 @@ func TestCache(t *testing.T) {
 	})
 
 	t.Run("IncrCounter_SetsTTLOnFirst", func(t *testing.T) {
+		// TTL ставится на ПЕРВОМ инкременте (count==1), окно лимита не вечное.
 		ctx := subCtx(t)
 		flush(ctx, t, raw)
 

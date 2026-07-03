@@ -1,3 +1,5 @@
+// Command server runs the HTTP API server.
+
 package main
 
 import (
@@ -48,12 +50,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Обработка флага --migrate
 	runMigrationsIfNeeded(cfg)
 
 	logger.Init(cfg.App.Env)
 
 	metrics.Initialize()
 
+	// Пока инициализируем MinIO только для проверки подключения и создания bucket при старте
+	// Клиент будет сохранен и передан в сервисы позже, когда появятся операции с объектами
 	if _, err := storage.New(cfg.MinIO); err != nil {
 		slog.Error("minio connect failed", logger.Err(err))
 		os.Exit(1)
@@ -77,6 +82,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Postgres. Инициализация
 	dbPool, err := db.New(cfg.DB)
 	if err != nil {
 		slog.Error("postgres initialization failed:", logger.Err(err))
@@ -241,6 +247,7 @@ func readyzHandler(redisClient *cache.Client) http.HandlerFunc {
 	}
 }
 
+// runMigrationsIfNeeded проверяет флаг --migrate и выполняет миграции, если он установлен.
 func runMigrationsIfNeeded(cfg *config.Config) {
 	migrateFlag := flag.Bool("migrate", false, "Run database migrations and exit")
 	flag.Parse()
@@ -249,6 +256,7 @@ func runMigrationsIfNeeded(cfg *config.Config) {
 		return
 	}
 
+	// Подключаемся к БД только для миграций
 	dbConn, err := sql.Open("postgres", cfg.DB.URL)
 	if err != nil {
 		slog.Error("failed to connect to postgres for migration", logger.Err(err))
