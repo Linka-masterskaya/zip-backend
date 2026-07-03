@@ -48,8 +48,7 @@ func (h *Handler) YandexLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := hex.EncodeToString(stateBytes)
-	key := fmt.Sprintf("auth:yandex:state:%s", state)
-	if err := h.cache.SetString(ctx, key, state, 5*time.Minute); err != nil {
+	if err := h.cache.SaveOAuthState(ctx, state, 5*time.Minute); err != nil {
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
 		return
 	}
@@ -103,14 +102,14 @@ func (h *Handler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) validateState(ctx context.Context, state string) error {
 	key := fmt.Sprintf("auth:yandex:state:%s", state)
-	savedState, err := h.cache.GetString(ctx, key)
+	savedState, err := h.cache.GetOAuthState(ctx, state)
 	if err != nil {
 		return fmt.Errorf("invalid or expired state")
 	}
 	if savedState != state {
 		return fmt.Errorf("state mismatch")
 	}
-	if err := h.cache.Del(ctx, key); err != nil {
+	if err := h.cache.DelState(ctx, key); err != nil {
 		slog.Warn("failed to delete state from cache", "key", key, "error", err)
 	}
 	return nil
