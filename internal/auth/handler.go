@@ -2,10 +2,12 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +23,14 @@ type Handler struct {
 	frontendURL string
 }
 
+type yandexUserInfo struct {
+	ID        string `json:"id"`
+	Email     string `json:"default_email"`
+	Name      string `json:"display_name"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
 func NewHandler(service *Service, cache *cache.Client, oauthCfg *oauth2.Config, frontendURL string) *Handler {
 	return &Handler{
 		service:     service,
@@ -30,12 +40,7 @@ func NewHandler(service *Service, cache *cache.Client, oauthCfg *oauth2.Config, 
 	}
 }
 
-// GET /auth/yandex
 func (h *Handler) YandexLogin(w http.ResponseWriter, r *http.Request) {
-	// 1. Генерируем state
-	// 2. Сохраняем в Redis с TTL 5 минут
-	// 3. Формируем URL для редиректа в Яндекс
-	// 4. http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 	ctx := r.Context()
 	stateBytes := make([]byte, 16)
 	if _, err := rand.Read(stateBytes); err != nil {
@@ -52,15 +57,7 @@ func (h *Handler) YandexLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
 
-// GET /auth/yandex/callback
 func (h *Handler) YandexCallback(w http.ResponseWriter, r *http.Request) {
-	// 1. Получаем code и state из query params
-	// 2. Проверяем state в Redis
-	// 3. Обмениваем code на access_token
-	// 4. Запрашиваем профиль пользователя (email, name, yandex_id)
-	// 5. Вызываем service.UpsertUser(...)
-	// 6. Генерируем JWT
-	// 7. Редиректим на фронтенд с JWT
 	ctx := r.Context()
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
@@ -69,56 +66,25 @@ func (h *Handler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing code or state", http.StatusBadRequest)
 		return
 	}
-	key := fmt.Sprintf("auth:yandex:state:%s", state)
-	savedState, err := h.cache.GetString(ctx, key)
-	if err != nil {
-		http.Error(w, "Invalid or expired state", http.StatusForbidden)
+
+	if err := h.validateState(ctx, state); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	if savedState != state {
-		http.Error(w, "State mismatch", http.StatusForbidden)
-		return
-	}
-	_ = h.cache.Del(ctx, key)
-	token, err := h.oauthCfg.Exchange(ctx, code)
+
+	token, err := h.exchangeCode(ctx, code)
 	if err != nil {
 		http.Error(w, "Failed to exchange token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	client := h.oauthCfg.Client(ctx, token)
-	resp, err := client.Get("https://login.yandex.ru/info?format=json")
+	yandexUser, err := h.fetchUserInfo(ctx, token)
 	if err != nil {
 		http.Error(w, "Failed to fetch user info: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Yandex API error: "+resp.Status, http.StatusInternalServerError)
-		return
-	}
-
-	var yandexUser struct {
-		ID        string `json:"id"`
-		Email     string `json:"default_email"`
-		Name      string `json:"display_name"`
-		FirstName string `json:"first_name"`
-		LastName  string `json:"last_name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&yandexUser); err != nil {
-		http.Error(w, "Failed to parse user info: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	name := yandexUser.Name
-	if name == "" {
-		name = yandexUser.FirstName + " " + yandexUser.LastName
-		name = strings.TrimSpace(name)
-	}
-	if name == "" {
-		name = yandexUser.Email
-	}
+	name := h.buildDisplayName(yandexUser)
 	user, userAuth, err := h.service.UpsertUser(ctx, yandexUser.Email, name, yandexUser.ID)
 	if err != nil {
 		http.Error(w, "Failed to upsert user: "+err.Error(), http.StatusInternalServerError)
@@ -131,7 +97,68 @@ func (h *Handler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	frontendURL := h.frontendURL
-	redirectURL := fmt.Sprintf("%s/auth/callback?token=%s", frontendURL, tokenString)
+	redirectURL := fmt.Sprintf("%s/auth/callback?token=%s", h.frontendURL, tokenString)
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+}
+
+func (h *Handler) validateState(ctx context.Context, state string) error {
+	key := fmt.Sprintf("auth:yandex:state:%s", state)
+	savedState, err := h.cache.GetString(ctx, key)
+	if err != nil {
+		return fmt.Errorf("invalid or expired state")
+	}
+	if savedState != state {
+		return fmt.Errorf("state mismatch")
+	}
+	if err := h.cache.Del(ctx, key); err != nil {
+		slog.Warn("failed to delete state from cache", "key", key, "error", err)
+	}
+	return nil
+}
+
+// exchangeCode exchanges the OAuth code for an access token.
+func (h *Handler) exchangeCode(ctx context.Context, code string) (*oauth2.Token, error) {
+	return h.oauthCfg.Exchange(ctx, code)
+}
+
+// fetchUserInfo fetches user information from Yandex API.
+func (h *Handler) fetchUserInfo(ctx context.Context, token *oauth2.Token) (*yandexUserInfo, error) {
+	client := h.oauthCfg.Client(ctx, token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://login.yandex.ru/info?format=json", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user info: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("failed to close response body", "error", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("yandex API error: %s", resp.Status)
+	}
+
+	var yandexUser yandexUserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&yandexUser); err != nil {
+		return nil, fmt.Errorf("failed to parse user info: %w", err)
+	}
+	return &yandexUser, nil
+}
+
+// buildDisplayName builds a display name from Yandex user info.
+func (h *Handler) buildDisplayName(user *yandexUserInfo) string {
+	if user.Name != "" {
+		return user.Name
+	}
+	if user.FirstName != "" || user.LastName != "" {
+		name := strings.TrimSpace(user.FirstName + " " + user.LastName)
+		if name != "" {
+			return name
+		}
+	}
+	return user.Email
 }

@@ -2,11 +2,14 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/pkg/linka/cryptox"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
@@ -50,72 +53,98 @@ func NewService(repo *Repository, crypto *cryptox.Crypto, jwtSecret string) *Ser
 }
 
 func (s *Service) UpsertUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
-	// 1. Ищем есть ли учетка по yandex_id
-	// 2. Нашли → обновляем user (имя)
-	// 3. Если не нашли по yandex_id — ищем по email (в UserCred)
-	// 4. Нашли по email → привязываем identity к существующему пользователю
-	// 5. Если ничего не нашли — создаём нового пользователя
+	user, cred, err := s.handleExistingIdentity(ctx, name, yandexID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if user != nil {
+		return user, cred, nil
+	}
+	user, cred, err = s.handleExistingEmail(ctx, email, name, yandexID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if user != nil {
+		return user, cred, nil
+	}
+	return s.createNewUser(ctx, email, name, yandexID)
+}
+
+func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID string) (*User, *UserCred, error) {
 	identity, err := s.repo.FindIdentityByProviderUID(ctx, "yandex", yandexID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find identity by yandex_id: %w", err)
 	}
-
-	if identity != nil {
-
-		user, err := s.repo.FindUserByID(ctx, identity.UserID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("find user by id: %w", err)
-		}
-		user.Name = name
-		if err := s.repo.UpdateUser(ctx, user); err != nil {
-			return nil, nil, fmt.Errorf("update user: %w", err)
-		}
-
-		cred, err := s.repo.FindUserCredByUserID(ctx, user.ID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("find userAuth by user_id: %w", err)
-		}
-		return user, cred, nil
+	if identity == nil {
+		return nil, nil, nil
 	}
 
+	user, err := s.repo.FindUserByID(ctx, identity.UserID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find user by id: %w", err)
+	}
+
+	user.Name = name
+	if err := s.repo.UpdateUser(ctx, user); err != nil {
+		return nil, nil, fmt.Errorf("update user: %w", err)
+	}
+
+	cred, err := s.repo.FindUserCredByUserID(ctx, user.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find userCred by user_id: %w", err)
+	}
+
+	return user, cred, nil
+}
+
+func (s *Service) handleExistingEmail(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
 	emailHash := s.crypto.Hash([]byte(email))
 	cred, err := s.repo.FindUserCredByEmailHash(ctx, emailHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find userCred by email_hash: %w", err)
 	}
-	if cred != nil {
-		user, err := s.repo.FindUserByID(ctx, cred.UserID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("find user by id: %w", err)
-		}
-
-		user.Name = name
-		if err := s.repo.UpdateUser(ctx, user); err != nil {
-			return nil, nil, fmt.Errorf("update user: %w", err)
-		}
-
-		newIdentity := &UserIdentity{
-			ID:          uuid.New(),
-			UserID:      user.ID,
-			Provider:    "yandex",
-			ProviderUID: yandexID,
-		}
-		if err := s.repo.CreateIdentity(ctx, newIdentity); err != nil {
-			return nil, nil, fmt.Errorf("create identity: %w", err)
-		}
-
-		cred, err = s.repo.FindUserCredByUserID(ctx, user.ID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("find userCred by user_id: %w", err)
-		}
-		return user, cred, nil
+	if cred == nil {
+		return nil, nil, nil
 	}
 
+	user, err := s.repo.FindUserByID(ctx, cred.UserID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find user by id: %w", err)
+	}
+
+	user.Name = name
+	if err := s.repo.UpdateUser(ctx, user); err != nil {
+		return nil, nil, fmt.Errorf("update user: %w", err)
+	}
+
+	newIdentity := &UserIdentity{
+		ID:          uuid.New(),
+		UserID:      user.ID,
+		Provider:    "yandex",
+		ProviderUID: yandexID,
+	}
+	if err := s.repo.CreateIdentity(ctx, newIdentity); err != nil {
+		return nil, nil, fmt.Errorf("create identity: %w", err)
+	}
+
+	cred, err = s.repo.FindUserCredByUserID(ctx, user.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find userCred by user_id: %w", err)
+	}
+
+	return user, cred, nil
+}
+
+func (s *Service) createNewUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
 	tx, err := s.repo.pool.Begin(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.Warn("failed to rollback transaction", "error", err)
+		}
+	}()
 	txRepo := s.repo.withTx(tx)
 
 	userID := uuid.New()
@@ -127,7 +156,7 @@ func (s *Service) UpsertUser(ctx context.Context, email, name, yandexID string) 
 		return nil, nil, fmt.Errorf("create user: %w", err)
 	}
 
-	emailHash = s.crypto.Hash([]byte(email))
+	emailHash := s.crypto.Hash([]byte(email))
 	emailEncrypted, err := s.crypto.Encrypt([]byte(email))
 	if err != nil {
 		return nil, nil, fmt.Errorf("encrypt email: %w", err)
@@ -160,7 +189,8 @@ func (s *Service) UpsertUser(ctx context.Context, email, name, yandexID string) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("find created user: %w", err)
 	}
-	cred, err = s.repo.FindUserCredByUserID(ctx, userID)
+
+	cred, err := s.repo.FindUserCredByUserID(ctx, userID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find created userCred: %w", err)
 	}
