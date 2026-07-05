@@ -110,3 +110,12 @@ func (c *Client) PresignedURL(ctx context.Context, key string, ttl time.Duration
 
 	return objectURL.String(), nil
 }
+
+// ListBuckets returns a list of buckets in MinIO.
+// Implements health.Lister interface.
+func (c *Client) ListBuckets(ctx context.Context) ([]minio.BucketInfo, error) {
+	if c == nil || c.client == nil {
+		return nil, errors.New("minio client is not initialized")
+	}
+	return c.client.ListBuckets(ctx)
+}

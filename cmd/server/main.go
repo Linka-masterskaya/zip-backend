@@ -23,6 +23,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/db"
+	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
@@ -55,9 +56,9 @@ func main() {
 
 	metrics.Initialize()
 
-	// Пока инициализируем MinIO только для проверки подключения и создания bucket при старте
-	// Клиент будет сохранен и передан в сервисы позже, когда появятся операции с объектами
-	if _, err := storage.New(cfg.MinIO); err != nil {
+	// MinIO клиент для healthchecks
+	minioClient, err := storage.New(cfg.MinIO)
+	if err != nil {
 		slog.Error("minio connect failed", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
@@ -90,6 +91,14 @@ func main() {
 
 	slog.Info("database connected", "pool_size", cfg.DB.MaxConns) //nolint:gosec // ошибка на старте приложения.
 
+	// Инициализация healthcheck checker
+	checker := &health.Checker{
+		DB:          dbPool, // dbPool должен реализовывать Ping(ctx)
+		RedisClient: redisClient,
+		NatsConn:    nc,
+		MinioClient: minioClient, // должен реализовывать ListBuckets(ctx)
+	}
+
 	packRepo := pack.NewRepository(redisClient)
 	packService := pack.NewService(packRepo, publisher)
 	packHandler := pack.NewHandler(packService)
@@ -98,6 +107,9 @@ func main() {
 	mainMux.Handle("POST /api/v1/packs", middleware.ErrorMiddleware(packHandler.CreatePack))
 	mainMux.Handle("GET /api/v1/packs/{id}", middleware.ErrorMiddleware(packHandler.GetPack))
 	mainMux.Handle("GET /api/v1/packs", middleware.ErrorMiddleware(packHandler.ListPacks))
+
+	// Регистрация health эндпоинтов
+	setupHealthEndpoints(mainMux, checker)
 
 	wrappedHandler := middleware.Chain(
 		mainMux,
@@ -118,7 +130,6 @@ func main() {
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("GET /metrics", metrics.NewHandler())
 	metricsMux.HandleFunc("GET /health", healthHandler(cfg.App.Env))
-	metricsMux.HandleFunc("GET /readyz", readyzHandler(redisClient))
 
 	metricsSrv := &http.Server{
 		Addr:         ":9090",
@@ -201,28 +212,6 @@ func healthHandler(env string) http.HandlerFunc {
 	}
 }
 
-func readyzHandler(redisClient *cache.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-
-		w.Header().Set("Content-Type", "application/json")
-
-		if err := redisClient.Ping(ctx); err != nil {
-			slog.Error("readyz: redis unavailable", logger.Err(err)) //nolint:gosec // ошибка на останове приложения.
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if err := json.NewEncoder(w).Encode(map[string]string{"status": "redis unavailable"}); err != nil {
-				slog.Error("readyz response encode failed", logger.Err(err))
-			}
-			return
-		}
-
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ready"}); err != nil {
-			slog.Error("readyz response encode failed", logger.Err(err))
-		}
-	}
-}
-
 // runMigrationsIfNeeded проверяет флаг --migrate и выполняет миграции, если он установлен.
 func runMigrationsIfNeeded(cfg *config.Config) {
 	migrateFlag := flag.Bool("migrate", false, "Run database migrations and exit")
@@ -249,4 +238,22 @@ func runMigrationsIfNeeded(cfg *config.Config) {
 	}
 	log.Println("Migrations completed. Exiting.")
 	os.Exit(0)
+}
+
+// setupHealthEndpoints регистрирует эндпоинты /livez и /readyz на основном мультиплексоре (AB-16).
+func setupHealthEndpoints(mux *http.ServeMux, checker *health.Checker) {
+	// /livez — всегда 200 OK, без проверок
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "alive"})
+	})
+
+	// /readyz — проверяет все зависимости параллельно с таймаутом 2 сек.
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		status, body := checker.Run(r.Context())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(body)
+	})
 }
