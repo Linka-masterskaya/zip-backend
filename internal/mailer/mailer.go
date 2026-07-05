@@ -7,7 +7,6 @@ import (
 	"html/template"
 	"net/mail"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
@@ -15,6 +14,12 @@ import (
 
 	gomail "github.com/wneessen/go-mail"
 )
+
+var subjects = map[domain.Template]string{
+	domain.EmailVerify:   "Подтверждение email",
+	domain.PasswordReset: "Сброс пароля",
+	domain.EmailChange:   "Смена email",
+}
 
 //go:embed templates/*.html
 var templatesFS embed.FS
@@ -25,16 +30,9 @@ type SMTPSender struct {
 	from        string
 	frontendURL string
 	templates   map[domain.Template]*template.Template
-	mu          sync.RWMutex
-	closed      bool
 }
 
-// NewSMTPSender - creates a new instance of 'SMTPSender'.
-func NewSMTPSender(cfg config.SMTPConfig, frontendURL string) (*SMTPSender, error) {
-	if err := validateSMTPConfig(cfg); err != nil {
-		return nil, fmt.Errorf("invalid SMTP config: %w", err)
-	}
-
+func newClient(cfg config.SMTPConfig) (*gomail.Client, error) {
 	var opts []gomail.Option
 	opts = append(opts,
 		gomail.WithPort(cfg.Port),
@@ -45,12 +43,31 @@ func NewSMTPSender(cfg config.SMTPConfig, frontendURL string) (*SMTPSender, erro
 	)
 
 	if cfg.TLS {
-		opts = append(opts, gomail.WithTLSPolicy(gomail.TLSMandatory))
+		switch cfg.Port {
+		case 465:
+			opts = append(opts,
+				gomail.WithTLSPolicy(gomail.TLSMandatory),
+				gomail.WithSSL(),
+			)
+		case 587, 25:
+			opts = append(opts, gomail.WithTLSPolicy(gomail.TLSMandatory))
+		default:
+			opts = append(opts, gomail.WithTLSPolicy(gomail.TLSMandatory))
+		}
 	} else {
 		opts = append(opts, gomail.WithTLSPolicy(gomail.NoTLS))
 	}
 
-	client, err := gomail.NewClient(cfg.Host, opts...)
+	return gomail.NewClient(cfg.Host, opts...)
+}
+
+// NewSMTPSender - creates a new instance of 'SMTPSender'.
+func NewSMTPSender(cfg config.SMTPConfig, frontendURL string) (*SMTPSender, error) {
+	if err := validateSMTPConfig(cfg); err != nil {
+		return nil, fmt.Errorf("invalid SMTP config: %w", err)
+	}
+
+	client, err := newClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create smtp client: %w", err)
 	}
@@ -129,10 +146,6 @@ func (s *SMTPSender) Send(
 		return fmt.Errorf("execute template: %w", err)
 	}
 
-	if html.Len() == 0 {
-		return fmt.Errorf("generated email body is empty")
-	}
-
 	msg := gomail.NewMsg()
 	if err := msg.From(s.from); err != nil {
 		return fmt.Errorf("set from: %w", err)
@@ -145,13 +158,6 @@ func (s *SMTPSender) Send(
 	msg.Subject(s.getSubject(tmpl))
 	msg.SetBodyString(gomail.TypeTextHTML, html.String())
 
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return fmt.Errorf("smtp sender is closed")
-	}
-	s.mu.RUnlock()
-
 	err := s.client.DialAndSendWithContext(ctx, msg)
 	if err != nil {
 		return err
@@ -161,30 +167,11 @@ func (s *SMTPSender) Send(
 }
 
 func (s *SMTPSender) getSubject(tmpl domain.Template) string {
-	subjects := map[domain.Template]string{
-		domain.EmailVerify:   "Подтверждение email",
-		domain.PasswordReset: "Сброс пароля",
-		domain.EmailChange:   "Смена email",
-	}
-
 	subject, ok := subjects[tmpl]
 	if !ok {
 		return "Уведомление от Linka"
 	}
 	return subject
-}
-
-// Close - closes SMTP sender.
-func (s *SMTPSender) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return nil
-	}
-
-	s.closed = true
-	return s.client.Close()
 }
 
 // validateSMTPConfig - validates SMTP configuration.

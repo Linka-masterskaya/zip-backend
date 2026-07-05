@@ -59,7 +59,6 @@ func TestMailpit_SendEmailVerify(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -82,7 +81,6 @@ func TestMailpit_SendPasswordReset(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -105,7 +103,6 @@ func TestMailpit_SendEmailChange(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -129,7 +126,6 @@ func TestMailpit_SendAllTemplates(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	tests := []struct {
 		name     string
@@ -187,7 +183,6 @@ func TestMailpit_SendWithSpecialCharacters(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	// Данные со спецсимволами
 	username := "Тест Пользователь!"
@@ -217,7 +212,6 @@ func TestMailpit_SendWithEmptyData(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -239,7 +233,6 @@ func TestMailpit_SendMultipleRecipients(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	recipients := []string{
 		"user1@example.com",
@@ -272,7 +265,6 @@ func TestMailpit_ConcurrentSends(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	var wg sync.WaitGroup
 	numGoroutines := 5
@@ -322,7 +314,6 @@ func TestMailpit_InvalidEmail(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -346,7 +337,6 @@ func TestMailpit_TemplateNotFound(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -371,7 +361,6 @@ func TestMailpit_EmptyHTML(t *testing.T) {
 	cfg := GetMailpitConfig()
 	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
 	require.NoError(t, err)
-	defer sender.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
