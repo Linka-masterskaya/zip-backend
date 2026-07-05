@@ -203,7 +203,7 @@ func multipartAvatarRequest(t *testing.T, data []byte, filename string) *http.Re
 		t.Fatalf("close multipart writer: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/profile/me/avatar", &body)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPut, "/api/v1/profile/me/avatar", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	ctx := reqctx.PutUserID(req.Context(), "user-1")
 	return req.WithContext(ctx)
