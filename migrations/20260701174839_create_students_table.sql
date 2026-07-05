@@ -7,7 +7,7 @@ CREATE TABLE students (
     email_verified    BOOLEAN      NOT NULL DEFAULT FALSE,
     name              VARCHAR(255) NOT NULL,
     age               INT          CHECK (age IS NULL OR (age >= 0 AND age <= 100)),
-    status            VARCHAR(32)  NOT NULL,
+    status            VARCHAR(32)  NOT NULL CHECK (status IN ('active', 'paused', 'archived', 'one_time')),
     created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
     deleted_at        TIMESTAMPTZ
