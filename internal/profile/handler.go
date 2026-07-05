@@ -47,7 +47,9 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
 			slog.Warn("close avatar multipart file", "err", err)
 		}
 		if r.MultipartForm != nil {
-			_ = r.MultipartForm.RemoveAll()
+			if err := r.MultipartForm.RemoveAll(); err != nil {
+				slog.Warn("remove avatar multipart form", "err", err)
+			}
 		}
 	}()
 
