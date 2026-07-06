@@ -56,17 +56,68 @@ func main() {
 func run() error {
 	deps, err := initInfra()
 	if err != nil {
-		return err
+		os.Exit(1)
+	}
+	runMigrationsIfNeeded(cfg)
+
+	logger.Init(cfg.App.Env)
+
+	metrics.Initialize()
+
+	if _, err := storage.New(cfg.MinIO); err != nil {
+		os.Exit(1)
+	}
+
+	nc, publisher, err := initNATS(cfg.NATS)
+	if err != nil {
+		os.Exit(1)
 	}
 	defer deps.db.Close()
 	defer func() {
-		if err := deps.nc.Drain(); err != nil {
+		if err := nc.Drain(); err != nil {
 			slog.Error("nats drain", logger.Err(err))
 		}
 	}()
 
-	packRepo := pack.NewRepository(deps.redis)
-	packService := pack.NewService(packRepo, deps.pub)
+	redisClient, err := cache.NewClient(cfg.Redis)
+	if err != nil {
+		slog.Error("redis initialization failed:", logger.Err(err))
+		os.Exit(1)
+	}
+
+	dbPool, err := db.New(cfg.DB)
+	if err != nil {
+		slog.Error("postgres initialization failed:", logger.Err(err))
+		os.Exit(1)
+	}
+	defer dbPool.Close()
+
+	slog.Info("database connected", "pool_size", cfg.DB.MaxConns)
+
+	aesKey := []byte(cfg.Crypto.AESKey)
+	hmacKey := []byte(cfg.Crypto.HMACKey)
+
+	crypto, err := cryptox.New(aesKey, hmacKey)
+	if err != nil {
+		slog.Error("crypto initialization failed", logger.Err(err))
+		os.Exit(1)
+	}
+
+	authRepo := auth.NewRepository(dbPool)
+	authService := auth.NewService(authRepo, authRepo, crypto, cfg.JWT.Secret)
+
+	oauthCfg := &oauth2.Config{
+		ClientID:     cfg.Yandex.ClientID,
+		ClientSecret: cfg.Yandex.ClientSecret,
+		RedirectURL:  cfg.Yandex.RedirectURL,
+		Endpoint:     yandex.Endpoint,
+		Scopes:       []string{"login:email", "login:info"},
+	}
+
+	authHandler := auth.NewHandler(authService, redisClient, oauthCfg, cfg.App.FrontendURL)
+
+	packRepo := pack.NewRepository(redisClient)
+	packService := pack.NewService(packRepo, publisher)
 	packHandler := pack.NewHandler(packService)
 
 	authRepo := auth.NewAuthRepo(deps.db)
@@ -115,113 +166,14 @@ func run() error {
 
 	mainMux := http.NewServeMux()
 
-	mainMux.HandleFunc("GET /api/v1/auth/yandex/login", oauthHandler.YandexLogin)
-	mainMux.HandleFunc("GET /api/v1/auth/yandex/callback", oauthHandler.YandexCallback)
+	// Auth routes (OAuth)
+	mainMux.HandleFunc("GET /api/v1/auth/yandex/login", authHandler.YandexLogin)
+	mainMux.HandleFunc("GET /api/v1/auth/yandex/callback", authHandler.YandexCallback)
 
-	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
-
-	mainMux.Handle("POST /api/v1/packs",
-		packRateLimit(
-			middleware.ErrorMiddleware(
-				authMW.AuthMiddleware(packHandler.CreatePack),
-			),
-		),
-	)
-
-	mainMux.Handle("GET /api/v1/packs/{id}",
-		packRateLimit(
-			middleware.ErrorMiddleware(
-				authMW.AuthMiddleware(packHandler.GetPack),
-			),
-		),
-	)
-
-	mainMux.Handle("GET /api/v1/packs",
-		packRateLimit(
-			middleware.ErrorMiddleware(
-				authMW.AuthMiddleware(packHandler.ListPacks),
-			),
-		),
-	)
-
-	authHandler := auth.NewAuthHandler(authService, authCfg)
-
-	mainMux.Handle(
-		"POST /auth/login",
-		loginRateLimit(
-			middleware.ErrorMiddleware(authHandler.Login),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /auth/forgot",
-		forgotRateLimit(
-			middleware.ErrorMiddleware(authHandler.ForgotPassword),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /auth/reset",
-		resetRateLimit(
-			middleware.ErrorMiddleware(authHandler.ResetPassword),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /auth/verify-resend",
-		verifyResendRateLimit(
-			middleware.ErrorMiddleware(authHandler.VerifyResend),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /auth/email-confirm",
-		emailConfirmRateLimit(
-			middleware.ErrorMiddleware(authHandler.EmailConfirm),
-		),
-	)
-
-	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
-
-	profileRepo := profile.NewRepository(deps.db)
-	profileService := profile.NewService(profileRepo, deps.storage, deps.mailer, deps.crypto, deps.redis,
-		profile.EmailConfig{
-			EmailChangeTTL: deps.cfg.Profile.EmailChangeTTL,
-			EmailVerifyTTL: deps.cfg.Profile.EmailVerifyTTL},
-	)
-	profileHandler := profile.NewHandler(profileService)
-	mainMux.Handle(
-		"GET /api/v1/profile/me",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.GetProfile)),
-	)
-	mainMux.Handle(
-		"PUT /api/v1/profile/me/avatar",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.UploadAvatar)),
-	)
-	mainMux.Handle(
-		"DELETE /api/v1/profile/me/avatar",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.DeleteAvatar)),
-	)
-	mainMux.Handle(
-		"POST /api/v1/profile/me/email",
-		profileEmailChangeRateLimit(
-			middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.RequestEmailChange)),
-		),
-	)
-	mainMux.Handle(
-		"POST /api/v1/profile/me/email/confirm",
-		profileEmailConfirmRateLimit(
-			middleware.ErrorMiddleware(profileHandler.ConfirmEmailChange),
-		),
-	)
-
-	changePasswordRepo := profile.NewChangePasswordRepo(deps.db)
-	changePasswordService := profile.NewChangePasswordService(changePasswordRepo, deps.redis)
-	changePasswordHandler := profile.NewChangePasswordHandler(changePasswordService)
-	mainMux.Handle(
-		"POST /api/v1/profile/me/password",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(changePasswordHandler.ChangePassword)),
-	)
+	// Pack routes
+	mainMux.Handle("POST /api/v1/packs", middleware.ErrorMiddleware(packHandler.CreatePack))
+	mainMux.Handle("GET /api/v1/packs/{id}", middleware.ErrorMiddleware(packHandler.GetPack))
+	mainMux.Handle("GET /api/v1/packs", middleware.ErrorMiddleware(packHandler.ListPacks))
 
 	wrappedHandler := middleware.Chain(
 		mainMux,
