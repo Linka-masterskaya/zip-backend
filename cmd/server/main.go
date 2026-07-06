@@ -44,57 +44,76 @@ func main() {
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		slog.Error("config load failed", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
-
-	// Обработка флага --migrate
 	runMigrationsIfNeeded(cfg)
 
 	logger.Init(cfg.App.Env)
 
 	metrics.Initialize()
 
-	// Пока инициализируем MinIO только для проверки подключения и создания bucket при старте
-	// Клиент будет сохранен и передан в сервисы позже, когда появятся операции с объектами
 	if _, err := storage.New(cfg.MinIO); err != nil {
-		slog.Error("minio connect failed", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
-	slog.Info("minio connected", "bucket", cfg.MinIO.Bucket) //nolint:gosec // ошибка на старте приложения.
 
 	nc, publisher, err := initNATS(cfg.NATS)
 	if err != nil {
-		slog.Error("failed to init nats", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
 		os.Exit(1)
 	}
 	defer func() {
 		if err := nc.Drain(); err != nil {
-			slog.Error("nats drain", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
+			slog.Error("nats drain", logger.Err(err))
 		}
 	}()
 
 	redisClient, err := cache.NewClient(cfg.Redis)
 	if err != nil {
-		slog.Error("redis initialization failed:", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
+		slog.Error("redis initialization failed:", logger.Err(err))
 		os.Exit(1)
 	}
 
-	// Postgres. Инициализация
 	dbPool, err := db.New(cfg.DB)
 	if err != nil {
-		slog.Error("postgres initialization failed:", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
+		slog.Error("postgres initialization failed:", logger.Err(err))
 		os.Exit(1)
 	}
 	defer dbPool.Close()
 
-	slog.Info("database connected", "pool_size", cfg.DB.MaxConns) //nolint:gosec // ошибка на старте приложения.
+	slog.Info("database connected", "pool_size", cfg.DB.MaxConns)
+
+	aesKey := []byte(cfg.Crypto.AESKey)
+	hmacKey := []byte(cfg.Crypto.HMACKey)
+
+	crypto, err := cryptox.New(aesKey, hmacKey)
+	if err != nil {
+		slog.Error("crypto initialization failed", logger.Err(err))
+		os.Exit(1)
+	}
+
+	authRepo := auth.NewRepository(dbPool)
+	authService := auth.NewService(authRepo, authRepo, crypto, cfg.JWT.Secret)
+
+	oauthCfg := &oauth2.Config{
+		ClientID:     cfg.Yandex.ClientID,
+		ClientSecret: cfg.Yandex.ClientSecret,
+		RedirectURL:  cfg.Yandex.RedirectURL,
+		Endpoint:     yandex.Endpoint,
+		Scopes:       []string{"login:email", "login:info"},
+	}
+
+	authHandler := auth.NewHandler(authService, redisClient, oauthCfg, cfg.App.FrontendURL)
 
 	packRepo := pack.NewRepository(redisClient)
 	packService := pack.NewService(packRepo, publisher)
 	packHandler := pack.NewHandler(packService)
 
 	mainMux := http.NewServeMux()
+
+	// Auth routes (OAuth)
+	mainMux.HandleFunc("GET /api/v1/auth/yandex/login", authHandler.YandexLogin)
+	mainMux.HandleFunc("GET /api/v1/auth/yandex/callback", authHandler.YandexCallback)
+
+	// Pack routes
 	mainMux.Handle("POST /api/v1/packs", middleware.ErrorMiddleware(packHandler.CreatePack))
 	mainMux.Handle("GET /api/v1/packs/{id}", middleware.ErrorMiddleware(packHandler.GetPack))
 	mainMux.Handle("GET /api/v1/packs", middleware.ErrorMiddleware(packHandler.ListPacks))

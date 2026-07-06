@@ -16,6 +16,22 @@ type DBTX interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+type RepositoryInterface interface {
+	FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error)
+	FindUserByID(ctx context.Context, id uuid.UUID) (*User, error)
+	FindUserCredByEmailHash(ctx context.Context, emailHash []byte) (*UserCred, error)
+	FindUserCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error)
+	CreateUser(ctx context.Context, params CreateUserParams) error
+	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
+	CreateIdentity(ctx context.Context, identity *UserIdentity) error
+	UpdateUser(ctx context.Context, user *User) error
+}
+
+type TxRepository interface {
+	withTx(tx pgx.Tx) RepositoryInterface
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 type Repository struct {
 	db   DBTX
 	pool *pgxpool.Pool
@@ -23,10 +39,6 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{db: pool, pool: pool}
-}
-
-func (r *Repository) withTx(tx pgx.Tx) *Repository {
-	return &Repository{db: tx, pool: r.pool}
 }
 
 func (r *Repository) FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error) {
@@ -51,7 +63,7 @@ func (r *Repository) FindIdentityByProviderUID(ctx context.Context, provider, pr
 
 func (r *Repository) FindUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	query := `
-	SELECT id, name, avatar_key, organization_id, created_at, updated_at, deleted_at
+	SELECT id, display_name, avatar_key, org_id, created_at, updated_at, deleted_at
 	FROM users
 	WHERE id = $1 AND deleted_at IS NULL
 	`
@@ -110,19 +122,14 @@ func (r *Repository) FindUserCredByUserID(ctx context.Context, userID uuid.UUID)
 }
 
 func (r *Repository) CreateUser(ctx context.Context, params CreateUserParams) error {
-	query := `
-	INSERT INTO users(
-	id, 
-	organization_id,
-	name)
-	VALUES(
-	$1,
-	$2,
-	$3
-	)`
-
-	_, err := r.db.Exec(ctx, query, params.ID, params.OrganizationID, params.Name)
-
+	query := `INSERT INTO users(id, org_id, display_name) VALUES ($1, $2, $3)`
+	var orgID any
+	if params.OrganizationID == nil {
+		orgID = nil
+	} else {
+		orgID = *params.OrganizationID
+	}
+	_, err := r.db.Exec(ctx, query, params.ID, orgID, params.Name)
 	return err
 }
 
@@ -160,9 +167,17 @@ func (r *Repository) CreateIdentity(ctx context.Context, identity *UserIdentity)
 func (r *Repository) UpdateUser(ctx context.Context, user *User) error {
 	query := `
 	UPDATE users
-	SET name = $1, updated_at = now()
+	SET display_name = $1, updated_at = now()
 	WHERE id = $2
 	`
 	_, err := r.db.Exec(ctx, query, user.Name, user.ID)
 	return err
+}
+
+func (r *Repository) Begin(ctx context.Context) (pgx.Tx, error) {
+	return r.pool.Begin(ctx)
+}
+
+func (r *Repository) withTx(tx pgx.Tx) RepositoryInterface {
+	return &Repository{db: tx, pool: r.pool}
 }

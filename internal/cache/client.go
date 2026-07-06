@@ -231,6 +231,11 @@ func (c *Client) DelState(ctx context.Context, key string) error {
 	return nil
 }
 
+func (c *Client) DeleteOAuthState(ctx context.Context, state string) error {
+	key := fmt.Sprintf("oauth:state:%s", state)
+	return c.DelState(ctx, key)
+}
+
 // Ping checks Redis connectivity for readiness probes.
 func (c *Client) Ping(ctx context.Context) error {
 	if err := c.rdb.Ping(ctx).Err(); err != nil {

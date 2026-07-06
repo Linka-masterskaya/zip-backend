@@ -23,6 +23,12 @@ type Config struct {
 	CORS         CORSConfig         `mapstructure:"cors"`
 	OpenAI       OpenAIConfig       `mapstructure:"openai"`
 	PicturesBank PicturesBankConfig `mapstructure:"pictures_bank"`
+	Crypto       CryptoConfig       `mapstructure:"crypto"`
+}
+
+type CryptoConfig struct {
+	AESKey  string `mapstructure:"aes_key"`
+	HMACKey string `mapstructure:"hmac_key"`
 }
 
 // AppConfig contains application runtime settings.
@@ -314,6 +320,9 @@ func setDefaults(v *viper.Viper) {
 	})
 	v.SetDefault("cors.allow_credentials", true)
 	v.SetDefault("cors.max_age", 86400)
+
+	v.SetDefault("crypto.aes_key", "12345678901234567890123456789012")
+	v.SetDefault("crypto.hmac_key", "12345678901234567890123456789012")
 }
 
 // validateConfig validates required configuration fields.

@@ -7,15 +7,21 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/pkg/linka/cryptox"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
-	repo      *Repository
-	crypto    *cryptox.Crypto
+	repo      RepositoryInterface
+	txRepo    TxRepository
+	crypto    CryptoInterface
 	jwtSecret string
+}
+
+type CryptoInterface interface {
+	Hash(data []byte) []byte
+	Encrypt(data []byte) ([]byte, error)
+	Decrypt(data []byte) ([]byte, error)
 }
 
 type User struct {
@@ -44,9 +50,15 @@ type UserIdentity struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-func NewService(repo *Repository, crypto *cryptox.Crypto, jwtSecret string) *Service {
+func NewService(
+	repo RepositoryInterface,
+	txRepo TxRepository,
+	crypto CryptoInterface, // ← интерфейс
+	jwtSecret string,
+) *Service {
 	return &Service{
 		repo:      repo,
+		txRepo:    txRepo,
 		crypto:    crypto,
 		jwtSecret: jwtSecret,
 	}
@@ -70,6 +82,18 @@ func (s *Service) UpsertUser(ctx context.Context, email, name, yandexID string) 
 	return s.createNewUser(ctx, email, name, yandexID)
 }
 
+func (s *Service) handleExistingEmail(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
+	emailHash := s.crypto.Hash([]byte(email))
+	cred, err := s.repo.FindUserCredByEmailHash(ctx, emailHash)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find userCred by email_hash: %w", err)
+	}
+	if cred == nil {
+		return nil, nil, nil
+	}
+	return nil, nil, fmt.Errorf("email already registered, please login with password")
+}
+
 func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID string) (*User, *UserCred, error) {
 	identity, err := s.repo.FindIdentityByProviderUID(ctx, "yandex", yandexID)
 	if err != nil {
@@ -82,6 +106,9 @@ func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID str
 	user, err := s.repo.FindUserByID(ctx, identity.UserID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find user by id: %w", err)
+	}
+	if user == nil {
+		return nil, nil, fmt.Errorf("user not found for identity")
 	}
 
 	user.Name = name
@@ -97,46 +124,8 @@ func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID str
 	return user, cred, nil
 }
 
-func (s *Service) handleExistingEmail(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
-	emailHash := s.crypto.Hash([]byte(email))
-	cred, err := s.repo.FindUserCredByEmailHash(ctx, emailHash)
-	if err != nil {
-		return nil, nil, fmt.Errorf("find userCred by email_hash: %w", err)
-	}
-	if cred == nil {
-		return nil, nil, nil
-	}
-
-	user, err := s.repo.FindUserByID(ctx, cred.UserID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("find user by id: %w", err)
-	}
-
-	user.Name = name
-	if err := s.repo.UpdateUser(ctx, user); err != nil {
-		return nil, nil, fmt.Errorf("update user: %w", err)
-	}
-
-	newIdentity := &UserIdentity{
-		ID:          uuid.New(),
-		UserID:      user.ID,
-		Provider:    "yandex",
-		ProviderUID: yandexID,
-	}
-	if err := s.repo.CreateIdentity(ctx, newIdentity); err != nil {
-		return nil, nil, fmt.Errorf("create identity: %w", err)
-	}
-
-	cred, err = s.repo.FindUserCredByUserID(ctx, user.ID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("find userCred by user_id: %w", err)
-	}
-
-	return user, cred, nil
-}
-
 func (s *Service) createNewUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
-	tx, err := s.repo.pool.Begin(ctx)
+	tx, err := s.txRepo.Begin(ctx) // ← используем txRepo
 	if err != nil {
 		return nil, nil, fmt.Errorf("begin tx: %w", err)
 	}
@@ -145,12 +134,12 @@ func (s *Service) createNewUser(ctx context.Context, email, name, yandexID strin
 			slog.Warn("failed to rollback transaction", "error", err)
 		}
 	}()
-	txRepo := s.repo.withTx(tx)
+	txRepo := s.txRepo.withTx(tx) // ← используем txRepo
 
 	userID := uuid.New()
 	if err := txRepo.CreateUser(ctx, CreateUserParams{
 		ID:             userID,
-		OrganizationID: uuid.Nil,
+		OrganizationID: nil,
 		Name:           name,
 	}); err != nil {
 		return nil, nil, fmt.Errorf("create user: %w", err)
