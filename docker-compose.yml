@@ -45,16 +45,38 @@ services:
       - POSTGRES_PASSWORD=linka
       - POSTGRES_DB=linka
     volumes:
-    - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     ports:
-    - "5432:5432"
+      - "5432:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
-      
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    environment:
+      MP_SMTP_AUTH: "${SMTP_USERNAME:-admin}:${SMTP_PASSWORD:-smtppass}"
+      MP_UI_AUTH: "${UI_USERNAME:-admin}:${UI_PASSWORD:-webpass}"
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+      MP_MAX_MESSAGES: 1000
+    volumes:
+      - mailpit-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8025"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
 volumes:
   grafana_data:
   postgres_data:
+  mailpit-data:

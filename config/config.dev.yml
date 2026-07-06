@@ -90,6 +90,7 @@ smtp:
   password: 'your-app-password'
   from_email: 'noreply@yandex.com'
   tls: true
+  timeout: "10s"
 
 auth:
   access_token_ttl: 15m
