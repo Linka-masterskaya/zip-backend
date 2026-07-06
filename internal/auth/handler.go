@@ -17,18 +17,10 @@ import (
 )
 
 type Handler struct {
-	service     *Service
-	cache       *cache.Client
+	service     *Service      // ← конкретный тип
+	cache       *cache.Client // ← конкретный тип
 	oauthCfg    *oauth2.Config
 	frontendURL string
-}
-
-type yandexUserInfo struct {
-	ID        string `json:"id"`
-	Email     string `json:"default_email"`
-	Name      string `json:"display_name"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
 }
 
 func NewHandler(service *Service, cache *cache.Client, oauthCfg *oauth2.Config, frontendURL string) *Handler {
@@ -38,6 +30,14 @@ func NewHandler(service *Service, cache *cache.Client, oauthCfg *oauth2.Config, 
 		oauthCfg:    oauthCfg,
 		frontendURL: frontendURL,
 	}
+}
+
+type yandexUserInfo struct {
+	ID        string `json:"id"`
+	Email     string `json:"default_email"`
+	Name      string `json:"display_name"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
 }
 
 func (h *Handler) YandexLogin(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +52,7 @@ func (h *Handler) YandexLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
 		return
 	}
-	url := h.oauthCfg.AuthCodeURL(state, oauth2.AccessTypeOffline)
+	url := h.oauthCfg.AuthCodeURL(state)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
 
@@ -67,50 +67,66 @@ func (h *Handler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.validateState(ctx, state); err != nil {
-		http.Error(w, err.Error(), http.StatusForbidden)
+		http.Error(w, "Invalid or expired state", http.StatusForbidden)
 		return
 	}
 
 	token, err := h.exchangeCode(ctx, code)
 	if err != nil {
-		http.Error(w, "Failed to exchange token: "+err.Error(), http.StatusInternalServerError)
+		slog.Error("failed to exchange token", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	yandexUser, err := h.fetchUserInfo(ctx, token)
 	if err != nil {
-		http.Error(w, "Failed to fetch user info: "+err.Error(), http.StatusInternalServerError)
+		slog.Error("failed to fetch user info", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	name := h.buildDisplayName(yandexUser)
 	user, userAuth, err := h.service.UpsertUser(ctx, yandexUser.Email, name, yandexUser.ID)
 	if err != nil {
-		http.Error(w, "Failed to upsert user: "+err.Error(), http.StatusInternalServerError)
+		slog.Error("failed to upsert user", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	tokenString, err := h.service.GenerateJWT(user, userAuth)
 	if err != nil {
-		http.Error(w, "Failed to generate JWT: "+err.Error(), http.StatusInternalServerError)
+		slog.Error("failed to generate JWT", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	redirectURL := fmt.Sprintf("%s/auth/callback?token=%s", h.frontendURL, tokenString)
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    tokenString,
+		HttpOnly: true,
+		Secure:   true,
+		Path:     "/",
+		MaxAge:   86400,
+	})
+	http.Redirect(w, r, h.frontendURL, http.StatusSeeOther)
 }
 
 func (h *Handler) validateState(ctx context.Context, state string) error {
-	key := fmt.Sprintf("auth:yandex:state:%s", state)
 	savedState, err := h.cache.GetOAuthState(ctx, state)
 	if err != nil {
+		slog.Error("failed to get state from cache",
+			slog.Any("error", err),
+		)
 		return fmt.Errorf("invalid or expired state")
 	}
 	if savedState != state {
+		slog.Warn("state mismatch")
 		return fmt.Errorf("state mismatch")
 	}
-	if err := h.cache.DelState(ctx, key); err != nil {
-		slog.Warn("failed to delete state from cache", "key", key, "error", err)
+	if err := h.cache.DeleteOAuthState(ctx, state); err != nil {
+		slog.Warn("failed to delete oauth state",
+			slog.Any("error", err),
+		)
 	}
 	return nil
 }
