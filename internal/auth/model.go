@@ -8,7 +8,7 @@ import (
 
 type CreateUserParams struct {
 	ID             uuid.UUID
-	OrganizationID uuid.UUID
+	OrganizationID *uuid.UUID
 	Name           string
 }
 
