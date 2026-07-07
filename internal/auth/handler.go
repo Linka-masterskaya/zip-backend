@@ -17,8 +17,8 @@ import (
 )
 
 type Handler struct {
-	service     *Service      // ← конкретный тип
-	cache       *cache.Client // ← конкретный тип
+	service     *Service
+	cache       *cache.Client
 	oauthCfg    *oauth2.Config
 	frontendURL string
 }
