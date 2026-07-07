@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
@@ -53,7 +52,7 @@ func newTestCacheClient(t *testing.T, container *rediscontainer.RedisContainer) 
 	uri, err := container.ConnectionString(t.Context())
 	require.NoError(t, err)
 
-	c, err := cache.NewClient(config.RedisConfig{
+	c, err := cache.NewClient(cache.Config{
 		URL:        uri,
 		ClientName: "middleware-test",
 		PoolSize:   5,

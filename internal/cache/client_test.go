@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go"
@@ -67,11 +66,12 @@ func newClient(t *testing.T, container *rediscontainer.RedisContainer) *cache.Cl
 	uri, err := container.ConnectionString(t.Context())
 	require.NoError(t, err)
 
-	c, err := cache.NewClient(config.RedisConfig{
-		URL:        uri,
-		ClientName: "test",
-		PoolSize:   10,
-	})
+	c, err := cache.NewClient(
+		cache.Config{
+			URL:        uri,
+			ClientName: "test",
+			PoolSize:   10,
+		})
 	require.NoError(t, err)
 	return c
 }
@@ -179,25 +179,24 @@ func TestCache(t *testing.T) {
 	})
 
 	t.Run("Allow_RateLimit", func(t *testing.T) {
-		// Лимитер фиксированного окна: первые Limit запросов проходят,
-		// следующий сверх лимита блокируется.
-		ctx := subCtx(t)
-		flush(ctx, t, raw)
+    ctx := subCtx(t)
+    flush(ctx, t, raw)
 
-		req := cache.RateLimitRequest{Scope: "login", Key: "user1", Limit: 3, WindowSize: time.Minute}
+    req := cache.RateLimitRequest{Scope: "login", Key: "user1", Limit: 3, WindowSize: time.Minute}
 
-		for i := 1; i <= 3; i++ {
-			allowed, retryAfter, err := c.Allow(ctx, req)
-			require.NoError(t, err)
-			require.Zero(t, retryAfter)
-			require.True(t, allowed)
-		}
+    for i := 1; i <= 3; i++ {
+        allowed, retry, err := c.Allow(ctx, req)
+        require.NoError(t, err)
+        require.True(t, allowed, "request %d within limit must be allowed", i)
+        require.Zero(t, retry, "retry-after must be 0 while allowed")
+    }
 
-		allowed, retryAfter, err := c.Allow(ctx, req)
-		require.NoError(t, err)
-		require.False(t, allowed)
-		require.Greater(t, retryAfter, int64(0))
-	})
+    allowed, retry, err := c.Allow(ctx, req)
+    require.NoError(t, err)
+    require.False(t, allowed, "request over limit must be denied")
+    require.GreaterOrEqual(t, retry, int64(1), "retry-after must be >= 1s when denied")
+    require.LessOrEqual(t, retry, int64(60), "retry-after must not exceed window")
+})
 
 	t.Run("IncrCounter_SetsTTLOnFirst", func(t *testing.T) {
 		// TTL ставится на ПЕРВОМ инкременте (count==1), окно лимита не вечное.

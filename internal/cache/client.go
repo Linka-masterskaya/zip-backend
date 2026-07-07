@@ -8,12 +8,17 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 
 // ErrNotFound - sentinel error returned by Client lookups.
 var ErrNotFound = errors.New("redis: key not found")
+
+type Config struct {
+	URL        string
+	ClientName string
+	PoolSize   int
+}
 
 // Client wraps a Redis connection and provides rate limiting and refresh token storage.
 type Client struct {
@@ -21,7 +26,7 @@ type Client struct {
 }
 
 // NewClient connects to Redis and verifies the connection with a ping.
-func NewClient(cfg config.RedisConfig) (*Client, error) {
+func NewClient(cfg Config) (*Client, error) {
 	options, err := redis.ParseURL(cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse redis url: %w", err)

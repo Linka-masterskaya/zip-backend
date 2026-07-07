@@ -66,9 +66,9 @@ minio:
   timeout: '15s'
 
 jwt:
-  secret: 'changeme-min-32-chars-secret-key'
-  access_ttl: '15m'
-  refresh_ttl: '720h'
+  secret: "92bd02979f8be5d4d05a81619d0d69499280093cdc1cdb1f300ac09177c53665"
+  access_ttl: "15m"
+  refresh_ttl: "720h"
 
 yandex:
   client_id: ''
@@ -107,6 +107,20 @@ auth:
   verify_resend_rate_limit: 3
   email_confirm_rate_limit: 10
 
+rate_limit:
+  resend:
+    scope: "resend"
+    limit: 500
+    window: 1h
+  login:
+    scope: "login"
+    limit: 10
+    window: 5m
+  verify:
+    scope: "verify_ip"
+    limit: 20
+    window: 1m
+
 cors:
   allow_origins:
     - 'http://localhost:8080'
@@ -134,3 +148,7 @@ cors:
     - 'X-Total-Count'
   allow_credentials: true
   max_age: 86400
+
+crypto:
+  aes_key: "6dlGlnc2GSsJD1i46iimfgTPUzv9J10zbPIS9Um8vN8="
+  hmac_key: "LwhuzYj/PvQFpfun4y+XylcRdhIr8fOcGPFSyfWzlDU="
