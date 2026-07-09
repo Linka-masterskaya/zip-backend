@@ -39,6 +39,7 @@ var (
 	buildTime string
 )
 
+//nolint:gocyclo // application wiring is centralized in main
 func main() {
 	cfgPath := os.Getenv("CONFIG_PATH")
 	if cfgPath == "" {

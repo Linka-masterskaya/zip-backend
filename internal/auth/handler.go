@@ -53,6 +53,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//nolint:gosec // cookie Secure is controlled by config for local dev/prod
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    result.RefreshToken,

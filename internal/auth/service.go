@@ -64,7 +64,9 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 
 	user, err := s.repo.GetUserByEmailHash(ctx, emailHash)
 	if errors.Is(err, ErrUserNotFound) {
-		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
+		if compareErr := bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password)); compareErr != nil {
+			// intentionally ignored: dummy compare is only for timing consistency
+		}
 		return nil, ErrInvalidCredentials
 	}
 	if err != nil {
@@ -72,10 +74,11 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	}
 
 	if user.PasswordHash == nil {
-		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
+		if compareErr := bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password)); compareErr != nil {
+			// intentionally ignored: dummy compare is only for timing consistency
+		}
 		return nil, ErrInvalidCredentials
 	}
-
 	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
 	}
