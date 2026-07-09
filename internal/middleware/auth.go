@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+)
+
+const (
+	JWTIssuer   = "zip-backend"
+	JWTAudience = "zip-backend-api"
 )
 
 type AuthMW struct {
@@ -43,7 +49,13 @@ func (m *AuthMW) AuthMiddleware(next AppHandler) AppHandler {
 				return nil, fmt.Errorf("auth unexpected signing method: %v", t.Header["alg"])
 			}
 			return m.jwtSecret, nil
-		})
+		},
+			jwt.WithExpirationRequired(),
+			jwt.WithIssuer(JWTIssuer),
+			jwt.WithAudience(JWTAudience),
+			jwt.WithIssuedAt(),
+			jwt.WithLeeway(10*time.Second),
+		)
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return apperr.ErrJWTTokenInvalid.WithError(fmt.Errorf("auth: token expired: %w", err))
 		}
