@@ -34,11 +34,12 @@ type CryptoConfig struct {
 
 // AppConfig contains application runtime settings.
 type AppConfig struct {
-	Env           string `mapstructure:"env"`
-	Port          string `mapstructure:"port"`
-	PublicURL     string `mapstructure:"public_url"`
-	FrontendURL   string `mapstructure:"frontend_url"`
-	MigrationsDir string `mapstructure:"migrations_dir"`
+	Env            string   `mapstructure:"env"`
+	Port           string   `mapstructure:"port"`
+	PublicURL      string   `mapstructure:"public_url"`
+	FrontendURL    string   `mapstructure:"frontend_url"`
+	MigrationsDir  string   `mapstructure:"migrations_dir"`
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
 }
 
 // DBConfig contains database connection settings.
@@ -161,9 +162,14 @@ type AuthConfig struct {
 	ResetPasswordTokenTTL    time.Duration `mapstructure:"reset_password_token_ttl"`
 	EmailChangeTokenTTL      time.Duration `mapstructure:"email_change_token_ttl"`
 	BcryptCost               int           `mapstructure:"bcrypt_cost"`
-	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
 	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
 	CookieSecure             bool          `mapstructure:"cookie_secure"`
+	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
+	PackRateLimit            int           `mapstructure:"pack_rate_limit"`
+	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit"`
+	ResetRateLimit           int           `mapstructure:"reset_rate_limit"`
+	VerifyResendRateLimit    int           `mapstructure:"verify_resend_rate_limit"`
+	EmailConfirmRateLimit    int           `mapstructure:"email_confirm_rate_limit"`
 }
 
 // CORSConfig contains CORS settings.
@@ -214,6 +220,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.public_url", "http://localhost:8080")
 	v.SetDefault("app.frontend_url", "http://localhost:3000")
 	v.SetDefault("app.migrations_dir", "./migrations")
+	v.SetDefault("app.trusted_proxies", []string{})
 
 	// DB defaults
 	v.SetDefault("db.max_open_conns", 25)
@@ -290,15 +297,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("crypto.hmac_key", "")
 
 	// Auth defaults
-	v.SetDefault("auth.access_token_ttl", "15m")
-	v.SetDefault("auth.refresh_token_ttl", "720h")
-	v.SetDefault("auth.verify_email_token_ttl", "24h")
-	v.SetDefault("auth.reset_password_token_ttl", "1h")
-	v.SetDefault("auth.email_change_token_ttl", "1h")
 	v.SetDefault("auth.bcrypt_cost", 12)
 	v.SetDefault("auth.login_rate_limit", 5)
 	v.SetDefault("auth.require_email_verification", false)
 	v.SetDefault("auth.cookie_secure", false)
+	v.SetDefault("auth.pack_rate_limit", 60)
+	v.SetDefault("auth.forgot_rate_limit", 3)
+	v.SetDefault("auth.reset_rate_limit", 3)
+	v.SetDefault("auth.verify_resend_rate_limit", 3)
+	v.SetDefault("auth.email_confirm_rate_limit", 10)
 
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})

@@ -1,4 +1,3 @@
-// Package auth contains authentication handlers and services.
 package auth
 
 import (
@@ -73,6 +72,38 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	//nolint:gosec // access token is intentionally returned to the client in the response body
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		http.Error(w, "encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+	if _, err := w.Write([]byte(`{"error":"Not implemented"}`)); err != nil {
+		return
+	}
+}
+
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+	if _, err := w.Write([]byte(`{"error":"Not implemented"}`)); err != nil {
+		return
+	}
+}
+
+func (h *AuthHandler) VerifyResend(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+	if _, err := w.Write([]byte(`{"error":"Not implemented"}`)); err != nil {
+		return
+	}
+}
+
+func (h *AuthHandler) EmailConfirm(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+	if _, err := w.Write([]byte(`{"error":"Not implemented"}`)); err != nil {
 		return
 	}
 }
