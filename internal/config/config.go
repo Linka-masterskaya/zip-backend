@@ -32,7 +32,7 @@ type AppConfig struct {
 	PublicURL      string   `mapstructure:"public_url"`
 	FrontendURL    string   `mapstructure:"frontend_url"`
 	MigrationsDir  string   `mapstructure:"migrations_dir"`
-	TrustedProxies []string `mapstructure:"trusted_proxies" env:"APP_TRUSTED_PROXIES"`
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
 }
 
 // DBConfig contains database connection settings.
@@ -154,13 +154,13 @@ type AuthConfig struct {
 	ResetPasswordTokenTTL    time.Duration `mapstructure:"reset_password_token_ttl"`
 	EmailChangeTokenTTL      time.Duration `mapstructure:"email_change_token_ttl"`
 	BcryptCost               int           `mapstructure:"bcrypt_cost"`
-	RequireEmailVerification bool          `mapstructure:"require_email_verification" env:"AUTH_REQUIRE_EMAIL_VERIFICATION" env-default:"false"`
-	LoginRateLimit           int           `mapstructure:"login_rate_limit" env:"AUTH_LOGIN_RATE_LIMIT" env-default:"5"`
-	PackRateLimit            int           `mapstructure:"pack_rate_limit" env:"AUTH_PACK_RATE_LIMIT" env-default:"60"`
-	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit" env:"AUTH_FORGOT_RATE_LIMIT" env-default:"3"`
-	ResetRateLimit           int           `mapstructure:"reset_rate_limit" env:"AUTH_RESET_RATE_LIMIT" env-default:"3"`
-	VerifyResendRateLimit    int           `mapstructure:"verify_resend_rate_limit" env:"AUTH_VERIFY_RESEND_RATE_LIMIT" env-default:"3"`
-	EmailConfirmRateLimit    int           `mapstructure:"email_confirm_rate_limit" env:"AUTH_EMAIL_CONFIRM_RATE_LIMIT" env-default:"10"`
+	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
+	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
+	PackRateLimit            int           `mapstructure:"pack_rate_limit"`
+	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit"`
+	ResetRateLimit           int           `mapstructure:"reset_rate_limit"`
+	VerifyResendRateLimit    int           `mapstructure:"verify_resend_rate_limit"`
+	EmailConfirmRateLimit    int           `mapstructure:"email_confirm_rate_limit"`
 }
 
 // CORSConfig contains CORS settings.
@@ -211,6 +211,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.public_url", "http://localhost:8080")
 	v.SetDefault("app.frontend_url", "http://localhost:3000")
 	v.SetDefault("app.migrations_dir", "./migrations")
+	v.SetDefault("app.trusted_proxies", []string{})
 
 	// DB defaults
 	v.SetDefault("db.max_open_conns", 25)
@@ -290,6 +291,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.bcrypt_cost", 12)
 	v.SetDefault("auth.login_rate_limit", 5)
 	v.SetDefault("auth.require_email_verification", false)
+	v.SetDefault("auth.pack_rate_limit", 60)
+	v.SetDefault("auth.forgot_rate_limit", 3)
+	v.SetDefault("auth.reset_rate_limit", 3)
+	v.SetDefault("auth.verify_resend_rate_limit", 3)
+	v.SetDefault("auth.email_confirm_rate_limit", 10)
 
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})
