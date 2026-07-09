@@ -90,13 +90,27 @@ func (c *Client) IncrCounter(ctx context.Context, key string, ttl time.Duration)
 }
 
 // Allow reports whether the request is within its rate limit.
-func (c *Client) Allow(ctx context.Context, req RateLimitRequest) (bool, error) {
+func (c *Client) Allow(ctx context.Context, req RateLimitRequest) (bool, int64, error) {
 	key := fmt.Sprintf("rl:%s:%s", req.Scope, req.Key)
 	count, err := c.IncrCounter(ctx, key, req.WindowSize)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return count <= req.Limit, nil
+
+	if count > req.Limit {
+		ttl, err := c.rdb.TTL(ctx, key).Result()
+		if err != nil {
+			return false, 0, fmt.Errorf("redis ttl check failed: %w", err)
+		}
+
+		seconds := int64(ttl.Seconds())
+		if seconds < 1 {
+			seconds = 1
+		}
+		return false, seconds, nil
+	}
+
+	return true, 0, nil
 }
 
 // RefreshRecord is a refresh token stored as a Redis hash under refresh:{jti}.
