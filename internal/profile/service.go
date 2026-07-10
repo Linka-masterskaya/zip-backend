@@ -26,9 +26,9 @@ type ObjectStorage interface {
 
 // AvatarRepository is the persistence subset required by profile avatars.
 type AvatarRepository interface {
-	StorageQuota(ctx context.Context, userID string) (StorageQuota, error)
-	ReplaceAvatar(ctx context.Context, userID string, newKey string, newSize int64, objectSize ObjectSizeFunc) (AvatarChange, error)
-	ClearAvatar(ctx context.Context, userID string, objectSize ObjectSizeFunc) (AvatarChange, error)
+	AvatarState(ctx context.Context, userID string) (AvatarState, error)
+	ReplaceAvatar(ctx context.Context, userID, expectedOldKey, newKey string, oldSize, storageDelta int64) (AvatarChange, error)
+	ClearAvatar(ctx context.Context, userID, expectedOldKey string, oldSize int64) (AvatarChange, error)
 	RestoreAvatarIfEmpty(ctx context.Context, userID string, oldKey string, oldSize int64) (bool, error)
 	AddOrgStorageUsage(ctx context.Context, orgID string, delta int64) error
 	CurrentAvatarKey(ctx context.Context, userID string) (string, error)
@@ -45,14 +45,20 @@ func NewService(repo AvatarRepository, storageClient ObjectStorage) *Service {
 	return &Service{repo: repo, storage: storageClient}
 }
 
-// ReplaceAvatar uploads a new avatar, stores its key, updates org usage, and removes the old object.
+// ReplaceAvatar uploads a new avatar, persists its key and removes the old object.
+// Storage operations are deliberately performed outside repository transactions.
 func (s *Service) ReplaceAvatar(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error) {
-	if err := s.ensureStorageQuota(ctx, userID, size); err != nil {
+	state, oldSize, err := s.avatarStateWithObjectSize(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	storageDelta := size - oldSize
+	if err = validateStorageQuota(state, storageDelta); err != nil {
 		return "", err
 	}
 
 	newKey := avatarKey(userID)
-	if err := s.storage.PutObject(ctx, newKey, reader, size, mimeType); err != nil {
+	if err = s.storage.PutObject(ctx, newKey, reader, size, mimeType); err != nil {
 		return "", fmt.Errorf("put avatar object: %w", err)
 	}
 
@@ -62,47 +68,51 @@ func (s *Service) ReplaceAvatar(ctx context.Context, userID string, reader io.Re
 		return "", fmt.Errorf("generate avatar url: %w", err)
 	}
 
-	change, err := s.repo.ReplaceAvatar(ctx, userID, newKey, size, s.objectSize)
+	change, err := s.repo.ReplaceAvatar(ctx, userID, state.AvatarKey, newKey, oldSize, storageDelta)
 	if err != nil {
 		s.cleanupNewObject(ctx, newKey)
 		return "", profileError(err)
 	}
-
-	if err := s.removeObject(ctx, change.OldKey); err != nil {
+	if err = s.removeObject(ctx, change.OldKey); err != nil {
 		s.compensateOldObjectUsage(ctx, change, err)
 	}
-
 	return s.currentAvatarURL(ctx, userID, newKey, avatarURL), nil
 }
 
-// DeleteAvatar removes the current avatar object, clears the DB key, and updates org usage.
+// DeleteAvatar clears the DB key and removes the object outside the DB transaction.
 func (s *Service) DeleteAvatar(ctx context.Context, userID string) error {
-	change, err := s.repo.ClearAvatar(ctx, userID, s.objectSize)
+	state, oldSize, err := s.avatarStateWithObjectSize(ctx, userID)
+	if err != nil {
+		return err
+	}
+	change, err := s.repo.ClearAvatar(ctx, userID, state.AvatarKey, oldSize)
 	if err != nil {
 		return profileError(err)
 	}
-
-	if err := s.removeObject(ctx, change.OldKey); err != nil {
+	if err = s.removeObject(ctx, change.OldKey); err != nil {
 		s.restoreDeletedAvatar(ctx, userID, change, err)
 		return err
 	}
 	return nil
 }
 
-func (s *Service) ensureStorageQuota(ctx context.Context, userID string, size int64) error {
-	quota, err := s.repo.StorageQuota(ctx, userID)
+func (s *Service) avatarStateWithObjectSize(ctx context.Context, userID string) (AvatarState, int64, error) {
+	state, err := s.repo.AvatarState(ctx, userID)
 	if err != nil {
-		return profileError(err)
+		return AvatarState{}, 0, profileError(err)
 	}
-	if !quota.HasOrg {
+	oldSize, err := s.objectSize(ctx, state.AvatarKey)
+	if err != nil {
+		return AvatarState{}, 0, err
+	}
+	return state, oldSize, nil
+}
+
+func validateStorageQuota(state AvatarState, storageDelta int64) error {
+	if !state.HasOrg {
 		return apperr.ErrForbidden.WithMessage("user organization is required for avatar upload")
 	}
-
-	availableBytes := quota.QuotaBytes - quota.UsedBytes
-	if availableBytes < 0 {
-		availableBytes = 0
-	}
-	if size > availableBytes {
+	if storageDelta > 0 && state.UsedBytes+storageDelta > state.QuotaBytes {
 		return apperr.ErrForbidden.WithMessage("organization storage quota exceeded")
 	}
 	return nil
@@ -190,6 +200,9 @@ func profileError(err error) error {
 	}
 	if errors.Is(err, ErrStorageQuotaExceeded) {
 		return apperr.ErrForbidden.WithMessage("organization storage quota exceeded")
+	}
+	if errors.Is(err, ErrAvatarChanged) {
+		return apperr.ErrConflict.WithMessage("avatar changed concurrently; retry request")
 	}
 	return err
 }

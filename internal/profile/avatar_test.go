@@ -357,10 +357,12 @@ func newFakeAvatarRepo() *fakeAvatarRepo {
 	}
 }
 
-func (r *fakeAvatarRepo) StorageQuota(_ context.Context, _ string) (StorageQuota, error) {
+func (r *fakeAvatarRepo) AvatarState(_ context.Context, _ string) (AvatarState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return StorageQuota{
+	return AvatarState{
+		OrgID:      r.orgID,
+		AvatarKey:  r.avatarKey,
 		UsedBytes:  r.storageUsed,
 		QuotaBytes: r.storageQuota,
 		HasOrg:     r.orgID.Valid,
@@ -368,40 +370,35 @@ func (r *fakeAvatarRepo) StorageQuota(_ context.Context, _ string) (StorageQuota
 }
 
 func (r *fakeAvatarRepo) ReplaceAvatar(
-	ctx context.Context,
+	_ context.Context,
 	_ string,
+	expectedOldKey string,
 	newKey string,
-	newSize int64,
-	objectSize ObjectSizeFunc,
+	oldSize int64,
+	storageDelta int64,
 ) (AvatarChange, error) {
 	if r.onReplace != nil {
 		r.onReplace()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	oldKey := r.avatarKey
-	oldSize, err := currentObjectSize(ctx, oldKey, objectSize)
-	if err != nil {
-		return AvatarChange{}, err
+	if r.avatarKey != expectedOldKey {
+		return AvatarChange{}, ErrAvatarChanged
 	}
 	r.avatarKey = newKey
-	r.addStorageUsage(newSize - oldSize)
-	return AvatarChange{OldKey: oldKey, OldSize: oldSize, OrgID: r.orgID}, nil
+	r.addStorageUsage(storageDelta)
+	return AvatarChange{OldKey: expectedOldKey, OldSize: oldSize, OrgID: r.orgID}, nil
 }
 
-func (r *fakeAvatarRepo) ClearAvatar(ctx context.Context, _ string, objectSize ObjectSizeFunc) (AvatarChange, error) {
+func (r *fakeAvatarRepo) ClearAvatar(_ context.Context, _ string, expectedOldKey string, oldSize int64) (AvatarChange, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	oldKey := r.avatarKey
-	oldSize, err := currentObjectSize(ctx, oldKey, objectSize)
-	if err != nil {
-		return AvatarChange{}, err
+	if r.avatarKey != expectedOldKey {
+		return AvatarChange{}, ErrAvatarChanged
 	}
 	r.avatarKey = ""
 	r.addStorageUsage(-oldSize)
-	return AvatarChange{OldKey: oldKey, OldSize: oldSize, OrgID: r.orgID}, nil
+	return AvatarChange{OldKey: expectedOldKey, OldSize: oldSize, OrgID: r.orgID}, nil
 }
 
 func (r *fakeAvatarRepo) RestoreAvatarIfEmpty(_ context.Context, _ string, oldKey string, oldSize int64) (bool, error) {
