@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go"
@@ -27,7 +26,7 @@ const redisImage = "redis:7-alpine"
 // Teardown is registered via t.Cleanup.
 func newRedis(t *testing.T) (*rediscontainer.RedisContainer, *redis.Client) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), containerTimeout) // лимит на старт контейнера
+	ctx, cancel := context.WithTimeout(t.Context(), containerTimeout)
 	defer cancel()
 
 	container, err := rediscontainer.Run(ctx, redisImage)
@@ -49,7 +48,7 @@ func newRedis(t *testing.T) (*rediscontainer.RedisContainer, *redis.Client) {
 	opt.ReadTimeout = 500 * time.Millisecond
 	opt.WriteTimeout = 500 * time.Millisecond
 	opt.DialTimeout = 2 * time.Second
-	opt.ContextTimeoutEnabled = true // уважать дедлайн контекста на уровне команды
+	opt.ContextTimeoutEnabled = true
 
 	raw := redis.NewClient(opt)
 	t.Cleanup(func() { _ = raw.Close() })
@@ -67,11 +66,12 @@ func newClient(t *testing.T, container *rediscontainer.RedisContainer) *cache.Cl
 	uri, err := container.ConnectionString(t.Context())
 	require.NoError(t, err)
 
-	c, err := cache.NewClient(config.RedisConfig{
-		URL:        uri,
-		ClientName: "test",
-		PoolSize:   10,
-	})
+	c, err := cache.NewClient(
+		cache.Config{
+			URL:        uri,
+			ClientName: "test",
+			PoolSize:   10,
+		})
 	require.NoError(t, err)
 	return c
 }
@@ -129,7 +129,7 @@ func TestCache(t *testing.T) {
 
 		ttl, err := raw.TTL(ctx, "refresh:jti1").Result()
 		require.NoError(t, err)
-		require.Greater(t, ttl, time.Duration(0), "token must have a TTL")
+		require.Greater(t, ttl, time.Duration(0))
 	})
 
 	t.Run("IsFamilyRevoked", func(t *testing.T) {
@@ -141,16 +141,16 @@ func TestCache(t *testing.T) {
 		require.NoError(t, c.StoreRefresh(ctx, "jti1", cache.RefreshRecord{FID: "fam1", Status: "active"}, time.Minute))
 		revoked, err := c.IsFamilyRevoked(ctx, "fam1")
 		require.NoError(t, err)
-		require.False(t, revoked, "active family must not be revoked")
+		require.False(t, revoked)
 
 		require.NoError(t, c.RevokeFamily(ctx, "fam1"))
 		revoked, err = c.IsFamilyRevoked(ctx, "fam1")
 		require.NoError(t, err)
-		require.True(t, revoked, "revoked family must report revoked")
+		require.True(t, revoked)
 
 		revoked, err = c.IsFamilyRevoked(ctx, "nonexistent")
 		require.NoError(t, err)
-		require.True(t, revoked, "missing family must be treated as revoked (fail-closed)")
+		require.True(t, revoked)
 	})
 
 	t.Run("RotateRefresh", func(t *testing.T) {
@@ -171,31 +171,32 @@ func TestCache(t *testing.T) {
 
 		oldRec, err := c.GetRefresh(ctx, "old")
 		require.NoError(t, err)
-		require.Equal(t, "revoked", oldRec.Status, "old token must be revoked after rotation")
+		require.Equal(t, "revoked", oldRec.Status)
 
 		newRec, err := c.GetRefresh(ctx, "new")
 		require.NoError(t, err)
-		require.Equal(t, "active", newRec.Status, "new token must be active")
+		require.Equal(t, "active", newRec.Status)
 	})
 
 	t.Run("Allow_RateLimit", func(t *testing.T) {
-		// Лимитер фиксированного окна: первые Limit запросов проходят,
-		// следующий сверх лимита блокируется.
-		ctx := subCtx(t)
-		flush(ctx, t, raw)
+    ctx := subCtx(t)
+    flush(ctx, t, raw)
 
-		req := cache.RateLimitRequest{Scope: "login", Key: "user1", Limit: 3, WindowSize: time.Minute}
+    req := cache.RateLimitRequest{Scope: "login", Key: "user1", Limit: 3, WindowSize: time.Minute}
 
-		for i := 1; i <= 3; i++ {
-			allowed, err := c.Allow(ctx, req)
-			require.NoError(t, err)
-			require.True(t, allowed, "request %d within limit must be allowed", i)
-		}
+    for i := 1; i <= 3; i++ {
+        allowed, retry, err := c.Allow(ctx, req)
+        require.NoError(t, err)
+        require.True(t, allowed, "request %d within limit must be allowed", i)
+        require.Zero(t, retry, "retry-after must be 0 while allowed")
+    }
 
-		allowed, err := c.Allow(ctx, req)
-		require.NoError(t, err)
-		require.False(t, allowed, "request over limit must be denied")
-	})
+    allowed, retry, err := c.Allow(ctx, req)
+    require.NoError(t, err)
+    require.False(t, allowed, "request over limit must be denied")
+    require.GreaterOrEqual(t, retry, int64(1), "retry-after must be >= 1s when denied")
+    require.LessOrEqual(t, retry, int64(60), "retry-after must not exceed window")
+})
 
 	t.Run("IncrCounter_SetsTTLOnFirst", func(t *testing.T) {
 		// TTL ставится на ПЕРВОМ инкременте (count==1), окно лимита не вечное.
@@ -207,6 +208,6 @@ func TestCache(t *testing.T) {
 
 		ttl, err := raw.TTL(ctx, "rl:test:k1").Result()
 		require.NoError(t, err)
-		require.Greater(t, ttl, time.Duration(0), "counter must have TTL after first incr")
+		require.Greater(t, ttl, time.Duration(0))
 	})
 }

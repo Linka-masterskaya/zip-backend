@@ -2,6 +2,8 @@ package testutil
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -106,4 +108,56 @@ func NewRedis(t *testing.T) (*redis.Client, func()) {
 		}
 	}
 	return client, cleanup
+}
+
+// NewPostgresCtx — реальная логика. Возвращает error, не зависит от *testing.T.
+// Используется в TestMain (где нет *testing.T).
+func NewPostgresCtx(ctx context.Context) (*pgxpool.Pool, func(), error) {
+	pgContainer, err := postgres.Run(ctx,
+		"postgres:16-alpine",
+		postgres.WithDatabase("postgres"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("postgres"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(30*time.Second),
+		),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("start postgres container: %w", err)
+	}
+
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		if err := pgContainer.Terminate(ctx); err != nil {
+			slog.Error("failed to terminate postgres container", "err", err)
+		}
+		return nil, nil, fmt.Errorf("get connection string: %w", err)
+	}
+
+	dbPool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		if err := pgContainer.Terminate(ctx); err != nil {
+			slog.Error("failed to terminate postgres container", "err", err)
+		}
+		return nil, nil, fmt.Errorf("create pool: %w", err)
+	}
+
+	if err := dbPool.Ping(ctx); err != nil {
+		dbPool.Close()
+		if err := pgContainer.Terminate(ctx); err != nil {
+			slog.Error("failed to terminate postgres container", "err", err)
+		}
+		return nil, nil, fmt.Errorf("ping postgres: %w", err)
+	}
+
+	cleanup := func() {
+		dbPool.Close()
+		if err := pgContainer.Terminate(ctx); err != nil {
+			slog.Error("failed to terminate postgres container", "err", err)
+		}
+	}
+
+	return dbPool, cleanup, nil
 }

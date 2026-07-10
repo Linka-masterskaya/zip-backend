@@ -8,12 +8,17 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 
 // ErrNotFound - sentinel error returned by Client lookups.
 var ErrNotFound = errors.New("redis: key not found")
+
+type Config struct {
+	URL        string
+	ClientName string
+	PoolSize   int
+}
 
 // Client wraps a Redis connection and provides rate limiting and refresh token storage.
 type Client struct {
@@ -21,7 +26,7 @@ type Client struct {
 }
 
 // NewClient connects to Redis and verifies the connection with a ping.
-func NewClient(cfg config.RedisConfig) (*Client, error) {
+func NewClient(cfg Config) (*Client, error) {
 	options, err := redis.ParseURL(cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse redis url: %w", err)
@@ -90,13 +95,27 @@ func (c *Client) IncrCounter(ctx context.Context, key string, ttl time.Duration)
 }
 
 // Allow reports whether the request is within its rate limit.
-func (c *Client) Allow(ctx context.Context, req RateLimitRequest) (bool, error) {
+func (c *Client) Allow(ctx context.Context, req RateLimitRequest) (bool, int64, error) {
 	key := fmt.Sprintf("rl:%s:%s", req.Scope, req.Key)
 	count, err := c.IncrCounter(ctx, key, req.WindowSize)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return count <= req.Limit, nil
+
+	if count > req.Limit {
+		ttl, err := c.rdb.TTL(ctx, key).Result()
+		if err != nil {
+			return false, 0, fmt.Errorf("redis ttl check failed: %w", err)
+		}
+
+		seconds := int64(ttl.Seconds())
+		if seconds < 1 {
+			seconds = 1
+		}
+		return false, seconds, nil
+	}
+
+	return true, 0, nil
 }
 
 // RefreshRecord is a refresh token stored as a Redis hash under refresh:{jti}.
