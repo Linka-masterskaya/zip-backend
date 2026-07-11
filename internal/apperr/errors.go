@@ -1,7 +1,10 @@
 // Package apperr содержит стандартные типы ошибок приложения.
 package apperr
 
-import "fmt"
+import (
+	"fmt"
+	"net/http"
+)
 
 // AppError описывает кастомную ошибку приложения с HTTP-статусом.
 type AppError struct {
@@ -13,12 +16,18 @@ type AppError struct {
 
 // Стандартные ошибки приложения для использования в хендлерах.
 var (
-	ErrNotFound     = &AppError{Code: "NOT_FOUND", HTTPStatus: 404, Message: "resource not found"}
-	ErrUnauthorized = &AppError{Code: "UNAUTHORIZED", HTTPStatus: 401, Message: "unauthorized"}
-	ErrForbidden    = &AppError{Code: "FORBIDDEN", HTTPStatus: 403, Message: "forbidden"}
-	ErrBadRequest   = &AppError{Code: "BAD_REQUEST", HTTPStatus: 400, Message: "bad request"}
-	ErrConflict     = &AppError{Code: "CONFLICT", HTTPStatus: 409, Message: "conflict"}
-	ErrInternal     = &AppError{Code: "INTERNAL", HTTPStatus: 500, Message: "internal server error"}
+	ErrNotFound        = &AppError{Code: "NOT_FOUND", HTTPStatus: http.StatusNotFound, Message: "resource not found"}
+	ErrUnauthorized    = &AppError{Code: "UNAUTHORIZED", HTTPStatus: http.StatusUnauthorized, Message: "unauthorized"}
+	ErrForbidden       = &AppError{Code: "FORBIDDEN", HTTPStatus: http.StatusForbidden, Message: "forbidden"}
+	ErrBadRequest      = &AppError{Code: "BAD_REQUEST", HTTPStatus: http.StatusBadRequest, Message: "bad request"}
+	ErrConflict        = &AppError{Code: "CONFLICT", HTTPStatus: http.StatusConflict, Message: "conflict"}
+	ErrInternal        = &AppError{Code: "INTERNAL", HTTPStatus: http.StatusInternalServerError, Message: "internal server error"}
+	ErrPayloadTooLarge = &AppError{Code: "PAYLOAD_TOO_LARGE", HTTPStatus: http.StatusRequestEntityTooLarge, Message: "payload too large"}
+
+	ErrUserNotFound       = &AppError{Code: "USER_NOT_FOUND", HTTPStatus: http.StatusNotFound, Message: "user not found"}
+	ErrVerifyTokenInvalid = &AppError{Code: "VERIFY_TOKEN_INVALID", HTTPStatus: http.StatusBadRequest, Message: "verification link is invalid or expired"}
+	ErrJWTTokenInvalid    = &AppError{Code: "JWT_TOKEN_INVALID", HTTPStatus: http.StatusUnauthorized, Message: "invalid or expired token"}
+	ErrTooManyRequests    = &AppError{Code: "TOO_MANY_REQUESTS", HTTPStatus: http.StatusTooManyRequests, Message: "too many requests, please try again later"}
 )
 
 func (e *AppError) Error() string {

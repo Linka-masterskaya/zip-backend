@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -11,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 )
 
@@ -137,4 +141,38 @@ func extractEmail(r *http.Request) string {
 		return strings.ToLower(strings.TrimSpace(doc.Email))
 	}
 	return ""
+
+}
+
+type RateLimitPolicy struct {
+	Scope  string        `mapstructure:"scope"`
+	Limit  int64         `mapstructure:"limit"`
+	Window time.Duration `mapstructure:"window"`
+}
+
+func RateLimitByUser(c *cache.Client, p RateLimitPolicy) func(AppHandler) AppHandler {
+	return func(next AppHandler) AppHandler {
+		return func(w http.ResponseWriter, r *http.Request) error {
+			userID, err := authctx.UserIDFromCtx(r.Context())
+			if err != nil {
+				return apperr.ErrInternal.WithError(fmt.Errorf("rate limit: no userID in ctx (auth middleware not in chain): %w", err))
+			}
+
+			rlCtx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+			defer cancel()
+
+			allowed, retry, err := c.Allow(rlCtx, cache.RateLimitRequest{
+				Scope: p.Scope, Key: userID.String(),
+				Limit: p.Limit, WindowSize: p.Window,
+			})
+			if err != nil {
+				return apperr.ErrInternal.WithError(fmt.Errorf("cache.Allow: %w", err))
+			}
+			if !allowed {
+				w.Header().Set("Retry-After", strconv.FormatInt(retry, 10))
+				return apperr.ErrTooManyRequests
+			}
+			return next(w, r)
+		}
+	}
 }

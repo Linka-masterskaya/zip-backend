@@ -9,12 +9,12 @@ import (
 	"fmt"
 )
 
-type Crypto struct {
+type Cryptox struct {
 	gcm     cipher.AEAD
 	hmacKey []byte
 }
 
-func New(aesKey, hmacKey []byte) (*Crypto, error) {
+func New(aesKey, hmacKey []byte) (*Cryptox, error) {
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return nil, fmt.Errorf("crypto.New: %w", err)
@@ -25,10 +25,10 @@ func New(aesKey, hmacKey []byte) (*Crypto, error) {
 		return nil, fmt.Errorf("crypto.New: %w", err)
 	}
 
-	return &Crypto{gcm: gcm, hmacKey: hmacKey}, nil
+	return &Cryptox{gcm: gcm, hmacKey: hmacKey}, nil
 }
 
-func (c *Crypto) Encrypt(plaintext []byte) ([]byte, error) {
+func (c *Cryptox) Encrypt(plaintext []byte) ([]byte, error) {
 	nonce := make([]byte, c.gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("crypto.Encrypt: %w", err)
@@ -37,7 +37,7 @@ func (c *Crypto) Encrypt(plaintext []byte) ([]byte, error) {
 	return c.gcm.Seal(nonce, nonce, plaintext, nil), nil
 }
 
-func (c *Crypto) Decrypt(ciphertext []byte) ([]byte, error) {
+func (c *Cryptox) Decrypt(ciphertext []byte) ([]byte, error) {
 	ns := c.gcm.NonceSize()
 	if len(ciphertext) < ns {
 		return nil, fmt.Errorf("crypto.Decrypt: ciphertext too short")
@@ -46,7 +46,7 @@ func (c *Crypto) Decrypt(ciphertext []byte) ([]byte, error) {
 	return c.gcm.Open(nil, ciphertext[:ns], ciphertext[ns:], nil)
 }
 
-func (c *Crypto) Hash(data []byte) []byte {
+func (c *Cryptox) Hash(data []byte) []byte {
 	m := hmac.New(sha256.New, c.hmacKey)
 	m.Write(data)
 	return m.Sum(nil)

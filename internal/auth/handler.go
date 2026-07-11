@@ -1,14 +1,43 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
+	"fmt"
 	"net/http"
+	"time"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 )
 
-type AuthHandler struct {
-	service *Service
+//go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
+type authServiceIface interface {
+	Login(ctx context.Context, email, password string) (*LoginResult, error)
+	verifyEmail(ctx context.Context, verifyToken string) error
+	resendEmail(ctx context.Context) error
+}
+
+type authHandlers struct {
+	svc             authServiceIface
+	refreshTokenTTL time.Duration
+	cookieSecure    bool
+}
+
+func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
+	h := &authHandlers{
+		svc: svc,
+	}
+
+	if len(cfg) > 0 {
+		h.refreshTokenTTL = cfg[0].RefreshTokenTTL
+		h.cookieSecure = cfg[0].CookieSecure
+	}
+
+	return h
 }
 
 type LoginRequest struct {
@@ -20,47 +49,30 @@ type LoginResponse struct {
 	AccessToken string `json:"access_token"`
 }
 
-func NewAuthHandler(s *Service) *AuthHandler {
-	return &AuthHandler{
-		service: s,
-	}
-}
-
-func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	defer func() {
-		if err := r.Body.Close(); err != nil {
-			slog.Error("close request body", "err", err)
-		}
-	}()
-
-	req := LoginRequest{}
+func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
+	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
+		return apperr.ErrBadRequest.WithError(err)
 	}
 
-	result, err := h.service.Login(r.Context(), req.Email, req.Password)
-	if errors.Is(err, ErrEmailNotVerified) {
-		http.Error(w, "email not verified", http.StatusForbidden)
-		return
-	}
-	if errors.Is(err, ErrInvalidCredentials) {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	if err != nil {
-		http.Error(w, "login error", http.StatusInternalServerError)
-		return
+	result, err := h.svc.Login(r.Context(), req.Email, req.Password)
+	switch {
+	case errors.Is(err, ErrInvalidCredentials):
+		return apperr.ErrUnauthorized
+	case errors.Is(err, ErrEmailNotVerified):
+		return apperr.ErrForbidden.WithMessage("email not verified")
+	case err != nil:
+		return err
 	}
 
-	//nolint:gosec // cookie Secure is controlled by config for local dev/prod
+	//nolint:gosec // Secure is configured separately for local and production environments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    result.RefreshToken,
 		Path:     "/",
-		MaxAge:   int(h.service.cfg.RefreshTokenTTL.Seconds()),
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
 		HttpOnly: true,
-		Secure:   h.service.cfg.CookieSecure,
+		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -70,41 +82,122 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		AccessToken: result.AccessToken,
 	}
 
-	//nolint:gosec // access token is intentionally returned to the client in the response body
+	//nolint:gosec // The access token is intentionally returned in the response.
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		http.Error(w, "encode response", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("encode login response: %w", err)
 	}
+
+	return nil
 }
 
-func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	if _, err := w.Write([]byte(`{"error":"Not implemented"}`)); err != nil {
-		return
-	}
+const verifyTokenLength = 43
+
+type verifyEmailRequest struct {
+	Token string `json:"token"`
 }
 
-func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	if _, err := w.Write([]byte(`{"error":"Not implemented"}`)); err != nil {
-		return
+func (h *authHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) error {
+	var req verifyEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest
 	}
+
+	if len(req.Token) != verifyTokenLength {
+		return apperr.ErrBadRequest
+	}
+
+	if err := h.svc.verifyEmail(r.Context(), req.Token); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
-func (h *AuthHandler) VerifyResend(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	if _, err := w.Write([]byte(`{"error":"Not implemented"}`)); err != nil {
-		return
+func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error {
+	if err := h.svc.resendEmail(r.Context()); err != nil {
+		return err
 	}
+
+	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *AuthHandler) EmailConfirm(w http.ResponseWriter, r *http.Request) {
+func (h *authHandlers) ForgotPassword(w http.ResponseWriter, _ *http.Request) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotImplemented)
-	if _, err := w.Write([]byte(`{"error":"Not implemented"}`)); err != nil {
-		return
+
+	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
+	return err
+}
+
+func (h *authHandlers) ResetPassword(w http.ResponseWriter, _ *http.Request) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+
+	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
+	return err
+}
+
+func (h *authHandlers) VerifyResend(w http.ResponseWriter, _ *http.Request) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+
+	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
+	return err
+}
+
+func (h *authHandlers) EmailConfirm(w http.ResponseWriter, _ *http.Request) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+
+	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
+	return err
+}
+
+func (h *authHandlers) RegisterRoutes(
+	mux *http.ServeMux,
+	authMW *middleware.AuthMW,
+	cacheClient *cache.Client,
+	cfg *config.Config,
+) {
+	verifyEmailIPLimit := middleware.RateLimit(
+		cacheClient,
+		"email-confirm",
+		int64(cfg.Auth.EmailConfirmRateLimit),
+		time.Minute,
+		cfg.App.TrustedProxies,
+	)
+
+	verifyResendIPLimit := middleware.RateLimit(
+		cacheClient,
+		"verify-resend",
+		int64(cfg.Auth.VerifyResendRateLimit),
+		time.Minute,
+		cfg.App.TrustedProxies,
+	)
+
+	resendPolicy := middleware.RateLimitPolicy{
+		Scope:  cfg.RateLimit.Resend.Scope,
+		Limit:  cfg.RateLimit.Resend.Limit,
+		Window: cfg.RateLimit.Resend.Window,
 	}
+
+	mux.Handle(
+		"POST /auth/verify-email",
+		verifyEmailIPLimit(
+			middleware.ErrorMiddleware(h.VerifyEmail),
+		),
+	)
+
+	mux.Handle(
+		"POST /auth/verify-email/resend",
+		verifyResendIPLimit(
+			middleware.ErrorMiddleware(
+				authMW.AuthMiddleware(
+					middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
+				),
+			),
+		),
+	)
 }

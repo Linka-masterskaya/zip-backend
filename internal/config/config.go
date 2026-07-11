@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -24,12 +25,16 @@ type Config struct {
 	OpenAI       OpenAIConfig       `mapstructure:"openai"`
 	PicturesBank PicturesBankConfig `mapstructure:"pictures_bank"`
 	Crypto       CryptoConfig       `mapstructure:"crypto"`
+	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
 }
 
 // CryptoConfig contains encryption and hashing settings.
 type CryptoConfig struct {
-	AESKey  string `mapstructure:"aes_key"`
-	HMACKey string `mapstructure:"hmac_key"`
+	AESKeyRaw  string `mapstructure:"aes_key"`
+	HMACKeyRaw string `mapstructure:"hmac_key"`
+
+	AESKey  []byte `mapstructure:"-"`
+	HMACKey []byte `mapstructure:"-"`
 }
 
 // AppConfig contains application runtime settings.
@@ -119,9 +124,22 @@ type MinIOConfig struct {
 
 // JWTConfig contains JWT signing and expiration settings.
 type JWTConfig struct {
-	Secret     string `mapstructure:"secret"`
-	AccessTTL  string `mapstructure:"access_ttl"`
-	RefreshTTL string `mapstructure:"refresh_ttl"`
+	Secret     string        `mapstructure:"secret"`
+	AccessTTL  time.Duration `mapstructure:"access_ttl"`
+	RefreshTTL time.Duration `mapstructure:"refresh_ttl"`
+}
+
+type RateLimitConfig struct {
+	Resend RateLimitRule `mapstructure:"resend"`
+	Login  RateLimitRule `mapstructure:"login"`
+	Verify RateLimitRule `mapstructure:"verify"`
+}
+
+// RateLimitRule describes one rate-limit configuration.
+type RateLimitRule struct {
+	Scope  string        `mapstructure:"scope"`
+	Limit  int64         `mapstructure:"limit"`
+	Window time.Duration `mapstructure:"window"`
 }
 
 // YandexConfig contains Yandex OAuth settings.
@@ -377,12 +395,22 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("jwt.secret must be at least 32 characters")
 	}
 
-	if len(cfg.Crypto.AESKey) != 32 {
-		return fmt.Errorf("crypto.aes_key must be 32 bytes")
+	aes, err := base64.StdEncoding.DecodeString(cfg.Crypto.AESKeyRaw)
+	if err != nil {
+		return fmt.Errorf("crypto.aes_key: invalid base64: %w", err)
 	}
-	if len(cfg.Crypto.HMACKey) != 32 {
-		return fmt.Errorf("crypto.hmac_key must be 32 bytes")
+	if len(aes) != 32 {
+		return fmt.Errorf("crypto.aes_key: must be 32 bytes, got %d", len(aes))
 	}
+	cfg.Crypto.AESKey = aes
 
+	hmacKey, err := base64.StdEncoding.DecodeString(cfg.Crypto.HMACKeyRaw)
+	if err != nil {
+		return fmt.Errorf("crypto.hmac_key: invalid base64: %w", err)
+	}
+	if len(hmacKey) < 32 {
+		return fmt.Errorf("crypto.hmac_key: must be at least 32 bytes, got %d", len(hmacKey))
+	}
+	cfg.Crypto.HMACKey = hmacKey
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"time"
 
@@ -15,6 +16,9 @@ import (
 )
 
 const defaultMinIOTimeout = 15 * time.Second
+
+// ErrObjectNotFound is returned when requested object does not exist.
+var ErrObjectNotFound = errors.New("object not found")
 
 // Client provides access to MinIO object storage operations.
 type Client struct {
@@ -109,4 +113,68 @@ func (c *Client) PresignedURL(ctx context.Context, key string, ttl time.Duration
 	}
 
 	return objectURL.String(), nil
+}
+
+// PutObject uploads an object to the configured bucket.
+func (c *Client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
+	if c == nil || c.client == nil {
+		return errors.New("minio client is not initialized")
+	}
+	if key == "" {
+		return errors.New("object key is required")
+	}
+	if reader == nil {
+		return errors.New("object reader is required")
+	}
+	if size < 0 {
+		return errors.New("object size must be non-negative")
+	}
+
+	_, err := c.client.PutObject(ctx, c.bucket, key, reader, size, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return fmt.Errorf("put object %q: %w", key, err)
+	}
+	return nil
+}
+
+// RemoveObject deletes an object from the configured bucket.
+func (c *Client) RemoveObject(ctx context.Context, key string) error {
+	if c == nil || c.client == nil {
+		return errors.New("minio client is not initialized")
+	}
+	if key == "" {
+		return errors.New("object key is required")
+	}
+
+	err := c.client.RemoveObject(ctx, c.bucket, key, minio.RemoveObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("remove object %q: %w", key, err)
+	}
+	return nil
+}
+
+// ObjectSize returns object size in bytes.
+func (c *Client) ObjectSize(ctx context.Context, key string) (int64, error) {
+	if c == nil || c.client == nil {
+		return 0, errors.New("minio client is not initialized")
+	}
+	if key == "" {
+		return 0, errors.New("object key is required")
+	}
+
+	info, err := c.client.StatObject(ctx, c.bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		if isNotFound(err) {
+			return 0, ErrObjectNotFound
+		}
+		return 0, fmt.Errorf("stat object %q: %w", key, err)
+	}
+	return info.Size, nil
+}
+
+func isNotFound(err error) bool {
+	errResp := minio.ToErrorResponse(err)
+	return errResp.Code == "NoSuchKey" || errResp.Code == "NotFound" || errResp.StatusCode == 404
 }

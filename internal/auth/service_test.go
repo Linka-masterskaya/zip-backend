@@ -7,17 +7,9 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
 )
-
-type fakeUserRepo struct {
-	user *User
-	err  error
-}
-
-func (f *fakeUserRepo) GetUserByEmailHash(_ context.Context, _ []byte) (*User, error) {
-	return f.user, f.err
-}
 
 type fakeCache struct {
 	called bool
@@ -51,29 +43,49 @@ func (f *fakeCrypto) Hash(_ []byte) []byte {
 	return f.hash
 }
 
-func TestService_Login_Success(t *testing.T) {
-	password := "correct-password"
+func (f *fakeCrypto) Decrypt(_ []byte) ([]byte, error) {
+	return nil, nil
+}
 
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+func TestAuthService_Login_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	password := "correct-password"
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte(password),
+		bcrypt.DefaultCost,
+	)
 	if err != nil {
 		t.Fatalf("generate password hash: %v", err)
 	}
 
-	repo := &fakeUserRepo{
-		user: &User{
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
+		Return(&User{
 			ID:            "user-id",
 			OrgID:         ptrString("org-id"),
 			PasswordHash:  ptrString(string(passwordHash)),
 			Role:          "defectologist",
 			EmailVerified: true,
-		},
-	}
+		}, nil)
+
 	cacheStore := &fakeCache{}
 	crypto := &fakeCrypto{hash: []byte("email-hash")}
 
-	svc := NewService(repo, cacheStore, testServiceConfig(), crypto)
+	svc := NewAuthService(
+		repo,
+		cacheStore,
+		nil,
+		testAuthConfig(),
+		crypto,
+	)
 
-	result, err := svc.Login(context.Background(), " USER@example.com ", password)
+	result, err := svc.Login(
+		context.Background(),
+		" USER@example.com ",
+		password,
+	)
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -88,102 +100,168 @@ func TestService_Login_Success(t *testing.T) {
 		t.Fatal("refresh token was not stored")
 	}
 	if cacheStore.rec.Status != "active" {
-		t.Fatalf("refresh status = %q, want active", cacheStore.rec.Status)
+		t.Fatalf(
+			"refresh status = %q, want active",
+			cacheStore.rec.Status,
+		)
 	}
 	if cacheStore.ttl != time.Hour {
-		t.Fatalf("ttl = %v, want %v", cacheStore.ttl, time.Hour)
+		t.Fatalf(
+			"ttl = %v, want %v",
+			cacheStore.ttl,
+			time.Hour,
+		)
 	}
 }
 
-func TestService_Login_WrongPassword(t *testing.T) {
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.DefaultCost)
+func TestAuthService_Login_WrongPassword(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte("correct-password"),
+		bcrypt.DefaultCost,
+	)
 	if err != nil {
 		t.Fatalf("generate password hash: %v", err)
 	}
 
-	repo := &fakeUserRepo{
-		user: &User{
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), gomock.Any()).
+		Return(&User{
 			ID:            "user-id",
 			OrgID:         ptrString("org-id"),
 			PasswordHash:  ptrString(string(passwordHash)),
 			Role:          "defectologist",
 			EmailVerified: true,
-		},
-	}
+		}, nil)
+
 	cacheStore := &fakeCache{}
 	crypto := &fakeCrypto{hash: []byte("email-hash")}
 
-	svc := NewService(repo, cacheStore, testServiceConfig(), crypto)
+	svc := NewAuthService(
+		repo,
+		cacheStore,
+		nil,
+		testAuthConfig(),
+		crypto,
+	)
 
-	_, err = svc.Login(context.Background(), "user@example.com", "wrong-password")
+	_, err = svc.Login(
+		context.Background(),
+		"user@example.com",
+		"wrong-password",
+	)
 	if !errors.Is(err, ErrInvalidCredentials) {
-		t.Fatalf("err = %v, want %v", err, ErrInvalidCredentials)
+		t.Fatalf(
+			"err = %v, want %v",
+			err,
+			ErrInvalidCredentials,
+		)
 	}
 	if cacheStore.called {
 		t.Fatal("refresh token should not be stored")
 	}
 }
 
-func TestService_Login_UserNotFound(t *testing.T) {
-	repo := &fakeUserRepo{
-		err: ErrUserNotFound,
-	}
+func TestAuthService_Login_UserNotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), gomock.Any()).
+		Return(nil, ErrUserNotFound)
+
 	cacheStore := &fakeCache{}
 	crypto := &fakeCrypto{hash: []byte("email-hash")}
 
-	svc := NewService(repo, cacheStore, testServiceConfig(), crypto)
+	svc := NewAuthService(
+		repo,
+		cacheStore,
+		nil,
+		testAuthConfig(),
+		crypto,
+	)
 
-	_, err := svc.Login(context.Background(), "missing@example.com", "password")
+	_, err := svc.Login(
+		context.Background(),
+		"missing@example.com",
+		"password",
+	)
 	if !errors.Is(err, ErrInvalidCredentials) {
-		t.Fatalf("err = %v, want %v", err, ErrInvalidCredentials)
+		t.Fatalf(
+			"err = %v, want %v",
+			err,
+			ErrInvalidCredentials,
+		)
 	}
 	if cacheStore.called {
 		t.Fatal("refresh token should not be stored")
 	}
 }
 
-func TestService_Login_EmailNotVerified(t *testing.T) {
+func TestAuthService_Login_EmailNotVerified(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
 	password := "correct-password"
-
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte(password),
+		bcrypt.DefaultCost,
+	)
 	if err != nil {
 		t.Fatalf("generate password hash: %v", err)
 	}
 
-	repo := &fakeUserRepo{
-		user: &User{
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), gomock.Any()).
+		Return(&User{
 			ID:            "user-id",
 			OrgID:         ptrString("org-id"),
 			PasswordHash:  ptrString(string(passwordHash)),
 			Role:          "defectologist",
 			EmailVerified: false,
-		},
-	}
+		}, nil)
+
 	cacheStore := &fakeCache{}
 	crypto := &fakeCrypto{hash: []byte("email-hash")}
 
-	cfg := testServiceConfig()
+	cfg := testAuthConfig()
 	cfg.RequireEmailVerification = true
 
-	svc := NewService(repo, cacheStore, cfg, crypto)
+	svc := NewAuthService(
+		repo,
+		cacheStore,
+		nil,
+		cfg,
+		crypto,
+	)
 
-	_, err = svc.Login(context.Background(), "user@example.com", password)
+	_, err = svc.Login(
+		context.Background(),
+		"user@example.com",
+		password,
+	)
 	if !errors.Is(err, ErrEmailNotVerified) {
-		t.Fatalf("err = %v, want %v", err, ErrEmailNotVerified)
+		t.Fatalf(
+			"err = %v, want %v",
+			err,
+			ErrEmailNotVerified,
+		)
 	}
 	if cacheStore.called {
 		t.Fatal("refresh token should not be stored")
 	}
 }
 
-func testServiceConfig() *ServiceConfig {
-	return &ServiceConfig{
+func testAuthConfig() Config {
+	return Config{
 		JWTSecret:       "01234567890123456789012345678901",
 		AccessTokenTTL:  time.Minute,
 		RefreshTokenTTL: time.Hour,
 	}
 }
 
-func ptrString(s string) *string {
-	return &s
+func ptrString(value string) *string {
+	return &value
 }
