@@ -33,6 +33,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
+	"github.com/Linka-masterskaya/zip-backend/internal/profile"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 	"github.com/Linka-masterskaya/zip-backend/migrations"
 )
@@ -95,6 +96,18 @@ func run() error {
 
 	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
+
+	profileRepo := profile.NewRepository(deps.db)
+	profileService := profile.NewService(profileRepo, deps.storage)
+	profileHandler := profile.NewHandler(profileService)
+	mainMux.Handle(
+		"PUT /api/v1/profile/me/avatar",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.UploadAvatar)),
+	)
+	mainMux.Handle(
+		"DELETE /api/v1/profile/me/avatar",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.DeleteAvatar)),
+	)
 
 	wrappedHandler := middleware.Chain(
 		mainMux,
@@ -167,13 +180,14 @@ func run() error {
 }
 
 type infra struct {
-	cfg    *config.Config
-	db     *pgxpool.Pool
-	redis  *cache.Client
-	nc     *nats.Conn
-	pub    *broker.Publisher
-	crypto *cryptox.Cryptox
-	mailer *mailer.SMTPSender
+	cfg     *config.Config
+	db      *pgxpool.Pool
+	redis   *cache.Client
+	nc      *nats.Conn
+	pub     *broker.Publisher
+	crypto  *cryptox.Cryptox
+	mailer  *mailer.SMTPSender
+	storage *storage.Client
 }
 
 func initInfra() (*infra, error) {
@@ -191,7 +205,8 @@ func initInfra() (*infra, error) {
 	logger.Init(cfg.App.Env)
 	metrics.Initialize()
 
-	if _, err := storage.New(cfg.MinIO); err != nil {
+	storageClient, err := storage.New(cfg.MinIO)
+	if err != nil {
 		return nil, fmt.Errorf("minio connect: %w", err)
 	}
 
@@ -227,6 +242,7 @@ func initInfra() (*infra, error) {
 	return &infra{
 		cfg: cfg, db: dbPool, redis: redisClient,
 		nc: nc, pub: pub, crypto: cryptoClient, mailer: smtpSender,
+		storage: storageClient,
 	}, nil
 }
 
