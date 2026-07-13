@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var ErrUserNotFound = errors.New("user not found")
+
 type Service struct {
 	repo      RepositoryInterface
 	txRepo    TxRepository
@@ -53,7 +55,7 @@ type UserIdentity struct {
 func NewService(
 	repo RepositoryInterface,
 	txRepo TxRepository,
-	crypto CryptoInterface, // ← интерфейс
+	crypto CryptoInterface,
 	jwtSecret string,
 ) *Service {
 	return &Service{
@@ -99,8 +101,8 @@ func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID str
 	if err != nil {
 		return nil, nil, fmt.Errorf("find identity by yandex_id: %w", err)
 	}
-	if identity == nil {
-		return nil, nil, nil
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrUserNotFound
 	}
 
 	user, err := s.repo.FindUserByID(ctx, identity.UserID)
@@ -120,7 +122,9 @@ func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID str
 	if err != nil {
 		return nil, nil, fmt.Errorf("find userCred by user_id: %w", err)
 	}
-
+	if cred == nil {
+		return nil, nil, fmt.Errorf("userCred not found for user")
+	}
 	return user, cred, nil
 }
 
@@ -134,7 +138,7 @@ func (s *Service) createNewUser(ctx context.Context, email, name, yandexID strin
 			slog.Warn("failed to rollback transaction", "error", err)
 		}
 	}()
-	txRepo := s.txRepo.withTx(tx) // ← используем txRepo
+	txRepo := s.txRepo.withTx(tx)
 
 	userID := uuid.New()
 	if err := txRepo.CreateUser(ctx, CreateUserParams{

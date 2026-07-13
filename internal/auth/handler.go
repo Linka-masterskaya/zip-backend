@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"golang.org/x/oauth2"
 )
+
+var ErrEmailAlreadyRegistered = errors.New("email already registered")
 
 type Handler struct {
 	service     *Service
@@ -89,6 +92,10 @@ func (h *Handler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 	user, userAuth, err := h.service.UpsertUser(ctx, yandexUser.Email, name, yandexUser.ID)
 	if err != nil {
 		slog.Error("failed to upsert user", "error", err)
+		if errors.Is(err, ErrEmailAlreadyRegistered) {
+			http.Error(w, "Email already registered, please login with password", http.StatusConflict)
+			return
+		}
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
