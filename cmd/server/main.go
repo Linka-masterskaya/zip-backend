@@ -87,11 +87,9 @@ func run() error {
 		deps.crypto,
 	)
 
-	checker := &health.Checker{
-		DB:          deps.db,
-		RedisClient: deps.redis,
-		NatsConn:    deps.nc,
-		MinioClient: deps.storage,
+	checker, err := health.NewChecker(deps.db, deps.redis, deps.nc, deps.storage)
+	if err != nil {
+		return fmt.Errorf("health checker init: %w", err)
 	}
 
 	packRateLimit := middleware.RateLimit(deps.redis, "packs_api", int64(deps.cfg.Auth.PackRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
