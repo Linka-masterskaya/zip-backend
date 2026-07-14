@@ -108,6 +108,13 @@ func run() error {
 	)
 
 	mainMux.Handle(
+		"POST /auth/register",
+		loginRateLimit(
+			middleware.ErrorMiddleware(authHandler.Register),
+		),
+	)
+
+	mainMux.Handle(
 		"POST /auth/forgot",
 		forgotRateLimit(
 			middleware.ErrorMiddleware(authHandler.ForgotPassword),

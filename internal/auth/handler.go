@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 //go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
+	Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error)
 	verifyEmail(ctx context.Context, verifyToken string) error
 	resendEmail(ctx context.Context) error
 }
@@ -200,4 +202,50 @@ func (h *authHandlers) RegisterRoutes(
 			),
 		),
 	)
+}
+
+func (h *authHandlers) Register(w http.ResponseWriter, r *http.Request) error {
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	if err := req.Validate(); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	resp, err := h.svc.Register(r.Context(), req)
+
+	switch {
+	case errors.Is(err, ErrEmailAlreadyExists):
+		return apperr.ErrConflict.WithMessage("email already exists")
+	case err != nil:
+		return err
+	}
+
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    resp.RefreshToken,
+		Path:     "/api/v1/auth",
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	var buf bytes.Buffer
+
+	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
+		return fmt.Errorf("encode register response: %w", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("write register response: %w", err)
+	}
+
+	return nil
 }

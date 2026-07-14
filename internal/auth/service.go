@@ -25,6 +25,12 @@ var ErrEmailNotVerified = errors.New("email not verified")
 
 var dummyPasswordHash = []byte("$2a$10$UlCQgLZoLjUzrtYRUUlkPeh/m5L2pl9aYzDTUaZAD3R4Pd8ONSof6")
 
+const (
+	bcryptCost         int    = 12
+	RoleDefectologist  string = "defectologist"
+	PurposeEmailVerify string = "email_verify"
+)
+
 // runDummyPasswordCompare performs a bcrypt comparison only to keep the
 // execution time similar for existing and non-existing users.
 //
@@ -49,6 +55,11 @@ type authRepoIface interface {
 		hash []byte,
 		expiresAt time.Time,
 	) error
+	EmailExists(ctx context.Context, emailHash []byte) (bool, error)
+	CreateOrganization(ctx context.Context, params CreateOrganizationParams) error
+	CreateUser(ctx context.Context, params CreateUserParams) error
+	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
+	CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error
 }
 
 type refreshStore interface {
@@ -63,6 +74,7 @@ type refreshStore interface {
 type cryptoService interface {
 	Hash(data []byte) []byte
 	Decrypt(ciphertext []byte) ([]byte, error)
+	Encrypt(plaintext []byte) ([]byte, error)
 }
 
 type Config struct {
@@ -277,4 +289,149 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// /auth/register
+func (au *authService) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
+
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	emailHash := au.crp.Hash([]byte(email))
+
+	exists, err := au.repo.EmailExists(ctx, emailHash)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if exists {
+		return nil, ErrEmailAlreadyExists
+	}
+
+	emailEncrypted, err := au.crp.Encrypt([]byte(email))
+
+	if err != nil {
+		return nil, err
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
+
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := au.repo.beginTx(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	txRepo := au.repo.withTx(tx)
+
+	// TODO: organization.name is not null. Пока в имя организации будет подставляться default value.
+	orgParams := CreateOrganizationParams{ID: uuid.New(), Name: "Personal organization"}
+
+	err = txRepo.CreateOrganization(ctx, orgParams)
+
+	if err != nil {
+		return nil, err
+	}
+
+	userParams := CreateUserParams{ID: uuid.New(), OrganizationID: orgParams.ID}
+
+	err = txRepo.CreateUser(ctx, userParams)
+
+	if err != nil {
+		return nil, err
+	}
+
+	credParams := CreateAuthCredParams{
+		UserID:         userParams.ID,
+		EmailHash:      emailHash,
+		EmailEncrypted: emailEncrypted,
+		PasswordHash:   string(passwordHash),
+		Role:           RoleDefectologist,
+	}
+
+	err = txRepo.CreateAuthCred(ctx, credParams)
+
+	if err != nil {
+		if IsViolationUniqueness(err) {
+			return nil, ErrEmailAlreadyExists
+		}
+		return nil, err
+	}
+
+	verifyToken := make([]byte, 32)
+
+	if _, err = rand.Read(verifyToken); err != nil {
+		return nil, err
+	}
+
+	verifyTokenString := base64.RawURLEncoding.EncodeToString(verifyToken)
+
+	tokenHash := sha256.Sum256(verifyToken)
+
+	verifyParams := CreateVerifyTokenParams{
+		ID:        uuid.New(),
+		UserID:    userParams.ID,
+		TokenHash: tokenHash[:],
+		ExpiresAt: time.Now().Add(au.cfg.VerifyEmailTokenTTL),
+		Purpose:   PurposeEmailVerify,
+	}
+
+	err = txRepo.CreateVerifyToken(ctx, verifyParams)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	mailTemplate := domain.EmailData{Token: verifyTokenString, Email: email}
+
+	// TODO: backlog: сделать  через NATS + метрика
+	if err = au.mailer.Send(ctx, email, domain.EmailVerify, mailTemplate); err != nil {
+		slog.Error("failed to send verify email", "err", err)
+		return nil, fmt.Errorf("authService.Register: send verify email: %w", err)
+	}
+
+	user := &User{
+		ID:            userParams.ID.String(),
+		Role:          RoleDefectologist,
+		EmailVerified: false,
+	}
+
+	accessToken, err := au.generateAccessToken(user)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: generate access token: %w", err)
+	}
+
+	jti := uuid.NewString()
+	fid := uuid.NewString()
+
+	refreshToken, err := au.generateRefreshToken(user, jti)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: generate refresh token: %w", err)
+	}
+
+	if err := au.cache.StoreRefresh(ctx, jti, cache.RefreshRecord{
+		FID:    fid,
+		Status: "active",
+	}, au.cfg.RefreshTokenTTL); err != nil {
+		return nil, fmt.Errorf("authService.Register: store refresh token: %w", err)
+	}
+
+	return &RegisterResponse{
+		AccessToken:  accessToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    int64(au.cfg.AccessTokenTTL.Seconds()),
+		RefreshToken: refreshToken,
+	}, nil
+
 }

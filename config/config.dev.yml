@@ -70,9 +70,10 @@ jwt:
   access_ttl: "15m"
   refresh_ttl: "720h"
 
-crypto:
-  aes_key: "01234567890123456789012345678901"
-  hmac_key: "abcdefghijklmnopqrstuvwxyz123456"
+# Оставлен один активный блок crypto ниже: дублирующий ключ crypto ломает парсинг YAML-конфига
+#crypto:
+#  aes_key: "01234567890123456789012345678901"
+#  hmac_key: "abcdefghijklmnopqrstuvwxyz123456"
 
 yandex:
   client_id: ''
@@ -95,6 +96,16 @@ smtp:
   from_email: 'noreply@yandex.com'
   tls: true
   timeout: "10s"
+
+#smtp:
+#  host: 'localhost'
+#  port: 1025
+#  username: 'admin'
+#  password: 'smtppass'
+#  from_email: 'noreply@example.com'
+#  tls: false
+#  timeout: "10s"
+
 
 auth:
   access_token_ttl: 15m
