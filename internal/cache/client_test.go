@@ -153,6 +153,35 @@ func TestCache(t *testing.T) {
 		require.True(t, revoked, "missing family must be treated as revoked (fail-closed)")
 	})
 
+	t.Run("RevokeAllSessions", func(t *testing.T) {
+		// Отзыв всех сессий пользователя: его семьи становятся revoked,
+		// чужая сессия не затрагивается, tracking-set удаляется.
+		ctx := subCtx(t)
+		flush(ctx, t, raw)
+
+		require.NoError(t, c.StoreRefresh(ctx, "jti1", cache.RefreshRecord{FID: "fam1", Status: "active", UserID: "user1"}, time.Minute))
+		require.NoError(t, c.StoreRefresh(ctx, "jti2", cache.RefreshRecord{FID: "fam2", Status: "active", UserID: "user1"}, time.Minute))
+		require.NoError(t, c.StoreRefresh(ctx, "jti3", cache.RefreshRecord{FID: "fam3", Status: "active", UserID: "user2"}, time.Minute))
+
+		require.NoError(t, c.RevokeAllSessions(ctx, "user1"))
+
+		revoked, err := c.IsFamilyRevoked(ctx, "fam1")
+		require.NoError(t, err)
+		require.True(t, revoked)
+
+		revoked, err = c.IsFamilyRevoked(ctx, "fam2")
+		require.NoError(t, err)
+		require.True(t, revoked)
+
+		revoked, err = c.IsFamilyRevoked(ctx, "fam3")
+		require.NoError(t, err)
+		require.False(t, revoked, "чужая сессия не должна отозваться")
+
+		exists, err := raw.Exists(ctx, "user_sessions:user1").Result()
+		require.NoError(t, err)
+		require.Zero(t, exists, "tracking-set должен быть удалён после отзыва")
+	})
+
 	t.Run("RotateRefresh", func(t *testing.T) {
 		// Ротация: старый JTI → revoked, новый JTI → active, оба в Redis.
 		// Detect-reuse / атомарность (Lua) здесь не проверяется — tech debt.

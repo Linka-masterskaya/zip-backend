@@ -103,6 +103,7 @@ func (c *Client) Allow(ctx context.Context, req RateLimitRequest) (bool, error) 
 type RefreshRecord struct {
 	FID    string `redis:"fid"`
 	Status string `redis:"status"`
+	UserID string `redis:"user_id"`
 }
 
 // RotateRefreshRequest carries data to rotate a refresh token atomically.
@@ -144,18 +145,45 @@ func (c *Client) RevokeFamily(ctx context.Context, fid string) error {
 }
 
 // StoreRefresh saves a refresh token and marks its family active, with ttl.
+// It also indexes the family under user_sessions:{userID} so all of a user's
+// sessions can later be revoked in bulk (see RevokeAllSessions).
 func (c *Client) StoreRefresh(ctx context.Context, jti string, rec RefreshRecord, ttl time.Duration) error {
 	tokenKey := "refresh:" + jti
 	familyKey := "refresh_family:" + rec.FID
+	sessionsKey := "user_sessions:" + rec.UserID
 
 	_, err := c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.HSet(ctx, tokenKey, rec)
 		pipe.Expire(ctx, tokenKey, ttl)
 		pipe.Set(ctx, familyKey, "active", ttl)
+		pipe.SAdd(ctx, sessionsKey, rec.FID)
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("redis.StoreRefresh: %w", err)
+	}
+	return nil
+}
+
+// RevokeAllSessions revokes every refresh-token family tracked for a user
+// (see StoreRefresh) and clears the tracking set, invalidating all of that
+// user's sessions, e.g. after a password change.
+func (c *Client) RevokeAllSessions(ctx context.Context, userID string) error {
+	key := "user_sessions:" + userID
+
+	fids, err := c.rdb.SMembers(ctx, key).Result()
+	if err != nil {
+		return fmt.Errorf("redis.RevokeAllSessions: %w", err)
+	}
+
+	for _, fid := range fids {
+		if err := c.RevokeFamily(ctx, fid); err != nil {
+			return fmt.Errorf("redis.RevokeAllSessions: %w", err)
+		}
+	}
+
+	if err := c.rdb.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("redis.RevokeAllSessions: %w", err)
 	}
 	return nil
 }
