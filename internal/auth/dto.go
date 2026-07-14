@@ -1,6 +1,6 @@
 package auth
 
-// DTO /auth/register
+// DTO /auth/register.
 type RegisterRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`

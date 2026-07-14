@@ -235,7 +235,7 @@ func (h *authHandlers) Register(w http.ResponseWriter, r *http.Request) error {
 	})
 
 	var buf bytes.Buffer
-
+	//nolint:gosec // The access token is intentionally returned in the response.
 	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
 		return fmt.Errorf("encode register response: %w", err)
 	}

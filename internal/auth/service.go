@@ -291,7 +291,67 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	return nil
 }
 
-// /auth/register
+func (au *authService) issueRegisterTokens(ctx context.Context, userID uuid.UUID) (*RegisterResponse, error) {
+	user := &User{
+		ID:            userID.String(),
+		Role:          RoleDefectologist,
+		EmailVerified: false,
+	}
+
+	accessToken, err := au.generateAccessToken(user)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: generate access token: %w", err)
+	}
+
+	jti := uuid.NewString()
+	fid := uuid.NewString()
+
+	refreshToken, err := au.generateRefreshToken(user, jti)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: generate refresh token: %w", err)
+	}
+
+	if err := au.cache.StoreRefresh(ctx, jti, cache.RefreshRecord{
+		FID:    fid,
+		Status: "active",
+	}, au.cfg.RefreshTokenTTL); err != nil {
+		return nil, fmt.Errorf("authService.Register: store refresh token: %w", err)
+	}
+
+	return &RegisterResponse{
+		AccessToken:  accessToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    int64(au.cfg.AccessTokenTTL.Seconds()),
+		RefreshToken: refreshToken,
+	}, nil
+}
+
+func (au *authService) createEmailVerifyToken(ctx context.Context, repo authRepoIface, userID uuid.UUID) (string, error) {
+	verifyToken := make([]byte, 32)
+
+	if _, err := rand.Read(verifyToken); err != nil {
+		return "", err
+	}
+
+	verifyTokenString := base64.RawURLEncoding.EncodeToString(verifyToken)
+	tokenHash := sha256.Sum256(verifyToken)
+
+	verifyParams := CreateVerifyTokenParams{
+		ID:        uuid.New(),
+		UserID:    userID,
+		TokenHash: tokenHash[:],
+		ExpiresAt: time.Now().Add(au.cfg.VerifyEmailTokenTTL),
+		Purpose:   PurposeEmailVerify,
+	}
+
+	if err := repo.CreateVerifyToken(ctx, verifyParams); err != nil {
+		return "", err
+	}
+
+	return verifyTokenString, nil
+}
+
+// Register регистрирует пользователя по email и паролю.
 func (au *authService) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
@@ -326,7 +386,9 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 	}
 
 	defer func() {
-		_ = tx.Rollback(ctx)
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.Error("tx rollback failed", "err", err)
+		}
 	}()
 
 	txRepo := au.repo.withTx(tx)
@@ -365,26 +427,7 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 		return nil, err
 	}
 
-	verifyToken := make([]byte, 32)
-
-	if _, err = rand.Read(verifyToken); err != nil {
-		return nil, err
-	}
-
-	verifyTokenString := base64.RawURLEncoding.EncodeToString(verifyToken)
-
-	tokenHash := sha256.Sum256(verifyToken)
-
-	verifyParams := CreateVerifyTokenParams{
-		ID:        uuid.New(),
-		UserID:    userParams.ID,
-		TokenHash: tokenHash[:],
-		ExpiresAt: time.Now().Add(au.cfg.VerifyEmailTokenTTL),
-		Purpose:   PurposeEmailVerify,
-	}
-
-	err = txRepo.CreateVerifyToken(ctx, verifyParams)
-
+	verifyTokenString, err := au.createEmailVerifyToken(ctx, txRepo, userParams.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -395,43 +438,11 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 
 	mailTemplate := domain.EmailData{Token: verifyTokenString, Email: email}
 
-	// TODO: backlog: сделать  через NATS + метрика
+	// TODO: backlog: сделать  через NATS + метрика.
 	if err = au.mailer.Send(ctx, email, domain.EmailVerify, mailTemplate); err != nil {
 		slog.Error("failed to send verify email", "err", err)
 		return nil, fmt.Errorf("authService.Register: send verify email: %w", err)
 	}
 
-	user := &User{
-		ID:            userParams.ID.String(),
-		Role:          RoleDefectologist,
-		EmailVerified: false,
-	}
-
-	accessToken, err := au.generateAccessToken(user)
-	if err != nil {
-		return nil, fmt.Errorf("authService.Register: generate access token: %w", err)
-	}
-
-	jti := uuid.NewString()
-	fid := uuid.NewString()
-
-	refreshToken, err := au.generateRefreshToken(user, jti)
-	if err != nil {
-		return nil, fmt.Errorf("authService.Register: generate refresh token: %w", err)
-	}
-
-	if err := au.cache.StoreRefresh(ctx, jti, cache.RefreshRecord{
-		FID:    fid,
-		Status: "active",
-	}, au.cfg.RefreshTokenTTL); err != nil {
-		return nil, fmt.Errorf("authService.Register: store refresh token: %w", err)
-	}
-
-	return &RegisterResponse{
-		AccessToken:  accessToken,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(au.cfg.AccessTokenTTL.Seconds()),
-		RefreshToken: refreshToken,
-	}, nil
-
+	return au.issueRegisterTokens(ctx, userParams.ID)
 }

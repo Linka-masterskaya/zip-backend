@@ -14,7 +14,7 @@ var (
 
 // IsViolationUniqueness проверяет, что ошибка пришла из Postgres
 // именно из-за нарушения уникальности email_hash
-// нужен, чтобы ошибку базы превратить в понятную бизнес-ошибку ErrEmailAlreadyExists
+// нужен, чтобы ошибку базы превратить в понятную бизнес-ошибку ErrEmailAlreadyExists.
 func IsViolationUniqueness(err error) bool {
 	var pgError *pgconn.PgError
 

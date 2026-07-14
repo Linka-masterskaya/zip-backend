@@ -256,7 +256,7 @@ func (r *authRepo) getUserContactForResend(
 	return emailEncrypted, emailVerified, nil
 }
 
-// /auth/register repository
+// /auth/register repository.
 
 func (r *authRepo) EmailExists(ctx context.Context, emailHash []byte) (bool, error) {
 	var exists bool
