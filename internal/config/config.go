@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -23,15 +24,27 @@ type Config struct {
 	CORS         CORSConfig         `mapstructure:"cors"`
 	OpenAI       OpenAIConfig       `mapstructure:"openai"`
 	PicturesBank PicturesBankConfig `mapstructure:"pictures_bank"`
+	Crypto       CryptoConfig       `mapstructure:"crypto"`
+	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
+}
+
+// CryptoConfig contains encryption and hashing settings.
+type CryptoConfig struct {
+	AESKeyRaw  string `mapstructure:"aes_key"`
+	HMACKeyRaw string `mapstructure:"hmac_key"`
+
+	AESKey  []byte `mapstructure:"-"`
+	HMACKey []byte `mapstructure:"-"`
 }
 
 // AppConfig contains application runtime settings.
 type AppConfig struct {
-	Env           string `mapstructure:"env"`
-	Port          string `mapstructure:"port"`
-	PublicURL     string `mapstructure:"public_url"`
-	FrontendURL   string `mapstructure:"frontend_url"`
-	MigrationsDir string `mapstructure:"migrations_dir"`
+	Env            string   `mapstructure:"env"`
+	Port           string   `mapstructure:"port"`
+	PublicURL      string   `mapstructure:"public_url"`
+	FrontendURL    string   `mapstructure:"frontend_url"`
+	MigrationsDir  string   `mapstructure:"migrations_dir"`
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
 }
 
 // DBConfig contains database connection settings.
@@ -111,9 +124,22 @@ type MinIOConfig struct {
 
 // JWTConfig contains JWT signing and expiration settings.
 type JWTConfig struct {
-	Secret     string `mapstructure:"secret"`
-	AccessTTL  string `mapstructure:"access_ttl"`
-	RefreshTTL string `mapstructure:"refresh_ttl"`
+	Secret     string        `mapstructure:"secret"`
+	AccessTTL  time.Duration `mapstructure:"access_ttl"`
+	RefreshTTL time.Duration `mapstructure:"refresh_ttl"`
+}
+
+type RateLimitConfig struct {
+	Resend RateLimitRule `mapstructure:"resend"`
+	Login  RateLimitRule `mapstructure:"login"`
+	Verify RateLimitRule `mapstructure:"verify"`
+}
+
+// RateLimitRule describes one rate-limit configuration.
+type RateLimitRule struct {
+	Scope  string        `mapstructure:"scope"`
+	Limit  int64         `mapstructure:"limit"`
+	Window time.Duration `mapstructure:"window"`
 }
 
 // YandexConfig contains Yandex OAuth settings.
@@ -137,12 +163,13 @@ type PicturesBankConfig struct {
 
 // SMTPConfig contains Email settings.
 type SMTPConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	Username string `mapstructure:"username"`
-	Password string `mapstructure:"password"`
-	From     string `mapstructure:"from_email"`
-	TLS      bool   `mapstructure:"tls"`
+	Host     string        `mapstructure:"host"`
+	Port     int           `mapstructure:"port"`
+	Username string        `mapstructure:"username"`
+	Password string        `mapstructure:"password"`
+	From     string        `mapstructure:"from_email"`
+	TLS      bool          `mapstructure:"tls"`
+	Timeout  time.Duration `mapstructure:"timeout"`
 }
 
 // AuthConfig contains authentication and security settings.
@@ -153,8 +180,14 @@ type AuthConfig struct {
 	ResetPasswordTokenTTL    time.Duration `mapstructure:"reset_password_token_ttl"`
 	EmailChangeTokenTTL      time.Duration `mapstructure:"email_change_token_ttl"`
 	BcryptCost               int           `mapstructure:"bcrypt_cost"`
-	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
 	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
+	CookieSecure             bool          `mapstructure:"cookie_secure"`
+	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
+	PackRateLimit            int           `mapstructure:"pack_rate_limit"`
+	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit"`
+	ResetRateLimit           int           `mapstructure:"reset_rate_limit"`
+	VerifyResendRateLimit    int           `mapstructure:"verify_resend_rate_limit"`
+	EmailConfirmRateLimit    int           `mapstructure:"email_confirm_rate_limit"`
 }
 
 // CORSConfig contains CORS settings.
@@ -205,6 +238,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.public_url", "http://localhost:8080")
 	v.SetDefault("app.frontend_url", "http://localhost:3000")
 	v.SetDefault("app.migrations_dir", "./migrations")
+	v.SetDefault("app.trusted_proxies", []string{})
 
 	// DB defaults
 	v.SetDefault("db.max_open_conns", 25)
@@ -274,16 +308,22 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("smtp.password", "your-app-password")
 	v.SetDefault("smtp.from_email", "noreply@yandex.com")
 	v.SetDefault("smtp.tls", true)
+	v.SetDefault("smtp.timeout", "10s")
+
+	// Crypto defaults
+	v.SetDefault("crypto.aes_key", "")
+	v.SetDefault("crypto.hmac_key", "")
 
 	// Auth defaults
-	v.SetDefault("auth.access_token_ttl", "15m")
-	v.SetDefault("auth.refresh_token_ttl", "720h")
-	v.SetDefault("auth.verify_email_token_ttl", "24h")
-	v.SetDefault("auth.reset_password_token_ttl", "1h")
-	v.SetDefault("auth.email_change_token_ttl", "1h")
 	v.SetDefault("auth.bcrypt_cost", 12)
 	v.SetDefault("auth.login_rate_limit", 5)
 	v.SetDefault("auth.require_email_verification", false)
+	v.SetDefault("auth.cookie_secure", false)
+	v.SetDefault("auth.pack_rate_limit", 60)
+	v.SetDefault("auth.forgot_rate_limit", 3)
+	v.SetDefault("auth.reset_rate_limit", 3)
+	v.SetDefault("auth.verify_resend_rate_limit", 3)
+	v.SetDefault("auth.email_confirm_rate_limit", 10)
 
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})
@@ -355,5 +395,22 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("jwt.secret must be at least 32 characters")
 	}
 
+	aes, err := base64.StdEncoding.DecodeString(cfg.Crypto.AESKeyRaw)
+	if err != nil {
+		return fmt.Errorf("crypto.aes_key: invalid base64: %w", err)
+	}
+	if len(aes) != 32 {
+		return fmt.Errorf("crypto.aes_key: must be 32 bytes, got %d", len(aes))
+	}
+	cfg.Crypto.AESKey = aes
+
+	hmacKey, err := base64.StdEncoding.DecodeString(cfg.Crypto.HMACKeyRaw)
+	if err != nil {
+		return fmt.Errorf("crypto.hmac_key: invalid base64: %w", err)
+	}
+	if len(hmacKey) < 32 {
+		return fmt.Errorf("crypto.hmac_key: must be at least 32 bytes, got %d", len(hmacKey))
+	}
+	cfg.Crypto.HMACKey = hmacKey
 	return nil
 }

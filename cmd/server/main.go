@@ -1,10 +1,12 @@
 // Command server runs the HTTP API server.
+
 package main
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -15,19 +17,24 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/lib/pq"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/db"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
+	"github.com/Linka-masterskaya/zip-backend/internal/profile"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 	"github.com/Linka-masterskaya/zip-backend/migrations"
 )
@@ -38,86 +45,130 @@ var (
 )
 
 func main() {
-	cfgPath := os.Getenv("CONFIG_PATH")
-	if cfgPath == "" {
-		cfgPath = "config/config.dev.yml"
-	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		slog.Error("config load failed", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
+	if err := run(); err != nil {
+		slog.Error("application failed", "err", err)
 		os.Exit(1)
 	}
+}
 
-	// Обработка флага --migrate
-	runMigrationsIfNeeded(cfg)
-
-	logger.Init(cfg.App.Env)
-
-	metrics.Initialize()
-
-	// MinIO клиент для healthchecks
-	minioClient, err := storage.New(cfg.MinIO)
+func run() error {
+	deps, err := initInfra()
 	if err != nil {
-		slog.Error("minio connect failed", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
-		os.Exit(1)
+		return err
 	}
-	slog.Info("minio connected", "bucket", cfg.MinIO.Bucket) //nolint:gosec // ошибка на старте приложения.
-
-	nc, publisher, err := initNATS(cfg.NATS)
-	if err != nil {
-		slog.Error("failed to init nats", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
-		os.Exit(1)
-	}
+	defer deps.db.Close()
 	defer func() {
-		if err := nc.Drain(); err != nil {
-			slog.Error("nats drain", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
+		if err := deps.nc.Drain(); err != nil {
+			slog.Error("nats drain", logger.Err(err))
 		}
 	}()
 
-	redisClient, err := cache.NewClient(cfg.Redis)
-	if err != nil {
-		slog.Error("redis initialization failed:", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
-		os.Exit(1)
-	}
-
-	// Postgres. Инициализация
-	dbPool, err := db.New(cfg.DB)
-	if err != nil {
-		slog.Error("postgres initialization failed:", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
-		os.Exit(1)
-	}
-	defer dbPool.Close()
-
-	slog.Info("database connected", "pool_size", cfg.DB.MaxConns) //nolint:gosec // ошибка на старте приложения.
-
-	// Инициализация healthcheck checker
-	checker := &health.Checker{
-		DB:          dbPool, // dbPool должен реализовывать Ping(ctx)
-		RedisClient: redisClient,
-		NatsConn:    nc,
-		MinioClient: minioClient, // должен реализовывать ListBuckets(ctx)
-	}
-
-	packRepo := pack.NewRepository(redisClient)
-	packService := pack.NewService(packRepo, publisher)
+	packRepo := pack.NewRepository(deps.redis)
+	packService := pack.NewService(packRepo, deps.pub)
 	packHandler := pack.NewHandler(packService)
 
+	authRepo := auth.NewAuthRepo(deps.db)
+
+	authCfg := auth.Config{
+		JWTSecret:                deps.cfg.JWT.Secret,
+		FrontendURL:              deps.cfg.App.FrontendURL,
+		AccessTokenTTL:           deps.cfg.Auth.AccessTokenTTL,
+		RefreshTokenTTL:          deps.cfg.Auth.RefreshTokenTTL,
+		VerifyEmailTokenTTL:      deps.cfg.Auth.VerifyEmailTokenTTL,
+		RequireEmailVerification: deps.cfg.Auth.RequireEmailVerification,
+		CookieSecure:             deps.cfg.Auth.CookieSecure,
+	}
+
+	authService := auth.NewAuthService(
+		authRepo,
+		deps.redis,
+		deps.mailer,
+		authCfg,
+		deps.crypto,
+	)
+
+	checker := &health.Checker{
+		DB:          deps.db,
+		RedisClient: deps.redis,
+		NatsConn:    deps.nc,
+		MinioClient: deps.storage,
+	}
+
+	packRateLimit := middleware.RateLimit(deps.redis, "packs_api", int64(deps.cfg.Auth.PackRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	forgotRateLimit := middleware.RateLimit(deps.redis, "forgot", int64(deps.cfg.Auth.ForgotRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	resetRateLimit := middleware.RateLimit(deps.redis, "reset", int64(deps.cfg.Auth.ResetRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	verifyResendRateLimit := middleware.RateLimit(deps.redis, "verify-resend", int64(deps.cfg.Auth.VerifyResendRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	emailConfirmRateLimit := middleware.RateLimit(deps.redis, "email-confirm", int64(deps.cfg.Auth.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+
 	mainMux := http.NewServeMux()
-	mainMux.Handle("POST /api/v1/packs", middleware.ErrorMiddleware(packHandler.CreatePack))
-	mainMux.Handle("GET /api/v1/packs/{id}", middleware.ErrorMiddleware(packHandler.GetPack))
-	mainMux.Handle("GET /api/v1/packs", middleware.ErrorMiddleware(packHandler.ListPacks))
+	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.CreatePack)))
+	mainMux.Handle("GET /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(packHandler.GetPack)))
+	mainMux.Handle("GET /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.ListPacks)))
+
+	authHandler := auth.NewAuthHandler(authService, authCfg)
+
+	mainMux.Handle(
+		"POST /auth/login",
+		loginRateLimit(
+			middleware.ErrorMiddleware(authHandler.Login),
+		),
+	)
+
+	mainMux.Handle(
+		"POST /auth/forgot",
+		forgotRateLimit(
+			middleware.ErrorMiddleware(authHandler.ForgotPassword),
+		),
+	)
+
+	mainMux.Handle(
+		"POST /auth/reset",
+		resetRateLimit(
+			middleware.ErrorMiddleware(authHandler.ResetPassword),
+		),
+	)
+
+	mainMux.Handle(
+		"POST /auth/verify-resend",
+		verifyResendRateLimit(
+			middleware.ErrorMiddleware(authHandler.VerifyResend),
+		),
+	)
+
+	mainMux.Handle(
+		"POST /auth/email-confirm",
+		emailConfirmRateLimit(
+			middleware.ErrorMiddleware(authHandler.EmailConfirm),
+		),
+	)
+
+	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
+	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
+
+	profileRepo := profile.NewRepository(deps.db)
+	profileService := profile.NewService(profileRepo, deps.storage)
+	profileHandler := profile.NewHandler(profileService)
+	mainMux.Handle(
+		"PUT /api/v1/profile/me/avatar",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.UploadAvatar)),
+	)
+	mainMux.Handle(
+		"DELETE /api/v1/profile/me/avatar",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.DeleteAvatar)),
+	)
 
 	wrappedHandler := middleware.Chain(
 		mainMux,
 		middleware.RecoveryMiddleware,
 		middleware.RequestIDMiddleware,
 		middleware.Metrics,
-		middleware.CORSMiddleware(cfg.App.FrontendURL),
+		middleware.CORSMiddleware(deps.cfg.App.FrontendURL),
+		middleware.SecurityHeaders,
 	)
 
 	srv := &http.Server{
-		Addr:         ":" + cfg.App.Port,
+		Addr:         ":" + deps.cfg.App.Port,
 		Handler:      wrappedHandler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -126,7 +177,7 @@ func main() {
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("GET /metrics", metrics.NewHandler())
-	metricsMux.HandleFunc("GET /health", healthHandler(cfg.App.Env))
+	metricsMux.HandleFunc("GET /health", healthHandler(deps.cfg.App.Env))
 	setupHealthEndpoints(metricsMux, checker)
 
 	metricsSrv := &http.Server{
@@ -136,22 +187,21 @@ func main() {
 		WriteTimeout: 5 * time.Second,
 	}
 
-	slog.Info("starting server", //nolint:gosec // ошибка на старте приложения.
+	slog.Info("starting server",
 		"addr", srv.Addr,
-		"env", cfg.App.Env,
+		"env", deps.cfg.App.Env,
 		"version", version,
 		"buildTime", buildTime,
 	)
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("main server error", logger.Err(err))
 			os.Exit(1)
 		}
 	}()
 
 	go func() {
-		slog.Info("starting metrics and health server", "addr", metricsSrv.Addr)
 		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("metrics server error", logger.Err(err))
 		}
@@ -168,15 +218,81 @@ func main() {
 	if err := metricsSrv.Shutdown(ctx); err != nil {
 		slog.Error("metrics server shutdown error", "err", err)
 	}
-
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", logger.Err(err))
 	}
-
-	// Redis. Закрываем соединение
-	if err := redisClient.Close(); err != nil {
-		slog.Error("redis close error", logger.Err(err)) //nolint:gosec // ошибка на останове приложения.
+	if err := deps.redis.Close(); err != nil {
+		slog.Error("redis close error", logger.Err(err))
 	}
+
+	return nil
+}
+
+type infra struct {
+	cfg     *config.Config
+	db      *pgxpool.Pool
+	redis   *cache.Client
+	nc      *nats.Conn
+	pub     *broker.Publisher
+	crypto  *cryptox.Cryptox
+	mailer  *mailer.SMTPSender
+	storage *storage.Client
+}
+
+func initInfra() (*infra, error) {
+	cfgPath := os.Getenv("CONFIG_PATH")
+	if cfgPath == "" {
+		cfgPath = "config/config.dev.yml"
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("config load: %w", err)
+	}
+
+	runMigrationsIfNeeded(cfg)
+	logger.Init(cfg.App.Env)
+	metrics.Initialize()
+
+	storageClient, err := storage.New(cfg.MinIO)
+	if err != nil {
+		return nil, fmt.Errorf("minio connect: %w", err)
+	}
+
+	nc, pub, err := initNATS(cfg.NATS)
+	if err != nil {
+		return nil, fmt.Errorf("nats init: %w", err)
+	}
+
+	redisClient, err := cache.NewClient(cache.Config{
+		URL:        cfg.Redis.URL,
+		ClientName: cfg.Redis.ClientName,
+		PoolSize:   cfg.Redis.PoolSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("redis init: %w", err)
+	}
+
+	dbPool, err := db.New(cfg.DB)
+	if err != nil {
+		return nil, fmt.Errorf("postgres init: %w", err)
+	}
+
+	cryptoClient, err := cryptox.New(cfg.Crypto.AESKey, cfg.Crypto.HMACKey)
+	if err != nil {
+		return nil, fmt.Errorf("cryptox init: %w", err)
+	}
+
+	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.PublicURL)
+	if err != nil {
+		return nil, fmt.Errorf("smtp init: %w", err)
+	}
+
+	return &infra{
+		cfg: cfg, db: dbPool, redis: redisClient,
+		nc: nc, pub: pub, crypto: cryptoClient, mailer: smtpSender,
+		storage: storageClient,
+	}, nil
 }
 
 func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
@@ -222,12 +338,12 @@ func runMigrationsIfNeeded(cfg *config.Config) {
 	// Подключаемся к БД только для миграций
 	dbConn, err := sql.Open("postgres", cfg.DB.URL)
 	if err != nil {
-		slog.Error("failed to connect to postgres for migration", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
+		slog.Error("failed to connect to postgres for migration", logger.Err(err))
 		os.Exit(1)
 	}
 	defer func() {
 		if err := dbConn.Close(); err != nil {
-			slog.Error("failed to close db connection after migration", logger.Err(err)) //nolint:gosec // ошибка на старте приложения.
+			slog.Error("failed to close db connection after migration", logger.Err(err))
 		}
 	}()
 
