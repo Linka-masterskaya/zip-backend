@@ -138,12 +138,16 @@ func isNilDependency(dependency any) bool {
 	}
 
 	value := reflect.ValueOf(dependency)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
+	kind := value.Kind()
+
+	nilable := kind == reflect.Chan ||
+		kind == reflect.Func ||
+		kind == reflect.Interface ||
+		kind == reflect.Map ||
+		kind == reflect.Ptr ||
+		kind == reflect.Slice
+
+	return nilable && value.IsNil()
 }
 
 func runCheck(ctx context.Context, check func(context.Context) error) (err error) {
