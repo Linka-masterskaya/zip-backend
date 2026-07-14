@@ -5,16 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
-	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
-	"github.com/google/uuid"
 )
 
 // Avatar constants.
@@ -32,6 +33,7 @@ type Handler struct {
 // ProfService defines all profile operations available through the HTTP handler.
 type ProfService interface {
 	GetProfile(ctx context.Context, userID uuid.UUID) (*Response, error)
+	UpdateDisplayName(ctx context.Context, userID uuid.UUID, displayName string) (*Response, error)
 	ReplaceAvatar(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error)
 	DeleteAvatar(ctx context.Context, userID string) error
 
@@ -46,6 +48,10 @@ func NewHandler(service ProfService) *Handler {
 
 type avatarResponse struct {
 	AvatarURL string `json:"avatar_url"`
+}
+
+type updateProfileRequest struct {
+	DisplayName *string `json:"display_name"`
 }
 
 // GetProfile takes userID from the context and passes it to the service.
@@ -76,11 +82,56 @@ func (h *Handler) GetProfile(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// UpdateProfile handles PATCH /profile/me.
+func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) error {
+	userID, err := authctx.UserIDFromCtx(r.Context())
+	if err != nil {
+		return err
+	}
+
+	req, err := decodeUpdateProfileRequest(r)
+	if err != nil {
+		return err
+	}
+
+	profile, err := h.service.UpdateDisplayName(r.Context(), userID, *req.DisplayName)
+	if err != nil {
+		return err
+	}
+
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(profile); err != nil {
+		return fmt.Errorf("encode update profile response: %w", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := body.WriteTo(w); err != nil {
+		slog.Error("write update profile response", logger.Err(err))
+	}
+
+	return nil
+}
+
+func decodeUpdateProfileRequest(r *http.Request) (updateProfileRequest, error) {
+	var req updateProfileRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return updateProfileRequest{}, apperr.ErrBadRequest
+	}
+	if req.DisplayName == nil {
+		return updateProfileRequest{}, apperr.ErrBadRequest.WithMessage("display_name is required")
+	}
+	return req, nil
+}
+
 // UploadAvatar handles PUT /profile/me/avatar.
 func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
-	userID, ok := reqctx.GetUserID(r.Context())
-	if !ok {
-		return apperr.ErrUnauthorized
+	userID, err := authctx.UserIDFromCtx(r.Context())
+	if err != nil {
+		return err
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxAvatarBodyBytes)
@@ -117,7 +168,7 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
 
 	avatarURL, err := h.service.ReplaceAvatar(
 		r.Context(),
-		userID,
+		userID.String(),
 		bytes.NewReader(data),
 		int64(len(data)),
 		mimeType,
@@ -137,12 +188,12 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
 
 // DeleteAvatar handles DELETE /profile/me/avatar.
 func (h *Handler) DeleteAvatar(w http.ResponseWriter, r *http.Request) error {
-	userID, ok := reqctx.GetUserID(r.Context())
-	if !ok {
-		return apperr.ErrUnauthorized
+	userID, err := authctx.UserIDFromCtx(r.Context())
+	if err != nil {
+		return err
 	}
 
-	if err := h.service.DeleteAvatar(r.Context(), userID); err != nil {
+	if err := h.service.DeleteAvatar(r.Context(), userID.String()); err != nil {
 		return err
 	}
 

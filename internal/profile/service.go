@@ -11,8 +11,10 @@ import (
 	"io"
 	"log/slog"
 	"net/mail"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -23,7 +25,12 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
 
-const avatarURLTTL = 15 * time.Minute
+const (
+	avatarURLTTL        = 15 * time.Minute
+	maxDisplayNameRunes = 100
+)
+
+var displayNamePattern = regexp.MustCompile(`^[\p{L} ]+$`)
 
 // CryptoService defines interface for encryption operations.
 type CryptoService interface {
@@ -43,6 +50,7 @@ type ObjectStorage interface {
 // RepoInterface defines all repository methods needed by the service.
 type RepoInterface interface {
 	GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error)
+	UpdateDisplayName(ctx context.Context, userID uuid.UUID, displayName string) error
 	AvatarState(ctx context.Context, userID string) (AvatarState, error)
 	ReplaceAvatar(ctx context.Context, userID, expectedOldKey, newKey string, oldSize, storageDelta int64) (AvatarChange, error)
 	ClearAvatar(ctx context.Context, userID, expectedOldKey string, oldSize int64) (AvatarChange, error)
@@ -156,6 +164,35 @@ func (s *Service) GetProfile(ctx context.Context, userID uuid.UUID) (*Response, 
 		}
 	}
 	return resp, nil
+}
+
+// UpdateDisplayName updates the user's display name and returns the full profile.
+func (s *Service) UpdateDisplayName(ctx context.Context, userID uuid.UUID, displayName string) (*Response, error) {
+	displayName = normalizeDisplayName(displayName)
+	if err := validateDisplayName(displayName); err != nil {
+		return nil, err
+	}
+	if err := s.repo.UpdateDisplayName(ctx, userID, displayName); err != nil {
+		return nil, profileError(err)
+	}
+	return s.GetProfile(ctx, userID)
+}
+
+func normalizeDisplayName(displayName string) string {
+	return strings.Trim(displayName, " ")
+}
+
+func validateDisplayName(displayName string) error {
+	if displayName == "" {
+		return apperr.ErrBadRequest.WithMessage("display_name must not be empty")
+	}
+	if utf8.RuneCountInString(displayName) > maxDisplayNameRunes {
+		return apperr.ErrBadRequest.WithMessage("display_name must not exceed 100 characters")
+	}
+	if !displayNamePattern.MatchString(displayName) {
+		return apperr.ErrBadRequest.WithMessage("display_name must contain only letters and spaces")
+	}
+	return nil
 }
 
 // encryptEmail encrypts email using crypto service.

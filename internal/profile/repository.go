@@ -88,6 +88,24 @@ func (r *Repository) GetUserProfile(ctx context.Context, userID uuid.UUID) (*Use
 	return &profile, nil
 }
 
+// UpdateDisplayName updates the user's display name.
+func (r *Repository) UpdateDisplayName(ctx context.Context, userID uuid.UUID, displayName string) error {
+	commandTag, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET display_name = $2,
+			updated_at = now()
+		WHERE id = $1
+			AND deleted_at IS NULL
+	`, userID, displayName)
+	if err != nil {
+		return fmt.Errorf("update user display name: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // AvatarState retrieves avatar state for a user.
 func (r *Repository) AvatarState(ctx context.Context, userID string) (AvatarState, error) {
 	var state AvatarState

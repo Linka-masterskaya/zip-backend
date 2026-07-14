@@ -21,6 +21,7 @@ import (
 // mockService implements the ProfileService interface for testing.
 type mockService struct {
 	getProfileFn         func(ctx context.Context, userID uuid.UUID) (*Response, error)
+	updateDisplayNameFn  func(ctx context.Context, userID uuid.UUID, displayName string) (*Response, error)
 	replaceAvatarFn      func(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error)
 	deleteAvatarFn       func(ctx context.Context, userID string) error
 	requestEmailChangeFn func(ctx context.Context, userID uuid.UUID, newEmail string) error
@@ -30,6 +31,13 @@ type mockService struct {
 func (m *mockService) GetProfile(ctx context.Context, userID uuid.UUID) (*Response, error) {
 	if m.getProfileFn != nil {
 		return m.getProfileFn(ctx, userID)
+	}
+	return nil, apperr.ErrInternal
+}
+
+func (m *mockService) UpdateDisplayName(ctx context.Context, userID uuid.UUID, displayName string) (*Response, error) {
+	if m.updateDisplayNameFn != nil {
+		return m.updateDisplayNameFn(ctx, userID, displayName)
 	}
 	return nil, apperr.ErrInternal
 }
