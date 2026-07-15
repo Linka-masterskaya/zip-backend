@@ -50,6 +50,9 @@ migrate:
 migrate-down:
 	goose -dir migrations postgres "$(DB_URL)" down
 
+migrate-reset:
+	goose -dir migrations postgres "$(DB_URL)" down-to 0
+
 migration-generate:
 	@if [ -z "$(NAME)" ]; then \
 		echo "Error: specify the migration name"; \
