@@ -358,31 +358,27 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 	emailHash := au.crp.Hash([]byte(email))
 
 	exists, err := au.repo.EmailExists(ctx, emailHash)
-
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authService.Register: check email exists: %w", err)
 	}
 
 	if exists {
-		return nil, ErrEmailAlreadyExists
+		return nil, apperr.ErrConflict.WithMessage("email already exists")
 	}
 
 	emailEncrypted, err := au.crp.Encrypt([]byte(email))
-
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authService.Register: encrypt email: %w", err)
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
-
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authService.Register: hash password: %w", err)
 	}
 
 	tx, err := au.repo.beginTx(ctx)
-
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authService.Register: begin tx: %w", err)
 	}
 
 	defer func() {
@@ -396,18 +392,14 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 	// TODO: organization.name is not null. Пока в имя организации будет подставляться default value.
 	orgParams := CreateOrganizationParams{ID: uuid.New(), Name: "Personal organization"}
 
-	err = txRepo.CreateOrganization(ctx, orgParams)
-
-	if err != nil {
-		return nil, err
+	if err := txRepo.CreateOrganization(ctx, orgParams); err != nil {
+		return nil, fmt.Errorf("authService.Register: create organization: %w", err)
 	}
 
 	userParams := CreateUserParams{ID: uuid.New(), OrganizationID: orgParams.ID}
 
-	err = txRepo.CreateUser(ctx, userParams)
-
-	if err != nil {
-		return nil, err
+	if err := txRepo.CreateUser(ctx, userParams); err != nil {
+		return nil, fmt.Errorf("authService.Register: create user: %w", err)
 	}
 
 	credParams := CreateAuthCredParams{
@@ -418,22 +410,17 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 		Role:           RoleDefectologist,
 	}
 
-	err = txRepo.CreateAuthCred(ctx, credParams)
-
-	if err != nil {
-		if IsViolationUniqueness(err) {
-			return nil, ErrEmailAlreadyExists
-		}
-		return nil, err
+	if err := txRepo.CreateAuthCred(ctx, credParams); err != nil {
+		return nil, fmt.Errorf("authService.Register: create auth cred: %w", err)
 	}
 
 	verifyTokenString, err := au.createEmailVerifyToken(ctx, txRepo, userParams.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authService.Register: create verify token: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authService.Register: commit tx: %w", err)
 	}
 
 	mailTemplate := domain.EmailData{Token: verifyTokenString, Email: email}

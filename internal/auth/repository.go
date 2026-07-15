@@ -258,6 +258,14 @@ func (r *authRepo) getUserContactForResend(
 
 // /auth/register repository.
 
+func isEmailHashUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23505" &&
+		pgErr.ConstraintName == "auth_cred_email_hash_uniq"
+}
+
 func (r *authRepo) EmailExists(ctx context.Context, emailHash []byte) (bool, error) {
 	var exists bool
 
@@ -329,7 +337,15 @@ $5)`
 		params.Role,
 	)
 
-	return err
+	if err != nil {
+		if isEmailHashUniqueViolation(err) {
+			return apperr.ErrConflict.WithMessage("email already exists")
+		}
+
+		return fmt.Errorf("authRepo.CreateAuthCred: %w", err)
+	}
+	return nil
+
 }
 
 func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error {

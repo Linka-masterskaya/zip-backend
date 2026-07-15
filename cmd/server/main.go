@@ -108,7 +108,7 @@ func run() error {
 	)
 
 	mainMux.Handle(
-		"POST /auth/register",
+		"POST /api/v1/auth/register",
 		loginRateLimit(
 			middleware.ErrorMiddleware(authHandler.Register),
 		),

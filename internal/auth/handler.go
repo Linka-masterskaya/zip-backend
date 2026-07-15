@@ -215,11 +215,7 @@ func (h *authHandlers) Register(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	resp, err := h.svc.Register(r.Context(), req)
-
-	switch {
-	case errors.Is(err, ErrEmailAlreadyExists):
-		return apperr.ErrConflict.WithMessage("email already exists")
-	case err != nil:
+	if err != nil {
 		return err
 	}
 
