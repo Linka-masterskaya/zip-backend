@@ -12,7 +12,7 @@ var ErrPasswordTooLong = errors.New("password length is more than 72 bytes")
 var ErrOverlap = errors.New("the new password does not match the duplicate one")
 var ErrOldPassword = errors.New("incorrect old password")
 
-// SessionRevoker revokes all of a user's active sessions
+// SessionRevoker revokes all of a user's active sessions.
 type SessionRevoker interface {
 	RevokeAllSessions(ctx context.Context, userID string) error
 }

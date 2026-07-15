@@ -2,6 +2,7 @@ package profile
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,7 @@ func newChangePasswordRequest(t *testing.T, body ChangePasswordReq, userID strin
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/profile/change-password", bytes.NewReader(raw))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/profile/change-password", bytes.NewReader(raw))
 	if userID != "" {
 		req = req.WithContext(reqctx.PutUserID(req.Context(), userID))
 	}
@@ -53,7 +54,7 @@ func TestHandlerChangePassword_Success(t *testing.T) {
 func TestHandlerChangePassword_InvalidJSON(t *testing.T) {
 	handler := NewUserHandler(NewUserService(&fakeUserRepo{}, &fakeSessionRevoker{}))
 
-	req := httptest.NewRequest(http.MethodPost, "/profile/change-password", strings.NewReader("{invalid json"))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/profile/change-password", strings.NewReader("{invalid json"))
 	req = req.WithContext(reqctx.PutUserID(req.Context(), "user-1"))
 	w := httptest.NewRecorder()
 
