@@ -278,7 +278,7 @@ func TestMigrationsDownUpCycle(t *testing.T) {
 	require.NoError(t, err, "goose down-to 0 should succeed")
 
 	var count int
-	err = migrationsDB.QueryRow(`
+	err = migrationsDB.QueryRowContext(ctx, `
 		SELECT count(*) FROM information_schema.tables
 		WHERE table_schema = 'public' AND table_name != 'goose_db_version'
 	`).Scan(&count)
