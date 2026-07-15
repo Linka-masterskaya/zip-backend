@@ -70,10 +70,6 @@ jwt:
   access_ttl: "15m"
   refresh_ttl: "720h"
 
-crypto:
-  aes_key: "01234567890123456789012345678901"
-  hmac_key: "abcdefghijklmnopqrstuvwxyz123456"
-
 yandex:
   client_id: ''
   client_secret: ''
