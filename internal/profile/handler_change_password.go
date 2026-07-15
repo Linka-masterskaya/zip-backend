@@ -23,11 +23,7 @@ func NewUserHandler(svc *UserService) *UserHandler {
 	return &UserHandler{userService: svc}
 }
 
-// HandlerChangePassword follows the project's AppHandler convention
-// (see middleware.ErrorMiddleware): it returns an error instead of writing
-// one directly, so responses stay consistent JSON envelopes and 5xx errors
-// get logged centrally.
-func (h *UserHandler) HandlerChangePassword(w http.ResponseWriter, r *http.Request) error {
+func (h *UserHandler) ChangePassword(w http.ResponseWriter, r *http.Request) error {
 	var req ChangePasswordReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest.WithMessage("invalid JSON format")
@@ -50,12 +46,10 @@ func (h *UserHandler) HandlerChangePassword(w http.ResponseWriter, r *http.Reque
 	err := h.userService.ChangePassword(r.Context(), userID, req.NewPassword, req.CurrentPassword, req.RepeatPassword)
 	switch {
 	case err == nil:
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusNoContent)
 		return nil
-	case errors.Is(err, ErrPasswordLen), errors.Is(err, ErrPasswordTooLong), errors.Is(err, ErrOverlap):
+	case errors.Is(err, ErrPasswordLen), errors.Is(err, ErrPasswordTooLong), errors.Is(err, ErrOverlap), errors.Is(err, ErrOldPassword):
 		return apperr.ErrBadRequest.WithMessage(err.Error())
-	case errors.Is(err, ErrOldPassword):
-		return apperr.ErrUnauthorized.WithMessage(err.Error())
 	case errors.Is(err, sql.ErrNoRows):
 		return apperr.ErrNotFound.WithMessage("user not found")
 	default:

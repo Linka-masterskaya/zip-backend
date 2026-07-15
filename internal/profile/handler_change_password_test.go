@@ -27,10 +27,8 @@ func newChangePasswordRequest(t *testing.T, body ChangePasswordReq, userID strin
 	return req
 }
 
-// serve runs the handler through middleware.ErrorMiddleware, mirroring how
-// it's wired in production, so tests see the same JSON error responses.
 func serve(h *UserHandler, w http.ResponseWriter, r *http.Request) {
-	middleware.ErrorMiddleware(h.HandlerChangePassword).ServeHTTP(w, r)
+	middleware.ErrorMiddleware(h.ChangePassword).ServeHTTP(w, r)
 }
 
 func TestHandlerChangePassword_Success(t *testing.T) {
@@ -47,7 +45,7 @@ func TestHandlerChangePassword_Success(t *testing.T) {
 
 	serve(handler, w, req)
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusNoContent, w.Code)
 	require.Equal(t, "user-1", repo.updatedID)
 	require.True(t, sessions.revokeCalled)
 }
@@ -162,7 +160,7 @@ func TestHandlerChangePassword_WrongOldPassword(t *testing.T) {
 
 	serve(handler, w, req)
 
-	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Equal(t, http.StatusBadRequest, w.Code)
 	require.False(t, sessions.revokeCalled)
 }
 

@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func setupDBTestUserRepo(t *testing.T, ctx context.Context) *sql.DB {
+func setupDBTestUserRepo(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 	req := testcontainers.ContainerRequest{
 		Image:        "postgres:15",
@@ -51,35 +51,43 @@ func setupDBTestUserRepo(t *testing.T, ctx context.Context) *sql.DB {
 		port.Port(),
 	)
 
-	db, err := sql.Open("postgres", dsn)
+	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(pool.Close)
 
 	require.Eventually(t, func() bool {
-		return db.Ping() == nil
+		return pool.Ping(ctx) == nil
 	}, 10*time.Second, 500*time.Millisecond)
 
-	_, err = db.Exec(`
+	_, err = pool.Exec(ctx, `
 	CREATE TABLE users (
-	id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email           TEXT UNIQUE NOT NULL,
-    password_hash   TEXT
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		email TEXT UNIQUE NOT NULL
+	);
+	CREATE TABLE auth_cred (
+		user_id       UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		password_hash TEXT,
+		updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 	);
 	`)
 	require.NoError(t, err)
 
-	return db
+	return pool
 }
 
-// insertTestUser inserts a user row directly via SQL and returns its id.
-func insertTestUser(t *testing.T, db *sql.DB, email, passwordHash string) string {
+// insertTestUser inserts a user and its auth_cred row directly via SQL and
+// returns the user id.
+func insertTestUser(t *testing.T, pool *pgxpool.Pool, email, passwordHash string) string {
 	t.Helper()
+	ctx := context.Background()
+
 	var id string
-	err := db.QueryRow(
-		`INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id`,
-		email, passwordHash,
-	).Scan(&id)
+	err := pool.QueryRow(ctx, `INSERT INTO users (email) VALUES ($1) RETURNING id`, email).Scan(&id)
 	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `INSERT INTO auth_cred (user_id, password_hash) VALUES ($1, $2)`, id, passwordHash)
+	require.NoError(t, err)
+
 	return id
 }
 
@@ -116,17 +124,15 @@ func TestUserRepo_Update_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	var storedHash string
-	require.NoError(t, db.QueryRow(`SELECT password_hash FROM users WHERE id=$1`, id).Scan(&storedHash))
+	require.NoError(t, db.QueryRow(context.Background(), `SELECT password_hash FROM auth_cred WHERE user_id=$1`, id).Scan(&storedHash))
 	require.Equal(t, "new-hash", storedHash)
 }
 
-func TestUserRepo_Update_UnknownID_NoError(t *testing.T) {
+func TestUserRepo_Update_UnknownID_NoRows(t *testing.T) {
 	db := setupDBTestUserRepo(t, context.Background())
 	repo := NewUserRepo(db)
 
-	// Update issues an UPDATE without checking rows affected, so an unknown
-	// id is a silent no-op rather than an error.
 	err := repo.Update(context.Background(), "00000000-0000-0000-0000-000000000000", "new-hash")
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 }
