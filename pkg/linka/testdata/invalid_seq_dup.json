@@ -1,0 +1,18 @@
+{
+	"metadata": { "version": "2.0" },
+	"settings": { "columns": 1, "rows": 4 },
+	"blocks": [
+		{
+			"id": "b1",
+			"type": "sequence",
+			"elements": [
+				{ "id": "e1", "kind": "text" },
+				{ "id": "e2", "kind": "text" }
+			],
+			"sequence": [
+				{ "element_id": "e1", "order": 1 },
+				{ "element_id": "e2", "order": 1 }
+			]
+		}
+	]
+}

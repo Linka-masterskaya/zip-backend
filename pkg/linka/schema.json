@@ -1,0 +1,61 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "Linka Config 2.0",
+	"type": "object",
+	"required": ["metadata", "settings", "blocks"],
+	"properties": {
+		"metadata": {
+			"type": "object",
+			"required": ["version"],
+			"properties": {
+				"version": { "type": "string" },
+				"title": { "type": "string" }
+			}
+		},
+		"settings": {
+			"type": "object",
+			"required": ["columns", "rows"],
+			"properties": {
+				"columns": { "type": "integer", "minimum": 1, "maximum": 100 },
+				"rows": { "type": "integer", "minimum": 1, "maximum": 100 }
+			}
+		},
+		"blocks": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": ["id", "type", "elements"],
+				"properties": {
+					"id": { "type": "string", "minLength": 1 },
+					"type": {
+						"type": "string",
+						"enum": [
+							"grid",
+							"single_choice",
+							"multi_choice",
+							"matching",
+							"categories",
+							"sequence"
+						]
+					},
+					"elements": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"required": ["id", "kind"],
+							"properties": {
+								"id": { "type": "string", "minLength": 1 },
+								"kind": {
+									"type": "string",
+									"enum": ["text", "image", "audio"]
+								},
+								"value": { "type": "string" },
+								"media_url": { "type": "string", "format": "uri-reference" }
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

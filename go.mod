@@ -22,7 +22,10 @@ require (
 	golang.org/x/crypto v0.53.0
 )
 
-require github.com/lib/pq v1.12.3
+require (
+	github.com/lib/pq v1.12.3
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+)
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
