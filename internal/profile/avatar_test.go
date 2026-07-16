@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
@@ -24,7 +26,7 @@ import (
 func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	handler := NewHandler(NewService(repo, store))
+	handler := NewHandler(NewService(repo, store, nil))
 
 	rec := performAvatarUpload(t, handler, pngAvatarBytes(128), "avatar.txt")
 	if rec.Code != http.StatusOK {
@@ -55,7 +57,7 @@ func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 func TestUploadAvatar_NonImageReturns400(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	handler := NewHandler(NewService(repo, store))
+	handler := NewHandler(NewService(repo, store, nil))
 
 	rec := performAvatarUpload(t, handler, []byte("not an image"), "avatar.png")
 	if rec.Code != http.StatusBadRequest {
@@ -69,7 +71,7 @@ func TestUploadAvatar_NonImageReturns400(t *testing.T) {
 func TestUploadAvatar_FileOver2MBReturns413(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	handler := NewHandler(NewService(repo, store))
+	handler := NewHandler(NewService(repo, store, nil))
 
 	oversized := bytes.Repeat([]byte{'x'}, int(MaxAvatarSizeBytes)+1)
 	rec := performAvatarUpload(t, handler, oversized, "avatar.png")
@@ -103,7 +105,7 @@ func TestReplaceAvatar_QuotaExceededSkipsPutObject(t *testing.T) {
 	repo.storageQuota = 110
 	newData := pngAvatarBytes(16)
 
-	service := NewService(repo, store)
+	service := NewService(repo, store, nil)
 	_, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err == nil {
 		t.Fatal("expected quota exceeded error")
@@ -138,7 +140,7 @@ func TestReplaceAvatar_DeletesOldObjectUpdatesUsageAndPresignsBeforeDB(t *testin
 		}
 	}
 
-	service := NewService(repo, store)
+	service := NewService(repo, store, nil)
 	url, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err != nil {
 		t.Fatalf("replace avatar: %v", err)
@@ -171,7 +173,7 @@ func TestReplaceAvatar_ReturnsCurrentURLWhenConcurrentRequestWins(t *testing.T) 
 	repo.currentAfterReplace = currentKey
 
 	newData := pngAvatarBytes(16)
-	service := NewService(repo, store)
+	service := NewService(repo, store, nil)
 	url, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err != nil {
 		t.Fatalf("replace avatar: %v", err)
@@ -192,7 +194,7 @@ func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 	repo.avatarKey = oldKey
 	repo.storageUsed = int64(len(oldData))
 
-	service := NewService(repo, store)
+	service := NewService(repo, store, nil)
 	if err := service.DeleteAvatar(ctx, "user-1"); err != nil {
 		t.Fatalf("delete avatar: %v", err)
 	}
@@ -445,4 +447,8 @@ func (r *fakeAvatarRepo) addStorageUsage(delta int64) {
 	if r.storageUsed < 0 {
 		r.storageUsed = 0
 	}
+}
+
+func (f *fakeAvatarRepo) GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error) {
+	return nil, nil
 }

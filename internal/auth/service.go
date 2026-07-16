@@ -20,8 +20,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var ErrInvalidCredentials = errors.New("invalid credentials")
-var ErrEmailNotVerified = errors.New("email not verified")
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrEmailNotVerified   = errors.New("email not verified")
+)
 
 var dummyPasswordHash = []byte("$2a$10$UlCQgLZoLjUzrtYRUUlkPeh/m5L2pl9aYzDTUaZAD3R4Pd8ONSof6")
 

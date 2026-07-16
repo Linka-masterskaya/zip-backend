@@ -145,8 +145,12 @@ func run() error {
 	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
 
 	profileRepo := profile.NewRepository(deps.db)
-	profileService := profile.NewService(profileRepo, deps.storage)
+	profileService := profile.NewService(profileRepo, deps.storage, deps.crypto)
 	profileHandler := profile.NewHandler(profileService)
+	mainMux.Handle(
+		"GET /api/v1/profile/me",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.GetProfile)),
+	)
 	mainMux.Handle(
 		"PUT /api/v1/profile/me/avatar",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.UploadAvatar)),

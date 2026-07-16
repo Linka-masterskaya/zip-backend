@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
+	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
 
@@ -36,13 +38,76 @@ type AvatarRepository interface {
 
 // Service contains avatar business logic.
 type Service struct {
-	repo    AvatarRepository
+	repo    ProfileRepository
 	storage ObjectStorage
+	crypto  *cryptox.Cryptox // Added a dependency for email decryption.
+}
+
+type ProfileResponse struct {
+	ID            string    `json:"id"`
+	Email         string    `json:"email"`
+	DisplayName   *string   `json:"display_name"`
+	AvatarURL     *string   `json:"avatar_url"`
+	Role          string    `json:"role"`
+	EmailVerified bool      `json:"email_verified"`
+	OrgID         *string   `json:"org_id"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type ProfileRepository interface {
+	AvatarRepository
+	GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error)
 }
 
 // NewService creates profile service.
-func NewService(repo AvatarRepository, storageClient ObjectStorage) *Service {
-	return &Service{repo: repo, storage: storageClient}
+// NewService has been updated to accept crypto.
+func NewService(repo ProfileRepository, storageClient ObjectStorage, crypto *cryptox.Cryptox) *Service {
+	return &Service{repo: repo, storage: storageClient, crypto: crypto}
+}
+
+// GetProfile retrieves the full user profile.
+func (s *Service) GetProfile(ctx context.Context, userID uuid.UUID) (*ProfileResponse, error) {
+	// 1. get raw data
+	user, err := s.repo.GetUserProfile(ctx, userID)
+	if err != nil {
+		return nil, profileError(err)
+	}
+
+	// 2. decrypt email
+	plainEmailBytes, err := s.crypto.Decrypt(user.EncryptedEmail)
+	if err != nil {
+		slog.Error("failed to decrypt user email", "user_id", userID, logger.Err(err))
+		return nil, apperr.ErrInternal.WithMessage("failed to process user data")
+	}
+
+	// 3. build a base response
+	resp := &ProfileResponse{
+		ID:            user.ID.String(),
+		Email:         string(plainEmailBytes),
+		Role:          user.Role,
+		EmailVerified: user.EmailVerified,
+		CreatedAt:     user.CreatedAt,
+	}
+
+	// 4. extract nullable fields
+	if user.DisplayName.Valid {
+		resp.DisplayName = &user.DisplayName.String
+	}
+	if user.OrgID.Valid {
+		resp.OrgID = &user.OrgID.String
+	}
+
+	// 5. generate a presigned URL only if the avatar exists
+	if user.AvatarKey.Valid && user.AvatarKey.String != "" {
+		avatarURL, err := s.storage.PresignedURL(ctx, user.AvatarKey.String, avatarURLTTL)
+		if err != nil {
+			slog.Warn("failed to generate presigned url for avatar", "key", user.AvatarKey.String, logger.Err(err))
+			resp.AvatarURL = nil
+		} else {
+			resp.AvatarURL = &avatarURL
+		}
+	}
+	return resp, nil
 }
 
 // ReplaceAvatar uploads a new avatar, persists its key and removes the old object.

@@ -2,6 +2,7 @@ package profile
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,7 +10,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
 )
 
@@ -20,15 +25,49 @@ const (
 )
 
 type Handler struct {
-	service *Service
+	service ProfileService
 }
 
-func NewHandler(service *Service) *Handler {
+type ProfileService interface {
+	GetProfile(ctx context.Context, userID uuid.UUID) (*ProfileResponse, error)
+	ReplaceAvatar(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error)
+	DeleteAvatar(ctx context.Context, userID string) error
+}
+
+func NewHandler(service ProfileService) *Handler {
 	return &Handler{service: service}
 }
 
 type avatarResponse struct {
 	AvatarURL string `json:"avatar_url"`
+}
+
+// GetProfile takes userID from the context and passes it to the service.
+func (h *Handler) GetProfile(w http.ResponseWriter, r *http.Request) error {
+	userID, err := authctx.UserIDFromCtx(r.Context())
+	if err != nil {
+		return err
+	}
+
+	profile, err := h.service.GetProfile(r.Context(), userID)
+	if err != nil {
+		return err
+	}
+
+	body, err := json.Marshal(profile)
+	if err != nil {
+		slog.Error("marshal profile response failed", logger.Err(err))
+		return apperr.ErrInternal
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := w.Write(body); err != nil {
+		slog.Error("write profile response failed", logger.Err(err))
+	}
+
+	return nil
 }
 
 func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
