@@ -19,6 +19,12 @@ type fakeCache struct {
 	ttl time.Duration
 
 	err error
+
+	getRec *cache.RefreshRecord
+	getErr error
+
+	revokedFID string
+	revokeErr  error
 }
 
 func (f *fakeCache) StoreRefresh(
@@ -33,6 +39,16 @@ func (f *fakeCache) StoreRefresh(
 	f.ttl = ttl
 
 	return f.err
+}
+
+func (f *fakeCache) GetRefresh(_ context.Context, jti string) (*cache.RefreshRecord, error) {
+	f.jti = jti
+	return f.getRec, f.getErr
+}
+
+func (f *fakeCache) RevokeFamily(_ context.Context, fid string) error {
+	f.revokedFID = fid
+	return f.revokeErr
 }
 
 type fakeCrypto struct {
@@ -251,6 +267,62 @@ func TestAuthService_Login_EmailNotVerified(t *testing.T) {
 	}
 	if cacheStore.called {
 		t.Fatal("refresh token should not be stored")
+	}
+}
+
+func TestAuthService_Logout_RevokesFamily(t *testing.T) {
+	svc := NewAuthService(nil, &fakeCache{}, nil, testAuthConfig(), nil)
+
+	token, err := svc.generateRefreshToken(&User{ID: "user-id"}, "jti-1")
+	if err != nil {
+		t.Fatalf("generate refresh token: %v", err)
+	}
+
+	cacheStore := &fakeCache{getRec: &cache.RefreshRecord{FID: "fam-1", Status: "active"}}
+	svc = NewAuthService(nil, cacheStore, nil, testAuthConfig(), nil)
+
+	if err := svc.Logout(context.Background(), token); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	if cacheStore.jti != "jti-1" {
+		t.Errorf("looked up jti = %q, want jti-1", cacheStore.jti)
+	}
+	if cacheStore.revokedFID != "fam-1" {
+		t.Errorf("revoked fid = %q, want fam-1", cacheStore.revokedFID)
+	}
+}
+
+func TestAuthService_Logout_Idempotent(t *testing.T) {
+	svc := NewAuthService(nil, &fakeCache{}, nil, testAuthConfig(), nil)
+	token, err := svc.generateRefreshToken(&User{ID: "user-id"}, "jti-1")
+	if err != nil {
+		t.Fatalf("generate refresh token: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		token string
+		cache *fakeCache
+	}{
+		{name: "empty token", token: "", cache: &fakeCache{}},
+		{name: "malformed token", token: "not-a-jwt", cache: &fakeCache{}},
+		{
+			name:  "unknown jti",
+			token: token,
+			cache: &fakeCache{getErr: cache.ErrNotFound},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := NewAuthService(nil, tt.cache, nil, testAuthConfig(), nil)
+			if err := svc.Logout(context.Background(), tt.token); err != nil {
+				t.Fatalf("logout: %v", err)
+			}
+			if tt.cache.revokedFID != "" {
+				t.Errorf("unexpected revoke of fid %q", tt.cache.revokedFID)
+			}
+		})
 	}
 }
 

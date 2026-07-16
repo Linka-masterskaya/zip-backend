@@ -191,3 +191,65 @@ func TestResendEmail(t *testing.T) {
 		})
 	}
 }
+
+func TestLogout(t *testing.T) {
+	t.Run("with cookie revokes and clears cookie", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockSvc := NewMockauthServiceIface(ctrl)
+		mockSvc.EXPECT().Logout(gomock.Any(), "refresh-token").Return(nil)
+
+		h := NewAuthHandler(mockSvc)
+		wrapped := middleware.ErrorMiddleware(h.Logout)
+
+		req := httptest.NewRequestWithContext(
+			context.Background(),
+			http.MethodPost,
+			"/auth/logout",
+			nil,
+		)
+		req.AddCookie(&http.Cookie{Name: "refresh_token", Value: "refresh-token"})
+		rec := httptest.NewRecorder()
+
+		wrapped.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("status = %d, want %d", rec.Code, http.StatusNoContent)
+		}
+
+		var cookie *http.Cookie
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == "refresh_token" {
+				cookie = c
+			}
+		}
+
+		if cookie == nil {
+			t.Fatal("refresh_token cookie not set")
+		}
+		if cookie.MaxAge >= 0 {
+			t.Errorf("MaxAge = %d, want negative (Max-Age=0)", cookie.MaxAge)
+		}
+	})
+
+	t.Run("no cookie -> 204", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockSvc := NewMockauthServiceIface(ctrl)
+
+		h := NewAuthHandler(mockSvc)
+		wrapped := middleware.ErrorMiddleware(h.Logout)
+
+		req := httptest.NewRequestWithContext(
+			context.Background(),
+			http.MethodPost,
+			"/auth/logout",
+			nil,
+		)
+		rec := httptest.NewRecorder()
+
+		wrapped.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("status = %d, want %d", rec.Code, http.StatusNoContent)
+		}
+	})
+}

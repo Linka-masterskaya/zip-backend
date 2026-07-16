@@ -55,6 +55,20 @@ func (mr *MockauthServiceIfaceMockRecorder) Login(ctx, email, password any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Login", reflect.TypeOf((*MockauthServiceIface)(nil).Login), ctx, email, password)
 }
 
+// Logout mocks base method.
+func (m *MockauthServiceIface) Logout(ctx context.Context, refreshToken string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Logout", ctx, refreshToken)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Logout indicates an expected call of Logout.
+func (mr *MockauthServiceIfaceMockRecorder) Logout(ctx, refreshToken any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Logout", reflect.TypeOf((*MockauthServiceIface)(nil).Logout), ctx, refreshToken)
+}
+
 // resendEmail mocks base method.
 func (m *MockauthServiceIface) resendEmail(ctx context.Context) error {
 	m.ctrl.T.Helper()

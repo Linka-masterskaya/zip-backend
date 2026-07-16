@@ -186,6 +186,35 @@ func (m *MockrefreshStore) EXPECT() *MockrefreshStoreMockRecorder {
 	return m.recorder
 }
 
+// GetRefresh mocks base method.
+func (m *MockrefreshStore) GetRefresh(ctx context.Context, jti string) (*cache.RefreshRecord, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetRefresh", ctx, jti)
+	ret0, _ := ret[0].(*cache.RefreshRecord)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetRefresh indicates an expected call of GetRefresh.
+func (mr *MockrefreshStoreMockRecorder) GetRefresh(ctx, jti any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRefresh", reflect.TypeOf((*MockrefreshStore)(nil).GetRefresh), ctx, jti)
+}
+
+// RevokeFamily mocks base method.
+func (m *MockrefreshStore) RevokeFamily(ctx context.Context, fid string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RevokeFamily", ctx, fid)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RevokeFamily indicates an expected call of RevokeFamily.
+func (mr *MockrefreshStoreMockRecorder) RevokeFamily(ctx, fid any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevokeFamily", reflect.TypeOf((*MockrefreshStore)(nil).RevokeFamily), ctx, fid)
+}
+
 // StoreRefresh mocks base method.
 func (m *MockrefreshStore) StoreRefresh(ctx context.Context, jti string, rec cache.RefreshRecord, ttl time.Duration) error {
 	m.ctrl.T.Helper()
