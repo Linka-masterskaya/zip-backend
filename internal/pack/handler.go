@@ -51,7 +51,7 @@ func (f *nullableJSONField[T]) UnmarshalJSON(data []byte) error {
 }
 
 func (f nullableJSONField[T]) patch() NullablePatch[T] {
-	return NullablePatch[T]{Set: f.Set, Value: f.Value}
+	return NullablePatch[T](f)
 }
 
 type createPackRequest struct {
