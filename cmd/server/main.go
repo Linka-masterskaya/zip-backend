@@ -101,40 +101,40 @@ func run() error {
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
 	mainMux.Handle(
-		"POST /auth/login",
+		"POST /api/v1/auth/login",
 		loginRateLimit(
 			middleware.ErrorMiddleware(authHandler.Login),
 		),
 	)
 
 	mainMux.Handle(
-		"POST /auth/logout",
+		"POST /api/v1/auth/logout",
 		middleware.ErrorMiddleware(authHandler.Logout),
 	)
 
 	mainMux.Handle(
-		"POST /auth/forgot",
+		"POST /api/v1/auth/forgot",
 		forgotRateLimit(
 			middleware.ErrorMiddleware(authHandler.ForgotPassword),
 		),
 	)
 
 	mainMux.Handle(
-		"POST /auth/reset",
+		"POST /api/v1/auth/reset",
 		resetRateLimit(
 			middleware.ErrorMiddleware(authHandler.ResetPassword),
 		),
 	)
 
 	mainMux.Handle(
-		"POST /auth/verify-resend",
+		"POST /api/v1/auth/verify-resend",
 		verifyResendRateLimit(
 			middleware.ErrorMiddleware(authHandler.VerifyResend),
 		),
 	)
 
 	mainMux.Handle(
-		"POST /auth/email-confirm",
+		"POST /api/v1/auth/email-confirm",
 		emailConfirmRateLimit(
 			middleware.ErrorMiddleware(authHandler.EmailConfirm),
 		),
