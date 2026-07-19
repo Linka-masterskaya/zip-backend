@@ -42,9 +42,10 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		assert.Equal(t, packID, gotPackID)
 		return &Pack{ID: packID}, nil
 	}
-	repo.listFn = func(_ context.Context, gotUserID, gotFolderID uuid.UUID) ([]*Pack, error) {
+	repo.listFn = func(_ context.Context, gotUserID, gotFolderID uuid.UUID, input ListInput) ([]*Pack, error) {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, folderID, gotFolderID)
+		assert.Equal(t, ListInput{Limit: 50}, input)
 		return []*Pack{{ID: packID}}, nil
 	}
 	repo.deleteFn = func(_ context.Context, gotUserID, gotPackID uuid.UUID) error {
@@ -63,13 +64,32 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 	ctx := packContext(userID)
 	_, err := service.Get(ctx, packID)
 	require.NoError(t, err)
-	listed, err := service.List(ctx, folderID)
+	listed, err := service.List(ctx, folderID, ListInput{})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	require.NoError(t, service.Delete(ctx, packID))
 	moved, err := service.Move(ctx, packID, folderID)
 	require.NoError(t, err)
 	assert.Equal(t, folderID, moved.FolderID)
+}
+
+func TestServiceListRejectsInvalidPagination(t *testing.T) {
+	tests := []struct {
+		name  string
+		input ListInput
+	}{
+		{name: "limit too large", input: ListInput{Limit: 101}},
+		{name: "negative offset", input: ListInput{Limit: 10, Offset: -1}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewService(&fakePackRepository{}, nil).List(
+				packContext(uuid.New()), uuid.New(), test.input,
+			)
+			assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+		})
+	}
 }
 
 func TestServiceUpdateAllowsClearingNullableMetadata(t *testing.T) {
@@ -176,7 +196,7 @@ func assertAppErrorStatus(t *testing.T, err error, status int) {
 type fakePackRepository struct {
 	createFn func(context.Context, uuid.UUID, CreateInput) (*Pack, error)
 	getFn    func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
-	listFn   func(context.Context, uuid.UUID, uuid.UUID) ([]*Pack, error)
+	listFn   func(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*Pack, error)
 	updateFn func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn func(context.Context, uuid.UUID, uuid.UUID) error
 	moveFn   func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -196,9 +216,13 @@ func (f *fakePackRepository) Get(ctx context.Context, userID, packID uuid.UUID) 
 	return &Pack{}, nil
 }
 
-func (f *fakePackRepository) List(ctx context.Context, userID, folderID uuid.UUID) ([]*Pack, error) {
+func (f *fakePackRepository) List(
+	ctx context.Context,
+	userID, folderID uuid.UUID,
+	input ListInput,
+) ([]*Pack, error) {
 	if f.listFn != nil {
-		return f.listFn(ctx, userID, folderID)
+		return f.listFn(ctx, userID, folderID, input)
 	}
 	return []*Pack{}, nil
 }
