@@ -8,5 +8,7 @@ CREATE TABLE media_usages (
     UNIQUE(media_id, source_type, source_id)
 );
 
+CREATE INDEX idx_media_usages_source ON media_usages(source_type, source_id);
+
 -- +goose Down
 DROP TABLE media_usages;

@@ -4,8 +4,8 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE TABLE packs (
     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id               UUID NOT NULL REFERENCES organizations(id),
-    owner_id             UUID NOT NULL REFERENCES users(id),
-    folder_id            UUID NOT NULL REFERENCES folders(id),
+    owner_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    folder_id            UUID NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     title                TEXT NOT NULL,
     status               TEXT NOT NULL DEFAULT 'draft',
     age                  INT,
@@ -32,7 +32,7 @@ CREATE TABLE pack_versions (
     pack_id     UUID NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
     version     INT NOT NULL,
     config      JSONB NOT NULL,
-    created_by  UUID NOT NULL REFERENCES users(id),
+    created_by  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(pack_id, version)
 );
