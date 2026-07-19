@@ -4,7 +4,7 @@ CREATE TABLE pack_adaptations (
     pack_id     UUID NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
     student_id  UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
     config      JSONB NOT NULL DEFAULT '{}',
-    created_by  UUID NOT NULL REFERENCES users(id),
+    created_by  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(pack_id, student_id)

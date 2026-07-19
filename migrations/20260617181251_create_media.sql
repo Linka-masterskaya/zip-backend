@@ -2,7 +2,7 @@
 CREATE TABLE media_files (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id          UUID NOT NULL REFERENCES organizations(id),
-    uploader_id     UUID NOT NULL REFERENCES users(id),
+    uploader_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'failed')),
     source_text     TEXT,
     sha256          TEXT,
