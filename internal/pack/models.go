@@ -33,6 +33,12 @@ type CreateInput struct {
 	Config   json.RawMessage
 }
 
+// ListInput contains offset pagination parameters for pack listing.
+type ListInput struct {
+	Limit  int
+	Offset int
+}
+
 // NullablePatch distinguishes an omitted PATCH field from an explicit null.
 type NullablePatch[T any] struct {
 	Set   bool
