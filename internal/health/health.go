@@ -13,7 +13,17 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const checkTimeout = 2 * time.Second
+const (
+	checkTimeout = 2 * time.Second
+
+	StatusOK       Status = "ok"
+	StatusError    Status = "error"
+	StatusDegraded Status = "degraded"
+	StatusAlive    Status = "alive"
+)
+
+// Status represents the health state returned by health endpoints.
+type Status string
 
 // Pinger — интерфейс для проверки зависимости через Ping.
 type Pinger interface {
@@ -31,12 +41,12 @@ type Lister interface {
 }
 
 type checkResult struct {
-	Status string `json:"status"`
+	Status Status `json:"status"`
 	Error  string `json:"error,omitempty"`
 }
 
 type response struct {
-	Status string                 `json:"status"`
+	Status Status                 `json:"status"`
 	Checks map[string]checkResult `json:"checks"`
 }
 
@@ -80,9 +90,9 @@ func (c *Checker) Run(ctx context.Context) (int, interface{}) {
 	var mu sync.Mutex
 
 	setResult := func(name string, err error) {
-		result := checkResult{Status: "ok"}
+		result := checkResult{Status: StatusOK}
 		if err != nil {
-			result = checkResult{Status: "error", Error: err.Error()}
+			result = checkResult{Status: StatusError, Error: err.Error()}
 		}
 		mu.Lock()
 		results[name] = result
@@ -102,10 +112,10 @@ func (c *Checker) Run(ctx context.Context) (int, interface{}) {
 	}
 
 	waitErr := group.Wait()
-	status := "ok"
+	status := StatusOK
 	httpStatus := http.StatusOK
 	if waitErr != nil || hasErrors(results) {
-		status = "degraded"
+		status = StatusDegraded
 		httpStatus = http.StatusServiceUnavailable
 	}
 
@@ -165,7 +175,7 @@ func runCheck(ctx context.Context, check func(context.Context) error) (err error
 func hasErrors(results map[string]checkResult) bool {
 	hasError := false
 	for _, result := range results {
-		if result.Status == "error" {
+		if result.Status == StatusError {
 			hasError = true
 		}
 	}
