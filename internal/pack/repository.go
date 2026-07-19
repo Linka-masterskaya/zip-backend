@@ -76,8 +76,12 @@ func (r *Repository) Get(ctx context.Context, userID, packID uuid.UUID) (*Pack, 
 	return result, nil
 }
 
-// List returns packs from an owned folder for the authenticated user.
-func (r *Repository) List(ctx context.Context, userID, folderID uuid.UUID) ([]*Pack, error) {
+// List returns a bounded page of packs from an owned folder.
+func (r *Repository) List(
+	ctx context.Context,
+	userID, folderID uuid.UUID,
+	input ListInput,
+) ([]*Pack, error) {
 	allowed, err := r.folderAllowed(ctx, userID, folderID)
 	if err != nil {
 		return nil, err
@@ -86,6 +90,7 @@ func (r *Repository) List(ctx context.Context, userID, folderID uuid.UUID) ([]*P
 		return nil, ErrFolderNotAllowed
 	}
 
+	limit, offset := repositoryListBounds(input)
 	query := `
 		SELECT ` + qualifiedPackColumns + `
 		FROM packs p
@@ -94,9 +99,10 @@ func (r *Repository) List(ctx context.Context, userID, folderID uuid.UUID) ([]*P
 		  AND p.owner_id = u.id
 		  AND p.org_id = u.org_id
 		  AND u.deleted_at IS NULL
-		ORDER BY p.updated_at DESC, p.id`
+		ORDER BY p.updated_at DESC, p.id
+		LIMIT $3 OFFSET $4`
 
-	rows, err := r.db.Query(ctx, query, userID, folderID)
+	rows, err := r.db.Query(ctx, query, userID, folderID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("pack repository list: %w", err)
 	}
@@ -132,7 +138,7 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 	query := `
 		UPDATE packs p
 		SET title = COALESCE($3::text, p.title),
-		    folder_id = COALESCE($4::uuid, p.folder_id),
+		    folder_id = CASE WHEN $4::uuid IS NULL THEN p.folder_id ELSE f.id END,
 		    age_min = CASE WHEN $5::boolean THEN $6::int ELSE p.age_min END,
 		    age_max = CASE WHEN $7::boolean THEN $8::int ELSE p.age_max END,
 		    difficulty = CASE WHEN $9::boolean THEN $10::text ELSE p.difficulty END,
@@ -140,8 +146,10 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 		    notes = CASE WHEN $12::boolean THEN $13::text ELSE p.notes END,
 		    updated_at = now()
 		FROM users u
+		LEFT JOIN folders f ON f.id = $4::uuid AND f.owner_id = u.id
 		WHERE p.id = $2
 		  AND u.id = $1
+		  AND ($4::uuid IS NULL OR f.id IS NOT NULL)
 		  AND p.owner_id = u.id
 		  AND p.org_id = u.org_id
 		  AND u.deleted_at IS NULL
@@ -218,6 +226,21 @@ func (r *Repository) Move(ctx context.Context, userID, packID, folderID uuid.UUI
 		return nil, fmt.Errorf("pack repository move: %w", err)
 	}
 	return result, nil
+}
+
+func repositoryListBounds(input ListInput) (int, int) {
+	const defaultLimit = 50
+	const maxLimit = 100
+
+	limit := input.Limit
+	if limit < 1 || limit > maxLimit {
+		limit = defaultLimit
+	}
+	offset := input.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
 }
 
 func (r *Repository) folderAllowed(ctx context.Context, userID, folderID uuid.UUID) (bool, error) {
