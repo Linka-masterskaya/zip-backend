@@ -20,6 +20,8 @@ const MaxConfigSize = 5 * 1024 * 1024
 
 func init() {
 	compiler := jsonschema.NewCompiler()
+	compiler.AssertFormat = true
+
 	if err := compiler.AddResource("schema.json", bytes.NewReader(schemaBytes)); err != nil {
 		panic(fmt.Errorf("failed to add schema resource: %w", err))
 	}
@@ -54,8 +56,23 @@ func ValidateConfig(ctx context.Context, data json.RawMessage) error {
 		return fmt.Errorf("failed to parse config structs: %w", err)
 	}
 
+	blockIDs := make(map[string]bool)
+
 	for i, block := range cfg.Blocks {
-		if err := validateBlockLogic(block); err != nil {
+		if blockIDs[block.ID] {
+			return fmt.Errorf("duplicate block id found: %s", block.ID)
+		}
+		blockIDs[block.ID] = true
+
+		validElementIDs := make(map[string]bool)
+		for _, el := range block.Elements {
+			if validElementIDs[el.ID] {
+				return fmt.Errorf("block[%d] (id: %s): duplicate element id found: %s", i, block.ID, el.ID)
+			}
+			validElementIDs[el.ID] = true
+		}
+
+		if err := validateBlockLogic(block, validElementIDs); err != nil {
 			return fmt.Errorf("block[%d] (id: %s) logic error: %w", i, block.ID, err)
 		}
 	}
@@ -63,27 +80,85 @@ func ValidateConfig(ctx context.Context, data json.RawMessage) error {
 	return nil
 }
 
-func validateBlockLogic(b Block) error {
+func validateBlockLogic(b Block, validElements map[string]bool) error {
 	switch b.Type {
 	case BlockTypeSingleChoice:
-		correctCount := countCorrectAnswers(b.Answers)
-		if correctCount != 1 {
-			return fmt.Errorf("single_choice requires exactly 1 correct answer, got %d", correctCount)
-		}
-
+		return validateSingleChoice(b, validElements)
 	case BlockTypeMultiChoice:
-		correctCount := countCorrectAnswers(b.Answers)
-		if correctCount < 1 {
-			return fmt.Errorf("multi_choice requires at least 1 correct answer, got %d", correctCount)
-		}
-
+		return validateMultiChoice(b, validElements)
 	case BlockTypeSequence:
-		orderMap := make(map[int]bool)
-		for _, seq := range b.Sequence {
-			if orderMap[seq.Order] {
-				return fmt.Errorf("sequence requires unique order, duplicate found: %d", seq.Order)
+		return validateSequence(b, validElements)
+	case BlockTypeMatching:
+		return validateMatching(b, validElements)
+	case BlockTypeCategories:
+		return validateCategories(b, validElements)
+	case BlockTypeGrid:
+		// Для сетки (grid)
+		return nil
+	}
+
+	return nil
+}
+
+func validateSingleChoice(b Block, validElements map[string]bool) error {
+	correctCount := countCorrectAnswers(b.Answers)
+	if correctCount != 1 {
+		return fmt.Errorf("single_choice requires exactly 1 correct answer, got %d", correctCount)
+	}
+	for _, ans := range b.Answers {
+		if !validElements[ans.ElementID] {
+			return fmt.Errorf("invalid element_id in answers: %s", ans.ElementID)
+		}
+	}
+	return nil
+}
+
+func validateMultiChoice(b Block, validElements map[string]bool) error {
+	correctCount := countCorrectAnswers(b.Answers)
+	if correctCount < 1 {
+		return fmt.Errorf("multi_choice requires at least 1 correct answer, got %d", correctCount)
+	}
+	for _, ans := range b.Answers {
+		if !validElements[ans.ElementID] {
+			return fmt.Errorf("invalid element_id in answers: %s", ans.ElementID)
+		}
+	}
+	return nil
+}
+
+func validateSequence(b Block, validElements map[string]bool) error {
+	orderMap := make(map[int]bool)
+	for _, seq := range b.Sequence {
+		if orderMap[seq.Order] {
+			return fmt.Errorf("sequence requires unique order, duplicate found: %d", seq.Order)
+		}
+		orderMap[seq.Order] = true
+
+		if !validElements[seq.ElementID] {
+			return fmt.Errorf("invalid element_id in sequence: %s", seq.ElementID)
+		}
+	}
+	return nil
+}
+
+func validateMatching(b Block, validElements map[string]bool) error {
+	for _, pair := range b.Pairs {
+		if !validElements[pair.LeftID] {
+			return fmt.Errorf("invalid left_id in matching pair: %s", pair.LeftID)
+		}
+		if !validElements[pair.RightID] {
+			return fmt.Errorf("invalid right_id in matching pair: %s", pair.RightID)
+		}
+	}
+	return nil
+}
+
+func validateCategories(b Block, validElements map[string]bool) error {
+	for _, cat := range b.Category {
+		for _, itemID := range cat.Items {
+			if !validElements[itemID] {
+				return fmt.Errorf("invalid item_id in category items: %s", itemID)
 			}
-			orderMap[seq.Order] = true
 		}
 	}
 	return nil

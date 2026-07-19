@@ -27,6 +27,10 @@ func TestValidateConfig(t *testing.T) {
 		{"Invalid Sequence (Dup order)", "invalid_seq_dup.json", true, "unique order"},
 		{"Invalid Type (Open Answer)", "invalid_open_answer.json", true, "schema validation failed"},
 		{"Invalid Settings (Rows > 100)", "invalid_rows_101.json", true, "schema validation failed"},
+		{"Invalid Empty Pack", "invalid_empty_pack.json", true, "schema validation failed"},
+		{"Invalid Typo Property", "invalid_typo_property.json", true, "schema validation failed"},
+		{"Invalid Broken Link", "invalid_broken_link.json", true, "invalid element_id"},
+		{"Invalid Duplicate Element ID", "invalid_duplicate_element_id.json", true, "duplicate element id found"},
 	}
 
 	for _, tt := range tests {
