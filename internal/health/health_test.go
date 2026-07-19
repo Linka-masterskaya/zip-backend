@@ -99,10 +99,10 @@ func TestCheckerRunAllDependenciesReady(t *testing.T) {
 	result := body.(response)
 
 	assert.Equal(t, http.StatusOK, status)
-	assert.Equal(t, "ok", result.Status)
+	assert.Equal(t, StatusOK, result.Status)
 	require.Len(t, result.Checks, 4)
 	for _, check := range result.Checks {
-		assert.Equal(t, "ok", check.Status)
+		assert.Equal(t, StatusOK, check.Status)
 		assert.Empty(t, check.Error)
 	}
 }
@@ -114,12 +114,12 @@ func TestCheckerRunDependencyError(t *testing.T) {
 	result := body.(response)
 
 	assert.Equal(t, http.StatusServiceUnavailable, status)
-	assert.Equal(t, "degraded", result.Status)
-	assert.Equal(t, "error", result.Checks["redis"].Status)
+	assert.Equal(t, StatusDegraded, result.Status)
+	assert.Equal(t, StatusError, result.Checks["redis"].Status)
 	assert.Equal(t, "connection refused", result.Checks["redis"].Error)
-	assert.Equal(t, "ok", result.Checks["postgres"].Status)
-	assert.Equal(t, "ok", result.Checks["nats"].Status)
-	assert.Equal(t, "ok", result.Checks["minio"].Status)
+	assert.Equal(t, StatusOK, result.Checks["postgres"].Status)
+	assert.Equal(t, StatusOK, result.Checks["nats"].Status)
+	assert.Equal(t, StatusOK, result.Checks["minio"].Status)
 }
 
 func TestCheckerRunRecoversCheckPanic(t *testing.T) {
@@ -131,8 +131,8 @@ func TestCheckerRunRecoversCheckPanic(t *testing.T) {
 	result := body.(response)
 
 	assert.Equal(t, http.StatusServiceUnavailable, status)
-	assert.Equal(t, "degraded", result.Status)
-	assert.Equal(t, "error", result.Checks["minio"].Status)
+	assert.Equal(t, StatusDegraded, result.Status)
+	assert.Equal(t, StatusError, result.Checks["minio"].Status)
 	assert.True(t, strings.Contains(result.Checks["minio"].Error, "panic: minio exploded"))
 }
 
@@ -157,7 +157,7 @@ func TestCheckerRunTimesOutChecksInParallel(t *testing.T) {
 	result := body.(response)
 
 	assert.Equal(t, http.StatusServiceUnavailable, status)
-	assert.Equal(t, "degraded", result.Status)
+	assert.Equal(t, StatusDegraded, result.Status)
 	assert.Less(t, elapsed, 3*time.Second)
 	assert.GreaterOrEqual(t, elapsed, checkTimeout)
 	assert.Equal(t, context.DeadlineExceeded.Error(), result.Checks["postgres"].Error)
