@@ -55,13 +55,14 @@ func TestHandlerListPacks(t *testing.T) {
 	service := &fakePackService{}
 	folderID := uuid.New()
 	packID := uuid.New()
-	service.listFn = func(_ context.Context, gotFolderID uuid.UUID) ([]*Pack, error) {
+	service.listFn = func(_ context.Context, gotFolderID uuid.UUID, input ListInput) ([]*Pack, error) {
 		assert.Equal(t, folderID, gotFolderID)
+		assert.Equal(t, ListInput{Limit: 25, Offset: 10}, input)
 		return []*Pack{{ID: packID, FolderID: folderID}}, nil
 	}
 	handler := NewHandler(service)
 
-	rec := performPackRequest(t, handler.ListPacks, http.MethodGet, "/api/v1/packs?folder_id="+folderID.String(), nil, "")
+	rec := performPackRequest(t, handler.ListPacks, http.MethodGet, "/api/v1/packs?folder_id="+folderID.String()+"&limit=25&offset=10", nil, "")
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	var result []*Pack
@@ -133,6 +134,27 @@ func TestHandlerListRequiresFolderID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestHandlerListRejectsInvalidPagination(t *testing.T) {
+	folderID := uuid.New()
+	tests := []string{"0", "101", "invalid"}
+
+	for _, limit := range tests {
+		t.Run(limit, func(t *testing.T) {
+			handler := NewHandler(&fakePackService{})
+			rec := performPackRequest(
+				t,
+				handler.ListPacks,
+				http.MethodGet,
+				"/api/v1/packs?folder_id="+folderID.String()+"&limit="+limit,
+				nil,
+				"",
+			)
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
+}
+
 func TestHandlerDeletePack(t *testing.T) {
 	service := &fakePackService{}
 	packID := uuid.New()
@@ -184,7 +206,7 @@ type fakePackService struct {
 	deletedPackID uuid.UUID
 	createFn      func(context.Context, string, uuid.UUID) (*Pack, error)
 	getFn         func(context.Context, uuid.UUID) (*Pack, error)
-	listFn        func(context.Context, uuid.UUID) ([]*Pack, error)
+	listFn        func(context.Context, uuid.UUID, ListInput) ([]*Pack, error)
 	updateFn      func(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn      func(context.Context, uuid.UUID) error
 	moveFn        func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -205,9 +227,9 @@ func (f *fakePackService) Get(ctx context.Context, packID uuid.UUID) (*Pack, err
 	return &Pack{}, nil
 }
 
-func (f *fakePackService) List(ctx context.Context, folderID uuid.UUID) ([]*Pack, error) {
+func (f *fakePackService) List(ctx context.Context, folderID uuid.UUID, input ListInput) ([]*Pack, error) {
 	if f.listFn != nil {
-		return f.listFn(ctx, folderID)
+		return f.listFn(ctx, folderID, input)
 	}
 	return []*Pack{}, nil
 }
