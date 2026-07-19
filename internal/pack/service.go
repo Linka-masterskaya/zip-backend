@@ -16,7 +16,7 @@ import (
 type packRepository interface {
 	Create(context.Context, uuid.UUID, CreateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
-	List(context.Context, uuid.UUID, uuid.UUID) ([]*Pack, error)
+	List(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*Pack, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -61,13 +61,17 @@ func (s *Service) Get(ctx context.Context, packID uuid.UUID) (*Pack, error) {
 	return result, packError(err)
 }
 
-// List returns packs from an accessible folder.
-func (s *Service) List(ctx context.Context, folderID uuid.UUID) ([]*Pack, error) {
+// List returns a bounded page of packs from an accessible folder.
+func (s *Service) List(ctx context.Context, folderID uuid.UUID, input ListInput) ([]*Pack, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.repo.List(ctx, userID, folderID)
+	input, err = validateListInput(input)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.repo.List(ctx, userID, folderID, input)
 	return result, packError(err)
 }
 
@@ -128,6 +132,22 @@ func emptyLinkaConfig(ctx context.Context) (json.RawMessage, error) {
 		return nil, fmt.Errorf("marshal empty Linka config: %w", err)
 	}
 	return data, nil
+}
+
+func validateListInput(input ListInput) (ListInput, error) {
+	const defaultLimit = 50
+	const maxLimit = 100
+
+	if input.Limit == 0 {
+		input.Limit = defaultLimit
+	}
+	if input.Limit < 1 || input.Limit > maxLimit {
+		return ListInput{}, apperr.ErrBadRequest.WithMessage("limit must be between 1 and 100")
+	}
+	if input.Offset < 0 {
+		return ListInput{}, apperr.ErrBadRequest.WithMessage("offset must not be negative")
+	}
+	return input, nil
 }
 
 func validateUpdate(input *UpdateInput) error {
