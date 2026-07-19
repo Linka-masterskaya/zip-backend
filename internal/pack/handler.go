@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/google/uuid"
@@ -14,7 +15,7 @@ import (
 type packService interface {
 	Create(context.Context, string, uuid.UUID) (*Pack, error)
 	Get(context.Context, uuid.UUID) (*Pack, error)
-	List(context.Context, uuid.UUID) ([]*Pack, error)
+	List(context.Context, uuid.UUID, ListInput) ([]*Pack, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -100,13 +101,17 @@ func (h *Handler) GetPack(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, http.StatusOK, result)
 }
 
-// ListPacks handles GET /api/v1/packs?folder_id=.
+// ListPacks handles GET /api/v1/packs?folder_id=&limit=&offset=.
 func (h *Handler) ListPacks(w http.ResponseWriter, r *http.Request) error {
 	folderID, err := uuid.Parse(r.URL.Query().Get("folder_id"))
 	if err != nil || folderID == uuid.Nil {
 		return apperr.ErrBadRequest.WithMessage("folder_id must be a valid UUID")
 	}
-	result, err := h.service.List(r.Context(), folderID)
+	input, err := listInputFromRequest(r)
+	if err != nil {
+		return err
+	}
+	result, err := h.service.List(r.Context(), folderID, input)
 	if err != nil {
 		return err
 	}
@@ -175,6 +180,36 @@ func (r updatePackRequest) updateInput() UpdateInput {
 
 func (r updatePackRequest) hasFilterMetadata() bool {
 	return r.AgeMin.Set || r.AgeMax.Set || r.Difficulty.Set || r.Goals != nil
+}
+
+func listInputFromRequest(r *http.Request) (ListInput, error) {
+	input := ListInput{}
+	limit, err := optionalQueryInt(r, "limit")
+	if err != nil {
+		return ListInput{}, err
+	}
+	if r.URL.Query().Has("limit") && limit == 0 {
+		return ListInput{}, apperr.ErrBadRequest.WithMessage("limit must be between 1 and 100")
+	}
+	offset, err := optionalQueryInt(r, "offset")
+	if err != nil {
+		return ListInput{}, err
+	}
+	input.Limit = limit
+	input.Offset = offset
+	return validateListInput(input)
+}
+
+func optionalQueryInt(r *http.Request, name string) (int, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
+	}
+	return value, nil
 }
 
 func decodeJSON(r *http.Request, target any) error {
