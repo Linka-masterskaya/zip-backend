@@ -1,0 +1,34 @@
+{
+	"metadata": {
+		"version": "1.0",
+		"title": "Duplicate element ID test"
+	},
+	"settings": {
+		"columns": 2,
+		"rows": 2
+	},
+	"blocks": [
+		{
+			"id": "block-1",
+			"type": "single_choice",
+			"elements": [
+				{
+					"id": "el-dup",
+					"kind": "text",
+					"value": "Element 1"
+				},
+				{
+					"id": "el-dup",
+					"kind": "text",
+					"value": "Element 2"
+				}
+			],
+			"answers": [
+				{
+					"element_id": "el-dup",
+					"is_correct": true
+				}
+			]
+		}
+	]
+}

@@ -1,0 +1,29 @@
+{
+	"metadata": {
+		"version": "1.0",
+		"title": "Broken link test"
+	},
+	"settings": {
+		"columns": 2,
+		"rows": 2
+	},
+	"blocks": [
+		{
+			"id": "block-1",
+			"type": "single_choice",
+			"elements": [
+				{
+					"id": "el-real",
+					"kind": "text",
+					"value": "Real Element"
+				}
+			],
+			"answers": [
+				{
+					"element_id": "el-fake",
+					"is_correct": true
+				}
+			]
+		}
+	]
+}
