@@ -21,16 +21,16 @@ func PutRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, ctxKeyRequestID{}, id)
 }
 
-// GetUserID извлекает ID аутентифицированного пользователя из контекста.
+// GetUserID extracts authenticated user ID from context.
 func GetUserID(ctx context.Context) (string, bool) {
-	id, ok := ctx.Value(ctxKeyUserID{}).(string)
-	return id, ok
+	userID, ok := ctx.Value(ctxKeyUserID{}).(string)
+	return userID, ok && userID != ""
 }
 
-// PutUserID возвращает новый контекст с установленным ID пользователя.
-func PutUserID(ctx context.Context, id string) context.Context {
-	if id == "" {
+// PutUserID returns a context with authenticated user ID.
+func PutUserID(ctx context.Context, userID string) context.Context {
+	if userID == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxKeyUserID{}, id)
+	return context.WithValue(ctx, ctxKeyUserID{}, userID)
 }
