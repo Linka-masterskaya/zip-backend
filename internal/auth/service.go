@@ -93,6 +93,14 @@ func (s *Service) handleExistingEmail(ctx context.Context, email, name, yandexID
 	if cred == nil {
 		return nil, nil, nil
 	}
+
+	slog.Warn("attempt to takeover existing email via yandex oauth",
+		"email", email,
+		"name", name,
+		"yandex_id", yandexID,
+		"existing_user_id", cred.UserID,
+	)
+
 	return nil, nil, ErrEmailAlreadyRegistered
 }
 
