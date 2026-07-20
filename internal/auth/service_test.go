@@ -181,6 +181,8 @@ func (m *MockCrypto) Decrypt(data []byte) ([]byte, error) {
 	return args.Get(0).([]byte), args.Error(1)
 }
 
+// ============= СУЩЕСТВУЮЩИЕ ТЕСТЫ =============
+
 func TestUpsertUser_ExistingYandexIdentity(t *testing.T) {
 	ctx := context.Background()
 	email := "user@yandex.ru"
@@ -360,6 +362,98 @@ func TestUpsertUser_DatabaseError_OnFindIdentity(t *testing.T) {
 	assert.Nil(t, resultUser)
 	assert.Nil(t, resultCred)
 	assert.Contains(t, err.Error(), "find identity by yandex_id")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpsertUser_NewUser_NoPanicOnNilIdentity проверяет, что при identity=nil не происходит паники
+func TestUpsertUser_NewUser_NoPanicOnNilIdentity(t *testing.T) {
+	ctx := context.Background()
+	email := "newuser@mail.ru"
+	name := "Новый Пользователь"
+	yandexID := "new-yandex-id"
+
+	mockRepo := new(MockRepository)
+	mockCrypto := new(MockCrypto)
+
+	// Возвращаем nil, nil для несуществующего identity
+	mockRepo.On("FindIdentityByProviderUID", ctx, "yandex", yandexID).Return(nil, nil)
+
+	emailHash := []byte("hashed_email")
+	mockCrypto.On("Hash", []byte(email)).Return(emailHash)
+	mockRepo.On("FindUserCredByEmailHash", ctx, emailHash).Return(nil, nil)
+
+	// Настройка транзакции
+	mockTx := new(MockTx)
+	mockTx.On("Rollback", ctx).Return(nil)
+	mockTx.On("Commit", ctx).Return(nil)
+
+	mockRepo.On("Begin", ctx).Return(mockTx, nil)
+	mockRepo.On("withTx", mockTx).Return(mockRepo)
+
+	mockRepo.On("CreateUser", ctx, mock.AnythingOfType("auth.CreateUserParams")).Return(nil)
+
+	encryptedEmail := []byte("encrypted_email")
+	mockCrypto.On("Encrypt", []byte(email)).Return(encryptedEmail, nil)
+
+	mockRepo.On("CreateAuthCred", ctx, mock.AnythingOfType("auth.CreateAuthCredParams")).Return(nil)
+	mockRepo.On("CreateIdentity", ctx, mock.AnythingOfType("*auth.UserIdentity")).Return(nil)
+
+	userID := uuid.New()
+	newUser := &User{
+		ID:   userID,
+		Name: name,
+	}
+	mockRepo.On("FindUserByID", ctx, mock.AnythingOfType("uuid.UUID")).Return(newUser, nil)
+
+	newCred := &UserCred{
+		UserID: userID,
+		Role:   "viewer",
+	}
+	mockRepo.On("FindUserCredByUserID", ctx, mock.AnythingOfType("uuid.UUID")).Return(newCred, nil)
+
+	service := NewService(mockRepo, mockRepo, mockCrypto, "test-secret")
+
+	resultUser, resultCred, err := service.UpsertUser(ctx, email, name, yandexID)
+
+	require.NoError(t, err)
+	assert.Equal(t, name, resultUser.Name)
+	assert.Equal(t, "viewer", resultCred.Role)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpsertUser_EmailAlreadyRegistered_ReturnsSentinelError проверяет корректный 409-маппинг
+func TestUpsertUser_EmailAlreadyRegistered_ReturnsSentinelError(t *testing.T) {
+	ctx := context.Background()
+	email := "existing@mail.ru"
+	name := "Пользователь"
+	yandexID := "yandex-id"
+
+	mockRepo := new(MockRepository)
+	mockCrypto := new(MockCrypto)
+
+	mockRepo.On("FindIdentityByProviderUID", ctx, "yandex", yandexID).Return(nil, nil)
+
+	emailHash := []byte("hashed_email")
+	mockCrypto.On("Hash", []byte(email)).Return(emailHash)
+
+	existingCred := &UserCred{
+		UserID: uuid.New(),
+		Role:   "viewer",
+	}
+	mockRepo.On("FindUserCredByEmailHash", ctx, emailHash).Return(existingCred, nil)
+
+	service := NewService(mockRepo, mockRepo, mockCrypto, "test-secret")
+
+	resultUser, resultCred, err := service.UpsertUser(ctx, email, name, yandexID)
+
+	require.Error(t, err)
+	assert.Nil(t, resultUser)
+	assert.Nil(t, resultCred)
+	// Проверяем, что возвращается именно сентинел-ошибка
+	assert.True(t, errors.Is(err, ErrEmailAlreadyRegistered))
+	assert.Contains(t, err.Error(), "already registered")
 
 	mockRepo.AssertExpectations(t)
 }
