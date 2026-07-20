@@ -49,6 +49,8 @@ type authRepoIface interface {
 		hash []byte,
 		expiresAt time.Time,
 	) error
+
+	GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error)
 }
 
 type refreshStore interface {
@@ -57,6 +59,23 @@ type refreshStore interface {
 		jti string,
 		rec cache.RefreshRecord,
 		ttl time.Duration,
+	) error
+	GetRefresh(
+		ctx context.Context,
+		jti string,
+	) (*cache.RefreshRecord,
+		error)
+	RevokeFamily(
+		ctx context.Context,
+		fid string,
+	) error
+	IsFamilyRevoked(
+		ctx context.Context,
+		fid string,
+	) (bool, error)
+	RotateRefresh(
+		ctx context.Context,
+		req cache.RotateRefreshRequest,
 	) error
 }
 
@@ -277,4 +296,78 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (au *authService) Refresh(
+	ctx context.Context,
+	refreshToken string,
+) (*LoginResult, error) {
+	claims, err := au.parseRefreshToken(refreshToken)
+	if err != nil {
+		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+	rec, err := au.cache.GetRefresh(ctx, claims.ID)
+	if errors.Is(err, cache.ErrNotFound) {
+		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get refresh token: %w", err)
+	}
+	if rec.Status == "revoked" {
+		if err := au.cache.RevokeFamily(ctx, rec.FID); err != nil {
+			return nil, fmt.Errorf("revoke refresh family: %w", err)
+		}
+
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+	revoked, err := au.cache.IsFamilyRevoked(ctx, rec.FID)
+	if err != nil {
+		return nil, fmt.Errorf("check refresh family: %w", err)
+	}
+
+	if revoked {
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+
+	userID, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+
+	user, err := au.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get user by id: %w", err)
+	}
+	accessToken, err := au.generateAccessToken(user)
+	if err != nil {
+		return nil, fmt.Errorf("generate access token: %w", err)
+	}
+
+	newJTI := uuid.NewString()
+
+	newRefreshToken, err := au.generateRefreshToken(user, newJTI)
+	if err != nil {
+		return nil, fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	newRec := cache.RefreshRecord{
+		FID:    rec.FID,
+		Status: "active",
+	}
+
+	req := cache.RotateRefreshRequest{
+		OldJTI:    claims.ID,
+		NewJTI:    newJTI,
+		NewRecord: newRec,
+		TTL:       au.cfg.RefreshTokenTTL,
+	}
+
+	if err := au.cache.RotateRefresh(ctx, req); err != nil {
+		return nil, fmt.Errorf("rotate refresh: %w", err)
+	}
+
+	return &LoginResult{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+	}, nil
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
@@ -186,6 +187,152 @@ func TestResendEmail(t *testing.T) {
 				}
 				if resp.Error.Code != tt.wantCode {
 					t.Errorf("code = %s, want %s", resp.Error.Code, tt.wantCode)
+				}
+			}
+		})
+	}
+}
+
+func TestRefresh(t *testing.T) {
+	const (
+		oldRefreshToken = "old-refresh-token"
+		newRefreshToken = "new-refresh-token"
+		newAccessToken  = "new-access-token"
+	)
+
+	tests := []struct {
+		name          string
+		cookie        *http.Cookie
+		mockSetup     func(m *MockauthServiceIface)
+		wantStatus    int
+		wantCode      string
+		wantAccess    string
+		wantSetCookie bool
+	}{
+		{
+			name:       "missing refresh cookie",
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHORIZED",
+		},
+		{
+			name: "empty refresh cookie",
+			cookie: &http.Cookie{
+				Name:  "refresh_token",
+				Value: "",
+			},
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHORIZED",
+		},
+		{
+			name: "service returns unauthorized",
+			cookie: &http.Cookie{
+				Name:  "refresh_token",
+				Value: oldRefreshToken,
+			},
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Refresh(gomock.Any(), oldRefreshToken).
+					Return(nil, apperr.ErrUnauthorized)
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHORIZED",
+		},
+		{
+			name: "success",
+			cookie: &http.Cookie{
+				Name:  "refresh_token",
+				Value: oldRefreshToken,
+			},
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Refresh(gomock.Any(), oldRefreshToken).
+					Return(&LoginResult{
+						AccessToken:  newAccessToken,
+						RefreshToken: newRefreshToken,
+					}, nil)
+			},
+			wantStatus:    http.StatusOK,
+			wantAccess:    newAccessToken,
+			wantSetCookie: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockauthServiceIface(ctrl)
+			tt.mockSetup(mockSvc)
+
+			h := NewAuthHandler(mockSvc)
+			h.refreshTokenTTL = time.Hour
+			h.cookieSecure = false
+
+			wrapped := middleware.ErrorMiddleware(h.Refresh)
+
+			req := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/auth/refresh",
+				nil,
+			)
+			if tt.cookie != nil {
+				req.AddCookie(tt.cookie)
+			}
+
+			rec := httptest.NewRecorder()
+			wrapped.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+
+			if tt.wantCode != "" {
+				var resp middleware.JSONErrorResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("unmarshal error response: %v", err)
+				}
+				if resp.Error.Code != tt.wantCode {
+					t.Errorf("code = %s, want %s", resp.Error.Code, tt.wantCode)
+				}
+			}
+
+			if tt.wantAccess != "" {
+				var resp LoginResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("unmarshal refresh response: %v", err)
+				}
+				if resp.AccessToken != tt.wantAccess {
+					t.Errorf("access token = %q, want %q", resp.AccessToken, tt.wantAccess)
+				}
+			}
+
+			if tt.wantSetCookie {
+				cookies := rec.Result().Cookies()
+				if len(cookies) != 1 {
+					t.Fatalf("cookies count = %d, want 1", len(cookies))
+				}
+
+				got := cookies[0]
+				if got.Name != "refresh_token" {
+					t.Errorf("cookie name = %q, want refresh_token", got.Name)
+				}
+				if got.Value != newRefreshToken {
+					t.Errorf("cookie value = %q, want %q", got.Value, newRefreshToken)
+				}
+				if !got.HttpOnly {
+					t.Error("refresh cookie must be HttpOnly")
+				}
+				if got.Path != "/" {
+					t.Errorf("cookie path = %q, want /", got.Path)
+				}
+				if got.MaxAge != int(time.Hour.Seconds()) {
+					t.Errorf(
+						"cookie MaxAge = %d, want %d",
+						got.MaxAge,
+						int(time.Hour.Seconds()),
+					)
 				}
 			}
 		})

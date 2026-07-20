@@ -17,6 +17,7 @@ import (
 //go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
+	Refresh(ctx context.Context, refreshToken string) (*LoginResult, error)
 	verifyEmail(ctx context.Context, verifyToken string) error
 	resendEmail(ctx context.Context) error
 }
@@ -200,4 +201,43 @@ func (h *authHandlers) RegisterRoutes(
 			),
 		),
 	)
+}
+
+func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
+	cookie, err := r.Cookie("refresh_token")
+	if errors.Is(err, http.ErrNoCookie) {
+		return apperr.ErrUnauthorized
+	}
+	if err != nil {
+		return fmt.Errorf("get refresh cookie: %w", err)
+	}
+	if cookie.Value == "" {
+		return apperr.ErrUnauthorized
+	}
+	result, err := h.svc.Refresh(r.Context(), cookie.Value)
+	if err != nil {
+		return err
+	}
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    result.RefreshToken,
+		Path:     "/",
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
+	}
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		return fmt.Errorf("encode refresh response: %w", err)
+	}
+
+	return nil
 }
