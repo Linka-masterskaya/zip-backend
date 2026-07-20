@@ -28,6 +28,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/db"
+	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
@@ -85,6 +86,11 @@ func run() error {
 		authCfg,
 		deps.crypto,
 	)
+
+	checker, err := health.NewChecker(deps.db, deps.redis, deps.nc, deps.storage)
+	if err != nil {
+		return fmt.Errorf("health checker init: %w", err)
+	}
 
 	packRateLimit := middleware.RateLimit(deps.redis, "packs_api", int64(deps.cfg.Auth.PackRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
@@ -170,10 +176,10 @@ func run() error {
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("GET /metrics", metrics.NewHandler())
 	metricsMux.HandleFunc("GET /health", healthHandler(deps.cfg.App.Env))
-	metricsMux.HandleFunc("GET /readyz", readyzHandler(deps.redis))
+	setupHealthEndpoints(metricsMux, checker)
 
 	metricsSrv := &http.Server{
-		Addr:         ":9091",
+		Addr:         ":9090",
 		Handler:      metricsMux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
@@ -312,30 +318,8 @@ func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
 func healthHandler(env string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok", "env": env}); err != nil {
+		if err := json.NewEncoder(w).Encode(map[string]any{"status": health.StatusOK, "env": env}); err != nil {
 			slog.Error("health response encode failed", logger.Err(err))
-		}
-	}
-}
-
-func readyzHandler(redisClient *cache.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-
-		w.Header().Set("Content-Type", "application/json")
-
-		if err := redisClient.Ping(ctx); err != nil {
-			slog.Error("readyz: redis unavailable", logger.Err(err))
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if err := json.NewEncoder(w).Encode(map[string]string{"status": "redis unavailable"}); err != nil {
-				slog.Error("readyz response encode failed", logger.Err(err))
-			}
-			return
-		}
-
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ready"}); err != nil {
-			slog.Error("readyz response encode failed", logger.Err(err))
 		}
 	}
 }
@@ -366,4 +350,26 @@ func runMigrationsIfNeeded(cfg *config.Config) {
 	}
 	log.Println("Migrations completed. Exiting.")
 	os.Exit(0)
+}
+
+// setupHealthEndpoints регистрирует эндпоинты /livez и /readyz на health/metrics мультиплексоре.
+func setupHealthEndpoints(mux *http.ServeMux, checker *health.Checker) {
+	// /livez — всегда 200 OK, без проверок
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]health.Status{"status": health.StatusAlive}); err != nil {
+			slog.Error("failed to encode /livez response", "err", err)
+		}
+	})
+
+	// /readyz — проверяет все зависимости параллельно с таймаутом 2 сек.
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		status, body := checker.Run(r.Context())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			slog.Error("failed to encode /readyz response", "err", err)
+		}
+	})
 }
