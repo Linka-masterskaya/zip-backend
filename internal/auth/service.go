@@ -93,13 +93,16 @@ func (s *Service) handleExistingEmail(ctx context.Context, email, name, yandexID
 	if cred == nil {
 		return nil, nil, nil
 	}
-	return nil, nil, fmt.Errorf("email already registered, please login with password")
+	return nil, nil, ErrEmailAlreadyRegistered
 }
 
 func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID string) (*User, *UserCred, error) {
 	identity, err := s.repo.FindIdentityByProviderUID(ctx, "yandex", yandexID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find identity by yandex_id: %w", err)
+	}
+	if identity == nil {
+		return nil, nil, nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, ErrUserNotFound
