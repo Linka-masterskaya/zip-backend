@@ -284,57 +284,94 @@ func TestRefresh(t *testing.T) {
 			rec := httptest.NewRecorder()
 			wrapped.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
-
-			if tt.wantCode != "" {
-				var resp middleware.JSONErrorResponse
-				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-					t.Fatalf("unmarshal error response: %v", err)
-				}
-				if resp.Error.Code != tt.wantCode {
-					t.Errorf("code = %s, want %s", resp.Error.Code, tt.wantCode)
-				}
-			}
-
-			if tt.wantAccess != "" {
-				var resp LoginResponse
-				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-					t.Fatalf("unmarshal refresh response: %v", err)
-				}
-				if resp.AccessToken != tt.wantAccess {
-					t.Errorf("access token = %q, want %q", resp.AccessToken, tt.wantAccess)
-				}
-			}
-
-			if tt.wantSetCookie {
-				cookies := rec.Result().Cookies()
-				if len(cookies) != 1 {
-					t.Fatalf("cookies count = %d, want 1", len(cookies))
-				}
-
-				got := cookies[0]
-				if got.Name != "refresh_token" {
-					t.Errorf("cookie name = %q, want refresh_token", got.Name)
-				}
-				if got.Value != newRefreshToken {
-					t.Errorf("cookie value = %q, want %q", got.Value, newRefreshToken)
-				}
-				if !got.HttpOnly {
-					t.Error("refresh cookie must be HttpOnly")
-				}
-				if got.Path != "/" {
-					t.Errorf("cookie path = %q, want /", got.Path)
-				}
-				if got.MaxAge != int(time.Hour.Seconds()) {
-					t.Errorf(
-						"cookie MaxAge = %d, want %d",
-						got.MaxAge,
-						int(time.Hour.Seconds()),
-					)
-				}
-			}
+			assertRefreshStatusAndError(t, rec, tt.wantStatus, tt.wantCode)
+			assertRefreshSuccess(
+				t,
+				rec,
+				tt.wantAccess,
+				newRefreshToken,
+				tt.wantSetCookie,
+			)
 		})
+	}
+}
+
+func assertRefreshStatusAndError(
+	t *testing.T,
+	rec *httptest.ResponseRecorder,
+	wantStatus int,
+	wantCode string,
+) {
+	t.Helper()
+
+	if rec.Code != wantStatus {
+		t.Errorf("status = %d, want %d", rec.Code, wantStatus)
+	}
+
+	if wantCode == "" {
+		return
+	}
+
+	var resp middleware.JSONErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if resp.Error.Code != wantCode {
+		t.Errorf("code = %s, want %s", resp.Error.Code, wantCode)
+	}
+}
+
+func assertRefreshSuccess(
+	t *testing.T,
+	rec *httptest.ResponseRecorder,
+	wantAccess string,
+	wantRefresh string,
+	wantSetCookie bool,
+) {
+	t.Helper()
+
+	if wantAccess != "" {
+		var resp LoginResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal refresh response: %v", err)
+		}
+		if resp.AccessToken != wantAccess {
+			t.Errorf("access token = %q, want %q", resp.AccessToken, wantAccess)
+		}
+	}
+
+	if !wantSetCookie {
+		return
+	}
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies count = %d, want 1", len(cookies))
+	}
+
+	assertRefreshCookie(t, cookies[0], wantRefresh)
+}
+
+func assertRefreshCookie(t *testing.T, got *http.Cookie, wantRefresh string) {
+	t.Helper()
+
+	if got.Name != "refresh_token" {
+		t.Errorf("cookie name = %q, want refresh_token", got.Name)
+	}
+	if got.Value != wantRefresh {
+		t.Errorf("cookie value = %q, want %q", got.Value, wantRefresh)
+	}
+	if !got.HttpOnly {
+		t.Error("refresh cookie must be HttpOnly")
+	}
+	if got.Path != "/" {
+		t.Errorf("cookie path = %q, want /", got.Path)
+	}
+	if got.MaxAge != int(time.Hour.Seconds()) {
+		t.Errorf(
+			"cookie MaxAge = %d, want %d",
+			got.MaxAge,
+			int(time.Hour.Seconds()),
+		)
 	}
 }

@@ -218,6 +218,7 @@ func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+
 	//nolint:gosec // Secure is configured separately for local and production environments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
@@ -235,6 +236,7 @@ func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
 		AccessToken: result.AccessToken,
 	}
 
+	//nolint:gosec // Returning the access token is the expected API behavior.
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		return fmt.Errorf("encode refresh response: %w", err)
 	}
