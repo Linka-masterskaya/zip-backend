@@ -7,7 +7,7 @@ CREATE TABLE packs (
     owner_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     folder_id            UUID NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     title                TEXT NOT NULL,
-    status               TEXT NOT NULL DEFAULT 'draft',
+    status               TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'ready', 'error')),
     age                  INT,
     difficulty           TEXT CHECK (difficulty IN ('easy', 'medium', 'hard')),
     voice                TEXT,
