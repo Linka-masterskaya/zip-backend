@@ -28,6 +28,7 @@ var (
 	ErrVerifyTokenInvalid = &AppError{Code: "VERIFY_TOKEN_INVALID", HTTPStatus: http.StatusBadRequest, Message: "verification link is invalid or expired"}
 	ErrJWTTokenInvalid    = &AppError{Code: "JWT_TOKEN_INVALID", HTTPStatus: http.StatusUnauthorized, Message: "invalid or expired token"}
 	ErrTooManyRequests    = &AppError{Code: "TOO_MANY_REQUESTS", HTTPStatus: http.StatusTooManyRequests, Message: "too many requests, please try again later"}
+	ErrPasswordInvalid    = &AppError{Code: "CURRENT_PASSWORD_INVALID", HTTPStatus: http.StatusBadRequest, Message: "invalid current password"}
 )
 
 func (e *AppError) Error() string {

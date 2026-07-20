@@ -1,6 +1,8 @@
 package profile
 
+import "github.com/google/uuid"
+
 type UserPassword struct {
-	ID       string
+	ID       uuid.UUID
 	Password string
 }

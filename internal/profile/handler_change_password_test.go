@@ -12,50 +12,43 @@ import (
 	"testing"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
-	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
 	"github.com/stretchr/testify/require"
 )
 
-func newChangePasswordRequest(t *testing.T, body ChangePasswordReq, userID string) *http.Request {
+func newChangePasswordRequest(t *testing.T, body ChangePasswordReq, ctx context.Context) *http.Request {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/profile/change-password", bytes.NewReader(raw))
-	if userID != "" {
-		req = req.WithContext(reqctx.PutUserID(req.Context(), userID))
-	}
-	return req
+	return httptest.NewRequestWithContext(ctx, http.MethodPost, "/profile/change-password", bytes.NewReader(raw))
 }
 
-func serve(h *UserHandler, w http.ResponseWriter, r *http.Request) {
+func serve(h *ChangePasswordHandler, w http.ResponseWriter, r *http.Request) {
 	middleware.ErrorMiddleware(h.ChangePassword).ServeHTTP(w, r)
 }
 
 func TestHandlerChangePassword_Success(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}}
 	sessions := &fakeSessionRevoker{}
-	handler := NewUserHandler(NewUserService(repo, sessions))
+	handler := NewChangePasswordHandler(NewChangePasswordService(repo, sessions))
 
 	req := newChangePasswordRequest(t, ChangePasswordReq{
 		CurrentPassword: "oldpassword",
 		NewPassword:     "newpassword",
-		RepeatPassword:  "newpassword",
-	}, "user-1")
+	}, ctxWithUser(testUserID))
 	w := httptest.NewRecorder()
 
 	serve(handler, w, req)
 
 	require.Equal(t, http.StatusNoContent, w.Code)
-	require.Equal(t, "user-1", repo.updatedID)
+	require.Equal(t, testUserID, repo.updatedID)
 	require.True(t, sessions.revokeCalled)
 }
 
 func TestHandlerChangePassword_InvalidJSON(t *testing.T) {
-	handler := NewUserHandler(NewUserService(&fakeUserRepo{}, &fakeSessionRevoker{}))
+	handler := NewChangePasswordHandler(NewChangePasswordService(&fakeChangePasswordRepo{}, &fakeSessionRevoker{}))
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/profile/change-password", strings.NewReader("{invalid json"))
-	req = req.WithContext(reqctx.PutUserID(req.Context(), "user-1"))
+	req := httptest.NewRequestWithContext(ctxWithUser(testUserID), http.MethodPost, "/profile/change-password", strings.NewReader("{invalid json"))
 	w := httptest.NewRecorder()
 
 	serve(handler, w, req)
@@ -63,47 +56,13 @@ func TestHandlerChangePassword_InvalidJSON(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestHandlerChangePassword_MissingFields(t *testing.T) {
-	tests := []struct {
-		name string
-		req  ChangePasswordReq
-	}{
-		{
-			name: "missing current password",
-			req:  ChangePasswordReq{NewPassword: "newpassword", RepeatPassword: "newpassword"},
-		},
-		{
-			name: "missing new password",
-			req:  ChangePasswordReq{CurrentPassword: "oldpassword", RepeatPassword: "newpassword"},
-		},
-		{
-			name: "missing repeat password",
-			req:  ChangePasswordReq{CurrentPassword: "oldpassword", NewPassword: "newpassword"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			handler := NewUserHandler(NewUserService(&fakeUserRepo{}, &fakeSessionRevoker{}))
-
-			req := newChangePasswordRequest(t, tt.req, "user-1")
-			w := httptest.NewRecorder()
-
-			serve(handler, w, req)
-
-			require.Equal(t, http.StatusBadRequest, w.Code)
-		})
-	}
-}
-
 func TestHandlerChangePassword_Unauthorized_NoUserID(t *testing.T) {
-	handler := NewUserHandler(NewUserService(&fakeUserRepo{}, &fakeSessionRevoker{}))
+	handler := NewChangePasswordHandler(NewChangePasswordService(&fakeChangePasswordRepo{}, &fakeSessionRevoker{}))
 
 	req := newChangePasswordRequest(t, ChangePasswordReq{
 		CurrentPassword: "oldpassword",
 		NewPassword:     "newpassword",
-		RepeatPassword:  "newpassword",
-	}, "")
+	}, context.Background())
 	w := httptest.NewRecorder()
 
 	serve(handler, w, req)
@@ -112,33 +71,14 @@ func TestHandlerChangePassword_Unauthorized_NoUserID(t *testing.T) {
 }
 
 func TestHandlerChangePassword_PasswordTooShort(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}}
 	sessions := &fakeSessionRevoker{}
-	handler := NewUserHandler(NewUserService(repo, sessions))
+	handler := NewChangePasswordHandler(NewChangePasswordService(repo, sessions))
 
 	req := newChangePasswordRequest(t, ChangePasswordReq{
 		CurrentPassword: "oldpassword",
 		NewPassword:     "short",
-		RepeatPassword:  "short",
-	}, "user-1")
-	w := httptest.NewRecorder()
-
-	serve(handler, w, req)
-
-	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.False(t, sessions.revokeCalled)
-}
-
-func TestHandlerChangePassword_PasswordMismatch(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
-	sessions := &fakeSessionRevoker{}
-	handler := NewUserHandler(NewUserService(repo, sessions))
-
-	req := newChangePasswordRequest(t, ChangePasswordReq{
-		CurrentPassword: "oldpassword",
-		NewPassword:     "newpassword",
-		RepeatPassword:  "somethingelse",
-	}, "user-1")
+	}, ctxWithUser(testUserID))
 	w := httptest.NewRecorder()
 
 	serve(handler, w, req)
@@ -148,15 +88,14 @@ func TestHandlerChangePassword_PasswordMismatch(t *testing.T) {
 }
 
 func TestHandlerChangePassword_WrongOldPassword(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}}
 	sessions := &fakeSessionRevoker{}
-	handler := NewUserHandler(NewUserService(repo, sessions))
+	handler := NewChangePasswordHandler(NewChangePasswordService(repo, sessions))
 
 	req := newChangePasswordRequest(t, ChangePasswordReq{
 		CurrentPassword: "wrongoldpassword",
 		NewPassword:     "newpassword",
-		RepeatPassword:  "newpassword",
-	}, "user-1")
+	}, ctxWithUser(testUserID))
 	w := httptest.NewRecorder()
 
 	serve(handler, w, req)
@@ -166,15 +105,14 @@ func TestHandlerChangePassword_WrongOldPassword(t *testing.T) {
 }
 
 func TestHandlerChangePassword_UserNotFound(t *testing.T) {
-	repo := &fakeUserRepo{getErr: sql.ErrNoRows}
+	repo := &fakeChangePasswordRepo{getErr: sql.ErrNoRows}
 	sessions := &fakeSessionRevoker{}
-	handler := NewUserHandler(NewUserService(repo, sessions))
+	handler := NewChangePasswordHandler(NewChangePasswordService(repo, sessions))
 
 	req := newChangePasswordRequest(t, ChangePasswordReq{
 		CurrentPassword: "oldpassword",
 		NewPassword:     "newpassword",
-		RepeatPassword:  "newpassword",
-	}, "user-1")
+	}, ctxWithUser(testUserID))
 	w := httptest.NewRecorder()
 
 	serve(handler, w, req)
@@ -183,15 +121,14 @@ func TestHandlerChangePassword_UserNotFound(t *testing.T) {
 }
 
 func TestHandlerChangePassword_InternalError(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}, updateErr: errors.New("db is down")}
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}, updateErr: errors.New("db is down")}
 	sessions := &fakeSessionRevoker{}
-	handler := NewUserHandler(NewUserService(repo, sessions))
+	handler := NewChangePasswordHandler(NewChangePasswordService(repo, sessions))
 
 	req := newChangePasswordRequest(t, ChangePasswordReq{
 		CurrentPassword: "oldpassword",
 		NewPassword:     "newpassword",
-		RepeatPassword:  "newpassword",
-	}, "user-1")
+	}, ctxWithUser(testUserID))
 	w := httptest.NewRecorder()
 
 	serve(handler, w, req)

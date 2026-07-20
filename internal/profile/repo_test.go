@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -77,11 +78,11 @@ func setupDBTestUserRepo(t *testing.T, ctx context.Context) *pgxpool.Pool {
 
 // insertTestUser inserts a user and its auth_cred row directly via SQL and
 // returns the user id.
-func insertTestUser(t *testing.T, pool *pgxpool.Pool, email, passwordHash string) string {
+func insertTestUser(t *testing.T, pool *pgxpool.Pool, email, passwordHash string) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 
-	var id string
+	var id uuid.UUID
 	err := pool.QueryRow(ctx, `INSERT INTO users (email) VALUES ($1) RETURNING id`, email).Scan(&id)
 	require.NoError(t, err)
 
@@ -91,9 +92,9 @@ func insertTestUser(t *testing.T, pool *pgxpool.Pool, email, passwordHash string
 	return id
 }
 
-func TestUserRepo_Get_Success(t *testing.T) {
+func TestChangePasswordRepo_Get_Success(t *testing.T) {
 	db := setupDBTestUserRepo(t, context.Background())
-	repo := NewUserRepo(db)
+	repo := NewChangePasswordRepo(db)
 
 	id := insertTestUser(t, db, "get-success@example.com", "hashed-password")
 
@@ -104,19 +105,19 @@ func TestUserRepo_Get_Success(t *testing.T) {
 	require.Equal(t, "hashed-password", user.Password)
 }
 
-func TestUserRepo_Get_NotFound(t *testing.T) {
+func TestChangePasswordRepo_Get_NotFound(t *testing.T) {
 	db := setupDBTestUserRepo(t, context.Background())
-	repo := NewUserRepo(db)
+	repo := NewChangePasswordRepo(db)
 
-	user, err := repo.Get(context.Background(), "00000000-0000-0000-0000-000000000000")
+	user, err := repo.Get(context.Background(), uuid.Nil)
 
 	require.Nil(t, user)
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
-func TestUserRepo_Update_Success(t *testing.T) {
+func TestChangePasswordRepo_Update_Success(t *testing.T) {
 	db := setupDBTestUserRepo(t, context.Background())
-	repo := NewUserRepo(db)
+	repo := NewChangePasswordRepo(db)
 
 	id := insertTestUser(t, db, "update-success@example.com", "old-hash")
 
@@ -128,11 +129,11 @@ func TestUserRepo_Update_Success(t *testing.T) {
 	require.Equal(t, "new-hash", storedHash)
 }
 
-func TestUserRepo_Update_UnknownID_NoRows(t *testing.T) {
+func TestChangePasswordRepo_Update_UnknownID_NoRows(t *testing.T) {
 	db := setupDBTestUserRepo(t, context.Background())
-	repo := NewUserRepo(db)
+	repo := NewChangePasswordRepo(db)
 
-	err := repo.Update(context.Background(), "00000000-0000-0000-0000-000000000000", "new-hash")
+	err := repo.Update(context.Background(), uuid.Nil, "new-hash")
 
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }

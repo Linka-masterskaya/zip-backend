@@ -5,26 +5,29 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 )
 
-type fakeUserRepo struct {
+type fakeChangePasswordRepo struct {
 	user        *UserPassword
 	getErr      error
 	updateErr   error
-	updatedID   string
+	updatedID   uuid.UUID
 	updatedHash string
 }
 
-func (f *fakeUserRepo) Get(ctx context.Context, id string) (*UserPassword, error) {
+func (f *fakeChangePasswordRepo) Get(ctx context.Context, id uuid.UUID) (*UserPassword, error) {
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
 	return f.user, nil
 }
 
-func (f *fakeUserRepo) Update(ctx context.Context, id string, newHash string) error {
+func (f *fakeChangePasswordRepo) Update(ctx context.Context, id uuid.UUID, newHash string) error {
 	if f.updateErr != nil {
 		return f.updateErr
 	}
@@ -52,88 +55,97 @@ func hashPassword(t *testing.T, password string) string {
 	return string(hash)
 }
 
-func TestUserService_ChangePassword_Success(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
-	sessions := &fakeSessionRevoker{}
-	svc := NewUserService(repo, sessions)
+var testUserID = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 
-	err := svc.ChangePassword(context.Background(), "user-1", "newpassword", "oldpassword", "newpassword")
+func ctxWithUser(id uuid.UUID) context.Context {
+	return authctx.SetUserIDToCtx(context.Background(), id)
+}
+
+func TestChangePassword_Success(t *testing.T) {
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}}
+	sessions := &fakeSessionRevoker{}
+	svc := NewChangePasswordService(repo, sessions)
+
+	err := svc.ChangePassword(ctxWithUser(testUserID), "newpassword", "oldpassword")
 
 	require.NoError(t, err)
-	require.Equal(t, "user-1", repo.updatedID)
+	require.Equal(t, testUserID, repo.updatedID)
 	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(repo.updatedHash), []byte("newpassword")))
 	require.True(t, sessions.revokeCalled)
-	require.Equal(t, "user-1", sessions.revokedID)
+	require.Equal(t, testUserID.String(), sessions.revokedID)
 }
 
-func TestUserService_ChangePassword_TooShort(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
+func TestChangePassword_NoUserInContext(t *testing.T) {
+	repo := &fakeChangePasswordRepo{}
 	sessions := &fakeSessionRevoker{}
-	svc := NewUserService(repo, sessions)
+	svc := NewChangePasswordService(repo, sessions)
 
-	err := svc.ChangePassword(context.Background(), "user-1", "short", "oldpassword", "short")
+	err := svc.ChangePassword(context.Background(), "newpassword", "oldpassword")
 
-	require.ErrorIs(t, err, ErrPasswordLen)
+	require.ErrorIs(t, err, apperr.ErrUnauthorized)
 	require.False(t, sessions.revokeCalled)
-	require.Empty(t, repo.updatedID)
 }
 
-func TestUserService_ChangePassword_Mismatch(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
+func TestChangePassword_TooShort(t *testing.T) {
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}}
 	sessions := &fakeSessionRevoker{}
-	svc := NewUserService(repo, sessions)
+	svc := NewChangePasswordService(repo, sessions)
 
-	err := svc.ChangePassword(context.Background(), "user-1", "newpassword", "oldpassword", "somethingelse")
+	err := svc.ChangePassword(ctxWithUser(testUserID), "short", "oldpassword")
 
-	require.ErrorIs(t, err, ErrOverlap)
+	var appErr *apperr.AppError
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, apperr.ErrBadRequest.Code, appErr.Code)
 	require.False(t, sessions.revokeCalled)
-	require.Empty(t, repo.updatedID)
+	require.Empty(t, repo.updatedHash)
 }
 
-func TestUserService_ChangePassword_GetError(t *testing.T) {
+func TestChangePassword_GetError(t *testing.T) {
 	wantErr := errors.New("user not found")
-	repo := &fakeUserRepo{getErr: wantErr}
+	repo := &fakeChangePasswordRepo{getErr: wantErr}
 	sessions := &fakeSessionRevoker{}
-	svc := NewUserService(repo, sessions)
+	svc := NewChangePasswordService(repo, sessions)
 
-	err := svc.ChangePassword(context.Background(), "user-1", "newpassword", "oldpassword", "newpassword")
+	err := svc.ChangePassword(ctxWithUser(testUserID), "newpassword", "oldpassword")
 
 	require.ErrorIs(t, err, wantErr)
 	require.False(t, sessions.revokeCalled)
 }
 
-func TestUserService_ChangePassword_WrongOldPassword(t *testing.T) {
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
+func TestChangePassword_WrongOldPassword(t *testing.T) {
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}}
 	sessions := &fakeSessionRevoker{}
-	svc := NewUserService(repo, sessions)
+	svc := NewChangePasswordService(repo, sessions)
 
-	err := svc.ChangePassword(context.Background(), "user-1", "newpassword", "wrongoldpassword", "newpassword")
+	err := svc.ChangePassword(ctxWithUser(testUserID), "newpassword", "wrongoldpassword")
 
-	require.ErrorIs(t, err, ErrOldPassword)
+	var appErr *apperr.AppError
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, apperr.ErrBadRequest.Code, appErr.Code)
 	require.False(t, sessions.revokeCalled)
-	require.Empty(t, repo.updatedID)
+	require.Empty(t, repo.updatedHash)
 }
 
-func TestUserService_ChangePassword_UpdateError(t *testing.T) {
+func TestChangePassword_UpdateError(t *testing.T) {
 	wantErr := errors.New("update failed")
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}, updateErr: wantErr}
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}, updateErr: wantErr}
 	sessions := &fakeSessionRevoker{}
-	svc := NewUserService(repo, sessions)
+	svc := NewChangePasswordService(repo, sessions)
 
-	err := svc.ChangePassword(context.Background(), "user-1", "newpassword", "oldpassword", "newpassword")
+	err := svc.ChangePassword(ctxWithUser(testUserID), "newpassword", "oldpassword")
 
 	require.ErrorIs(t, err, wantErr)
 	require.False(t, sessions.revokeCalled)
 }
 
-func TestUserService_ChangePassword_RevokeSessionsError(t *testing.T) {
-	wantErr := errors.New("revoke failed")
-	repo := &fakeUserRepo{user: &UserPassword{ID: "user-1", Password: hashPassword(t, "oldpassword")}}
-	sessions := &fakeSessionRevoker{revokeErr: wantErr}
-	svc := NewUserService(repo, sessions)
+func TestChangePassword_RevokeSessionsErrorIsSwallowed(t *testing.T) {
+	repo := &fakeChangePasswordRepo{user: &UserPassword{ID: testUserID, Password: hashPassword(t, "oldpassword")}}
+	sessions := &fakeSessionRevoker{revokeErr: errors.New("revoke failed")}
+	svc := NewChangePasswordService(repo, sessions)
 
-	err := svc.ChangePassword(context.Background(), "user-1", "newpassword", "oldpassword", "newpassword")
+	err := svc.ChangePassword(ctxWithUser(testUserID), "newpassword", "oldpassword")
 
-	require.ErrorIs(t, err, wantErr)
-	require.Equal(t, "user-1", repo.updatedID)
+	require.NoError(t, err)
+	require.Equal(t, testUserID, repo.updatedID)
+	require.True(t, sessions.revokeCalled)
 }

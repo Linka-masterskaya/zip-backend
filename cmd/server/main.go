@@ -150,12 +150,12 @@ func run() error {
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.DeleteAvatar)),
 	)
 
-	userRepo := profile.NewUserRepo(deps.db)
-	userService := profile.NewUserService(userRepo, deps.redis)
-	userHandler := profile.NewUserHandler(userService)
+	changePasswordRepo := profile.NewChangePasswordRepo(deps.db)
+	changePasswordService := profile.NewChangePasswordService(changePasswordRepo, deps.redis)
+	changePasswordHandler := profile.NewChangePasswordHandler(changePasswordService)
 	mainMux.Handle(
 		"POST /api/v1/profile/me/password",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(userHandler.ChangePassword)),
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(changePasswordHandler.ChangePassword)),
 	)
 
 	wrappedHandler := middleware.Chain(

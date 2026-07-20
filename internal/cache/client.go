@@ -176,6 +176,7 @@ func (c *Client) StoreRefresh(ctx context.Context, jti string, rec RefreshRecord
 		pipe.Expire(ctx, tokenKey, ttl)
 		pipe.Set(ctx, familyKey, "active", ttl)
 		pipe.SAdd(ctx, sessionsKey, rec.FID)
+		pipe.Expire(ctx, sessionsKey, ttl)
 		return nil
 	})
 	if err != nil {
@@ -194,14 +195,18 @@ func (c *Client) RevokeAllSessions(ctx context.Context, userID string) error {
 	if err != nil {
 		return fmt.Errorf("redis.RevokeAllSessions: %w", err)
 	}
-
-	for _, fid := range fids {
-		if err := c.RevokeFamily(ctx, fid); err != nil {
-			return fmt.Errorf("redis.RevokeAllSessions: %w", err)
-		}
+	if len(fids) == 0 {
+		return nil
 	}
 
-	if err := c.rdb.Del(ctx, key).Err(); err != nil {
+	_, err = c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		for _, fid := range fids {
+			pipe.Set(ctx, "refresh_family:"+fid, "revoked", redis.KeepTTL)
+		}
+		pipe.Del(ctx, key)
+		return nil
+	})
+	if err != nil {
 		return fmt.Errorf("redis.RevokeAllSessions: %w", err)
 	}
 	return nil
@@ -212,12 +217,15 @@ func (c *Client) RotateRefresh(ctx context.Context, req RotateRefreshRequest) er
 	oldKey := "refresh:" + req.OldJTI
 	newKey := "refresh:" + req.NewJTI
 	familyKey := "refresh_family:" + req.NewRecord.FID
+	sessionsKey := "user_sessions:" + req.NewRecord.UserID
 
 	_, err := c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.HSet(ctx, oldKey, "status", "revoked")
 		pipe.HSet(ctx, newKey, req.NewRecord)
 		pipe.Expire(ctx, newKey, req.TTL)
 		pipe.Expire(ctx, familyKey, req.TTL)
+		pipe.SAdd(ctx, sessionsKey, req.NewRecord.FID)
+		pipe.Expire(ctx, sessionsKey, req.TTL)
 		return nil
 	})
 	if err != nil {

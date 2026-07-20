@@ -2,45 +2,43 @@ package profile
 
 import (
 	"context"
-	"errors"
+	"log/slog"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/auth"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"golang.org/x/crypto/bcrypt"
 )
-
-var ErrPasswordLen = errors.New("password length is less than 8")
-var ErrPasswordTooLong = errors.New("password length is more than 72 bytes")
-var ErrOverlap = errors.New("the new password does not match the duplicate one")
-var ErrOldPassword = errors.New("incorrect old password")
 
 // SessionRevoker revokes all of a user's active sessions.
 type SessionRevoker interface {
 	RevokeAllSessions(ctx context.Context, userID string) error
 }
 
-type UserService struct {
-	repo     UserRepo
+type ChangePasswordService struct {
+	repo     ChangePasswordRepo
 	sessions SessionRevoker
 }
 
-func NewUserService(repo UserRepo, sessions SessionRevoker) *UserService {
-	return &UserService{repo: repo, sessions: sessions}
+func NewChangePasswordService(repo ChangePasswordRepo, sessions SessionRevoker) *ChangePasswordService {
+	return &ChangePasswordService{repo: repo, sessions: sessions}
 }
-func (s *UserService) ChangePassword(ctx context.Context, id, newPassword, oldPassword, repeadPassword string) error {
-	if len(newPassword) < 8 {
-		return ErrPasswordLen
-	}
-	if len(newPassword) > 72 {
-		return ErrPasswordTooLong
-	}
-	if newPassword != repeadPassword {
-		return ErrOverlap
+func (s *ChangePasswordService) ChangePassword(ctx context.Context, newPassword, oldPassword string) error {
+	id, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return err
 	}
 	user, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return err
 	}
+	err = auth.ValidatePassword(newPassword)
+	if err != nil {
+		return err
+	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPassword)); err != nil {
-		return ErrOldPassword
+		return apperr.ErrBadRequest.WithMessage("incorrect old password")
 	}
 	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
@@ -49,8 +47,11 @@ func (s *UserService) ChangePassword(ctx context.Context, id, newPassword, oldPa
 	if err := s.repo.Update(ctx, id, string(newHash)); err != nil {
 		return err
 	}
-	if err := s.sessions.RevokeAllSessions(ctx, id); err != nil {
-		return err
+	if err := s.sessions.RevokeAllSessions(ctx, id.String()); err != nil {
+		slog.Error("revoke all sessions after password change failed",
+			"user_id", id.String(),
+			logger.Err(err),
+		)
 	}
-	return err
+	return nil
 }
