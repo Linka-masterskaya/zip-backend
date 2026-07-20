@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
-	"github.com/Linka-masterskaya/zip-backend/internal/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,7 +63,7 @@ func TestMailpit_SendEmailVerify(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", domain.EmailVerify, domain.EmailData{
+	err = sender.Send(ctx, "test@example.com", EmailVerify, EmailData{
 		Token:    "verify-token-123",
 		Username: "TestUser",
 		Email:    "test@example.com",
@@ -85,7 +85,7 @@ func TestMailpit_SendPasswordReset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", domain.PasswordReset, domain.EmailData{
+	err = sender.Send(ctx, "test@example.com", PasswordReset, EmailData{
 		Token:    "reset-token-456",
 		Username: "TestUser",
 		Email:    "test@example.com",
@@ -107,7 +107,7 @@ func TestMailpit_SendEmailChange(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", domain.EmailChange, domain.EmailData{
+	err = sender.Send(ctx, "test@example.com", EmailChange, EmailData{
 		Token:    "change-token-789",
 		Username: "TestUser",
 		Email:    "old@example.com",
@@ -129,13 +129,13 @@ func TestMailpit_SendAllTemplates(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		template domain.Template
-		data     domain.EmailData
+		template Template
+		data     EmailData
 	}{
 		{
 			name:     "Email Verification",
-			template: domain.EmailVerify,
-			data: domain.EmailData{
+			template: EmailVerify,
+			data: EmailData{
 				Token:    "verify-token-123",
 				Username: "TestUser",
 				Email:    "test@example.com",
@@ -143,8 +143,8 @@ func TestMailpit_SendAllTemplates(t *testing.T) {
 		},
 		{
 			name:     "Password Reset",
-			template: domain.PasswordReset,
-			data: domain.EmailData{
+			template: PasswordReset,
+			data: EmailData{
 				Token:    "reset-token-456",
 				Username: "TestUser",
 				Email:    "test@example.com",
@@ -152,8 +152,8 @@ func TestMailpit_SendAllTemplates(t *testing.T) {
 		},
 		{
 			name:     "Email Change",
-			template: domain.EmailChange,
-			data: domain.EmailData{
+			template: EmailChange,
+			data: EmailData{
 				Token:    "change-token-789",
 				Username: "TestUser",
 				Email:    "old@example.com",
@@ -193,7 +193,7 @@ func TestMailpit_SendWithSpecialCharacters(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", domain.EmailChange, domain.EmailData{
+	err = sender.Send(ctx, "test@example.com", EmailChange, EmailData{
 		Token:    token,
 		Username: username,
 		Email:    email,
@@ -216,7 +216,7 @@ func TestMailpit_SendWithEmptyData(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", domain.EmailVerify, domain.EmailData{
+	err = sender.Send(ctx, "test@example.com", EmailVerify, EmailData{
 		Token: "minimal-token",
 		// Username, Email - пустые
 	})
@@ -245,7 +245,7 @@ func TestMailpit_SendMultipleRecipients(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			err := sender.Send(ctx, recipient, domain.EmailVerify, domain.EmailData{
+			err := sender.Send(ctx, recipient, EmailVerify, EmailData{
 				Token:    "test-token-" + recipient,
 				Username: "TestUser",
 				Email:    recipient,
@@ -280,8 +280,8 @@ func TestMailpit_ConcurrentSends(t *testing.T) {
 
 			err := sender.Send(ctx,
 				"test@example.com",
-				domain.EmailVerify,
-				domain.EmailData{
+				EmailVerify,
+				EmailData{
 					Token:    "concurrent-token-" + string(rune('A'+id)),
 					Username: "TestUser",
 					Email:    "test@example.com",
@@ -318,7 +318,7 @@ func TestMailpit_InvalidEmail(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "invalid-email", domain.EmailVerify, domain.EmailData{
+	err = sender.Send(ctx, "invalid-email", EmailVerify, EmailData{
 		Token:    "test-token",
 		Username: "TestUser",
 		Email:    "test@example.com",
@@ -342,7 +342,7 @@ func TestMailpit_TemplateNotFound(t *testing.T) {
 	defer cancel()
 
 	// Используем несуществующий шаблон
-	err = sender.Send(ctx, "test@example.com", "nonexistent", domain.EmailData{
+	err = sender.Send(ctx, "test@example.com", "nonexistent", EmailData{
 		Token:    "test-token",
 		Username: "TestUser",
 		Email:    "test@example.com",
@@ -365,7 +365,7 @@ func TestMailpit_EmptyHTML(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", domain.EmailVerify, domain.EmailData{
+	err = sender.Send(ctx, "test@example.com", EmailVerify, EmailData{
 		Token:    "",
 		Username: "",
 		Email:    "",

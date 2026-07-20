@@ -145,7 +145,7 @@ func run() error {
 	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
 
 	profileRepo := profile.NewRepository(deps.db)
-	profileService := profile.NewService(profileRepo, deps.storage)
+	profileService := profile.NewService(profileRepo, deps.storage, deps.mailer, profile.EmailConfig{EmailChangeTTL: 24 * time.Hour, EmailVerifyTTL: 24 * time.Hour})
 	profileHandler := profile.NewHandler(profileService)
 	mainMux.Handle(
 		"PUT /api/v1/profile/me/avatar",
@@ -154,6 +154,14 @@ func run() error {
 	mainMux.Handle(
 		"DELETE /api/v1/profile/me/avatar",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.DeleteAvatar)),
+	)
+	mainMux.Handle(
+		"POST /api/v1/profile/me/email",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.RequestEmailChange)),
+	)
+	mainMux.Handle(
+		"POST /api/v1/profile/me/email/confirm",
+		middleware.ErrorMiddleware(profileHandler.ConfirmEmailChange),
 	)
 
 	changePasswordRepo := profile.NewChangePasswordRepo(deps.db)
