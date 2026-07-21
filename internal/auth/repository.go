@@ -74,6 +74,38 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 	return &user, nil
 }
 
+func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
+	var user User
+
+	query := `
+		SELECT
+			u.id,
+			u.org_id,
+			ac.password_hash,
+			ac.role,
+			u.email_verified
+		FROM users u
+		JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE u.id = $1
+	`
+
+	err := r.db.QueryRow(ctx, query, userID).Scan(
+		&user.ID,
+		&user.OrgID,
+		&user.PasswordHash,
+		&user.Role,
+		&user.EmailVerified,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authRepo.GetUserByID: %w", err)
+	}
+
+	return &user, nil
+}
+
 func (r *authRepo) withTx(tx pgx.Tx) authRepoIface {
 	return &authRepo{
 		db:   tx,

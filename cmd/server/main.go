@@ -114,6 +114,11 @@ func run() error {
 	)
 
 	mainMux.Handle(
+		"POST /auth/refresh",
+		middleware.ErrorMiddleware(authHandler.Refresh),
+	)
+
+	mainMux.Handle(
 		"POST /auth/forgot",
 		forgotRateLimit(
 			middleware.ErrorMiddleware(authHandler.ForgotPassword),
