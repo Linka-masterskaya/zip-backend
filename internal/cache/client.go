@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -120,8 +121,10 @@ func (c *Client) Allow(ctx context.Context, req RateLimitRequest) (bool, int64, 
 
 // RefreshRecord is a refresh token stored as a Redis hash under refresh:{jti}.
 type RefreshRecord struct {
-	FID    string `redis:"fid"`
-	Status string `redis:"status"`
+	FID            string `redis:"fid"`
+	Status         string `redis:"status"`
+	UserID         string `redis:"user_id"`
+	SessionVersion int64  `redis:"sess_ver"`
 }
 
 // RotateRefreshRequest carries data to rotate a refresh token atomically.
@@ -162,12 +165,56 @@ func (c *Client) RevokeFamily(ctx context.Context, fid string) error {
 	return nil
 }
 
+// GetUserSessionVersion returns the current session-version counter for a
+// user, or 0 if the user has never had their sessions bulk-revoked.
+func (c *Client) GetUserSessionVersion(ctx context.Context, userID string) (int64, error) {
+	val, err := c.getString(ctx, "user_session_version:"+userID)
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("redis.GetUserSessionVersion: %w", err)
+	}
+	version, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("redis.GetUserSessionVersion: parse: %w", err)
+	}
+	return version, nil
+}
+
+// The IsSessionRevoked function reports if the record is no longer valid: either its family
+// has been revoked individually (RevokeFamily), or it was released before the last
+// mass revocation of user sessions (RevokeAllSessions).
+func (c *Client) IsSessionRevoked(ctx context.Context, rec RefreshRecord) (bool, error) {
+	familyRevoked, err := c.IsFamilyRevoked(ctx, rec.FID)
+	if err != nil {
+		return false, fmt.Errorf("redis.IsSessionRevoked: %w", err)
+	}
+	if familyRevoked {
+		return true, nil
+	}
+
+	version, err := c.GetUserSessionVersion(ctx, rec.UserID)
+	if err != nil {
+		return false, fmt.Errorf("redis.IsSessionRevoked: %w", err)
+	}
+	return rec.SessionVersion < version, nil
+}
+
 // StoreRefresh saves a refresh token and marks its family active, with ttl.
+// The record is stamped with the user's current session version
+// (RevokeAllSessions) so it can later be recognized as stale in bulk.
 func (c *Client) StoreRefresh(ctx context.Context, jti string, rec RefreshRecord, ttl time.Duration) error {
+	version, err := c.GetUserSessionVersion(ctx, rec.UserID)
+	if err != nil {
+		return fmt.Errorf("redis.StoreRefresh: %w", err)
+	}
+	rec.SessionVersion = version
+
 	tokenKey := "refresh:" + jti
 	familyKey := "refresh_family:" + rec.FID
 
-	_, err := c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+	_, err = c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.HSet(ctx, tokenKey, rec)
 		pipe.Expire(ctx, tokenKey, ttl)
 		pipe.Set(ctx, familyKey, "active", ttl)
@@ -179,13 +226,27 @@ func (c *Client) StoreRefresh(ctx context.Context, jti string, rec RefreshRecord
 	return nil
 }
 
+// RevokeAllSessions invalidates every refresh token issued so far for a user.
+func (c *Client) RevokeAllSessions(ctx context.Context, userID string) error {
+	if err := c.rdb.Incr(ctx, "user_session_version:"+userID).Err(); err != nil {
+		return fmt.Errorf("redis.RevokeAllSessions: %w", err)
+	}
+	return nil
+}
+
 // RotateRefresh atomically revokes the old token, stores the new one, and extends the family TTL.
 func (c *Client) RotateRefresh(ctx context.Context, req RotateRefreshRequest) error {
+	version, err := c.GetUserSessionVersion(ctx, req.NewRecord.UserID)
+	if err != nil {
+		return fmt.Errorf("redis.RotateRefresh: %w", err)
+	}
+	req.NewRecord.SessionVersion = version
+
 	oldKey := "refresh:" + req.OldJTI
 	newKey := "refresh:" + req.NewJTI
 	familyKey := "refresh_family:" + req.NewRecord.FID
 
-	_, err := c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+	_, err = c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.HSet(ctx, oldKey, "status", "revoked")
 		pipe.HSet(ctx, newKey, req.NewRecord)
 		pipe.Expire(ctx, newKey, req.TTL)
