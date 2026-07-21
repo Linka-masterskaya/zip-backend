@@ -24,11 +24,12 @@ var (
 	ErrInternal        = &AppError{Code: "INTERNAL", HTTPStatus: http.StatusInternalServerError, Message: "internal server error"}
 	ErrPayloadTooLarge = &AppError{Code: "PAYLOAD_TOO_LARGE", HTTPStatus: http.StatusRequestEntityTooLarge, Message: "payload too large"}
 
-	ErrUserNotFound       = &AppError{Code: "USER_NOT_FOUND", HTTPStatus: http.StatusNotFound, Message: "user not found"}
-	ErrVerifyTokenInvalid = &AppError{Code: "VERIFY_TOKEN_INVALID", HTTPStatus: http.StatusBadRequest, Message: "verification link is invalid or expired"}
-	ErrJWTTokenInvalid    = &AppError{Code: "JWT_TOKEN_INVALID", HTTPStatus: http.StatusUnauthorized, Message: "invalid or expired token"}
-	ErrTooManyRequests    = &AppError{Code: "TOO_MANY_REQUESTS", HTTPStatus: http.StatusTooManyRequests, Message: "too many requests, please try again later"}
-	ErrPasswordInvalid    = &AppError{Code: "CURRENT_PASSWORD_INVALID", HTTPStatus: http.StatusBadRequest, Message: "invalid current password"}
+	ErrUserNotFound           = &AppError{Code: "USER_NOT_FOUND", HTTPStatus: http.StatusNotFound, Message: "user not found"}
+	ErrVerifyTokenInvalid     = &AppError{Code: "VERIFY_TOKEN_INVALID", HTTPStatus: http.StatusBadRequest, Message: "verification link is invalid or expired"}
+	ErrJWTTokenInvalid        = &AppError{Code: "JWT_TOKEN_INVALID", HTTPStatus: http.StatusUnauthorized, Message: "invalid or expired token"}
+	ErrTooManyRequests        = &AppError{Code: "TOO_MANY_REQUESTS", HTTPStatus: http.StatusTooManyRequests, Message: "too many requests, please try again later"}
+	ErrInvalidResetToken      = &AppError{Code: "INVALID_RESET_TOKEN", HTTPStatus: http.StatusBadRequest, Message: "invalid reset token"}
+	ErrInvalidCurrentPassword = &AppError{Code: "CURRENT_PASSWORD_INVALID", HTTPStatus: http.StatusBadRequest, Message: "invalid current password"}
 )
 
 func (e *AppError) Error() string {

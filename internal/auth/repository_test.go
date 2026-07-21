@@ -455,3 +455,147 @@ func TestGetUserContactForResend(t *testing.T) {
 		assert.ErrorIs(t, err, apperr.ErrUserNotFound)
 	})
 }
+
+func TestCreatePasswordResetToken(t *testing.T) {
+	repo := NewAuthRepo(testPool)
+
+	t.Run("inserts token hash with password reset purpose", func(t *testing.T) {
+		truncateAll(t)
+		ctx := testCtx(t)
+
+		userID := seedUser(t, testPool)
+		token, err := repo.CreatePasswordResetToken(ctx, userID.String(), time.Hour)
+		require.NoError(t, err)
+		require.NotEmpty(t, token)
+
+		rawToken, err := decodePasswordResetToken(token)
+		require.NoError(t, err)
+		expectedHash := hashPasswordResetToken(rawToken)
+
+		var (
+			purpose   string
+			tokenHash []byte
+			usedAt    *time.Time
+			expiresAt time.Time
+		)
+		err = testPool.QueryRow(ctx, `
+			SELECT purpose, token_hash, used_at, expires_at
+			FROM verify_tokens
+			WHERE user_id = $1
+		`, userID).Scan(&purpose, &tokenHash, &usedAt, &expiresAt)
+		require.NoError(t, err)
+
+		assert.Equal(t, passwordResetTokenPurpose, purpose)
+		assert.Equal(t, expectedHash, tokenHash)
+		assert.Nil(t, usedAt)
+		assert.True(t, expiresAt.After(time.Now()))
+	})
+}
+
+func TestResetPasswordByToken(t *testing.T) {
+	repo := NewAuthRepo(testPool)
+
+	t.Run("valid token updates password and is single use", func(t *testing.T) {
+		truncateAll(t)
+		ctx := testCtx(t)
+
+		userID := seedUser(t, testPool)
+		seedAuthCred(t, testPool, userID, []byte("encrypted-email"), "defectologist")
+		token, err := repo.CreatePasswordResetToken(ctx, userID.String(), time.Hour)
+		require.NoError(t, err)
+
+		gotUserID, err := repo.ResetPasswordByToken(ctx, token, "new-password-hash")
+		require.NoError(t, err)
+		assert.Equal(t, userID.String(), gotUserID)
+
+		var (
+			passwordHash string
+			usedAt       *time.Time
+		)
+		err = testPool.QueryRow(ctx, `
+			SELECT ac.password_hash, vt.used_at
+			FROM auth_cred ac
+			JOIN verify_tokens vt ON vt.user_id = ac.user_id
+			WHERE ac.user_id = $1 AND vt.purpose = $2
+		`, userID, passwordResetTokenPurpose).Scan(&passwordHash, &usedAt)
+		require.NoError(t, err)
+		assert.Equal(t, "new-password-hash", passwordHash)
+		assert.NotNil(t, usedAt)
+
+		_, err = repo.ResetPasswordByToken(ctx, token, "another-password-hash")
+		assert.ErrorIs(t, err, apperr.ErrInvalidResetToken)
+	})
+
+	t.Run("expired token is invalid and password is not changed", func(t *testing.T) {
+		truncateAll(t)
+		ctx := testCtx(t)
+
+		userID := seedUser(t, testPool)
+		seedAuthCred(t, testPool, userID, []byte("encrypted-email"), "defectologist")
+		tokenID, err := uuid.NewV7()
+		require.NoError(t, err)
+		token, rawToken, err := newPasswordResetToken()
+		require.NoError(t, err)
+
+		_, err = testPool.Exec(ctx, `
+			INSERT INTO verify_tokens (id, user_id, purpose, token_hash, expires_at)
+			VALUES ($1, $2, $3, $4, $5)
+		`, tokenID, userID, passwordResetTokenPurpose, hashPasswordResetToken(rawToken), time.Now().Add(-time.Hour))
+		require.NoError(t, err)
+
+		_, err = repo.ResetPasswordByToken(ctx, token, "new-password-hash")
+		assert.ErrorIs(t, err, apperr.ErrInvalidResetToken)
+
+		var passwordHash *string
+		err = testPool.QueryRow(ctx, `SELECT password_hash FROM auth_cred WHERE user_id = $1`, userID).Scan(&passwordHash)
+		require.NoError(t, err)
+		assert.Nil(t, passwordHash)
+	})
+
+	t.Run("token with another purpose is invalid", func(t *testing.T) {
+		truncateAll(t)
+		ctx := testCtx(t)
+
+		userID := seedUser(t, testPool)
+		seedAuthCred(t, testPool, userID, []byte("encrypted-email"), "defectologist")
+		tokenID, err := uuid.NewV7()
+		require.NoError(t, err)
+		token, rawToken, err := newPasswordResetToken()
+		require.NoError(t, err)
+
+		_, err = testPool.Exec(ctx, `
+			INSERT INTO verify_tokens (id, user_id, purpose, token_hash, expires_at)
+			VALUES ($1, $2, 'email_verify', $3, $4)
+		`, tokenID, userID, hashPasswordResetToken(rawToken), time.Now().Add(time.Hour))
+		require.NoError(t, err)
+
+		_, err = repo.ResetPasswordByToken(ctx, token, "new-password-hash")
+		assert.ErrorIs(t, err, apperr.ErrInvalidResetToken)
+	})
+
+	t.Run("missing auth credentials rolls back consumed token", func(t *testing.T) {
+		truncateAll(t)
+		ctx := testCtx(t)
+
+		userID := seedUser(t, testPool)
+		token, err := repo.CreatePasswordResetToken(ctx, userID.String(), time.Hour)
+		require.NoError(t, err)
+
+		_, err = repo.ResetPasswordByToken(ctx, token, "new-password-hash")
+		require.Error(t, err)
+
+		var appErr *apperr.AppError
+		require.ErrorAs(t, err, &appErr)
+		assert.Equal(t, apperr.ErrInternal.Code, appErr.Code)
+		assert.Equal(t, "password credentials not found", appErr.Message)
+
+		var usedAt *time.Time
+		err = testPool.QueryRow(ctx, `
+			SELECT used_at
+			FROM verify_tokens
+			WHERE user_id = $1 AND purpose = $2
+		`, userID, passwordResetTokenPurpose).Scan(&usedAt)
+		require.NoError(t, err)
+		assert.Nil(t, usedAt)
+	})
+}
