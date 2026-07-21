@@ -7,14 +7,19 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 )
 
-func (r RegisterRequest) Validate() error {
-	passwordLen := len(r.Password)
+func ValidatePassword(password string) error {
+	passwordLen := len(password)
 
 	if passwordLen < 8 || passwordLen > 72 {
 		return apperr.ErrBadRequest.WithMessage("password must be 8-72 bytes long")
 	}
 
-	email := strings.TrimSpace(r.Email)
+	return nil
+}
+
+func ValidateEmail(email string) error {
+	email = strings.TrimSpace(email)
+
 	addr, err := mail.ParseAddress(email)
 	if err != nil || addr.Address != email {
 		return apperr.ErrBadRequest.WithMessage("invalid email")

@@ -210,8 +210,11 @@ func (h *authHandlers) Register(w http.ResponseWriter, r *http.Request) error {
 		return apperr.ErrBadRequest.WithError(err)
 	}
 
-	if err := req.Validate(); err != nil {
-		return apperr.ErrBadRequest.WithError(err)
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
+	}
+	if err := ValidatePassword(req.Password); err != nil {
+		return err
 	}
 
 	resp, err := h.svc.Register(r.Context(), req)
