@@ -63,7 +63,7 @@ func run() error {
 		}
 	}()
 
-	packRepo := pack.NewRepository(deps.redis)
+	packRepo := pack.NewRepository(deps.db)
 	packService := pack.NewService(packRepo, deps.pub)
 	packHandler := pack.NewHandler(packService)
 
@@ -99,10 +99,14 @@ func run() error {
 	verifyResendRateLimit := middleware.RateLimit(deps.redis, "verify-resend", int64(deps.cfg.Auth.VerifyResendRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	emailConfirmRateLimit := middleware.RateLimit(deps.redis, "email-confirm", int64(deps.cfg.Auth.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 
+	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 	mainMux := http.NewServeMux()
-	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.CreatePack)))
-	mainMux.Handle("GET /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(packHandler.GetPack)))
-	mainMux.Handle("GET /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.ListPacks)))
+	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.CreatePack))))
+	mainMux.Handle("GET /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.GetPack))))
+	mainMux.Handle("GET /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.ListPacks))))
+	mainMux.Handle("PATCH /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.UpdatePack))))
+	mainMux.Handle("DELETE /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.DeletePack))))
+	mainMux.Handle("POST /api/v1/packs/{id}/move", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.MovePack))))
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
@@ -141,7 +145,6 @@ func run() error {
 		),
 	)
 
-	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
 
 	profileRepo := profile.NewRepository(deps.db)
