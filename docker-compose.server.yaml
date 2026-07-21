@@ -1,0 +1,221 @@
+services:
+  zip-backend:
+    container_name: zip-backend
+    image: ghcr.io/linka-masterskaya/zip-backend/server:${VERSION}  # тянет готовый образ из GHCR
+    restart: unless-stopped  # перезапускать всегда, кроме ручной остановки
+    expose:
+      - "8080"  # видно только внутри Docker network
+      - "9091"
+    ports:
+      - "9091:9091"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - linka-net
+
+  postgres:
+    container_name: linka_db
+    image: postgres:17-alpine # стабильная версия
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # данные переживают перезапуск
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - linka-net
+
+  redis:
+    container_name: linka_redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    expose:
+      - "6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - linka-net
+
+  nats:
+    container_name: linka_nats
+    image: nats:2.14-alpine
+    restart: unless-stopped
+    expose:
+      - "4222"
+      - "8222"
+    command: [ "-js", "-m", "8222", "--sd", "/data" ]
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - linka-net
+
+  minio:
+    container_name: linka_minio
+    image: minio/minio:RELEASE.2025-10-15T17-29-55Z # minio более не поддерживается на беспплатной основе
+    restart: unless-stopped
+    expose:
+      - "9000"
+      - "9001"
+    command: [ "server", "/data", "--console-address", ":9001" ]
+    volumes:
+      - minio_data:/data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    healthcheck:
+      # mc ready local — встроенная утилита проверки готовности дисков MinIO
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - linka-net
+
+  loki:
+    container_name: linka_loki
+    image: grafana/loki:3.7.0
+    restart: unless-stopped
+    expose:
+      - "3100"
+    volumes:
+      - loki_data:/loki
+      - ./deploy/loki/loki-config.yml:/etc/loki/config.yml
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: -config.file=/etc/loki/config.yml
+    networks:
+      - linka-net
+
+  alloy:
+    container_name: linka_alloy
+    image: grafana/alloy:v1.17.0
+    restart: unless-stopped
+    volumes:
+      - ./deploy/alloy/alloy-config.alloy:/etc/alloy/config.alloy
+      - /var/run/docker.sock:/var/run/docker.sock
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:12345/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    command: run --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
+    networks:
+      - linka-net
+
+  prometheus:
+    container_name: linka_prometheus
+    image: prom/prometheus:v2.51.0
+    restart: unless-stopped
+    expose:
+      - "9090"
+    volumes:
+      - prometheus_data:/prometheus
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      zip-backend:
+        condition: service_started
+    networks:
+      - linka-net
+
+  grafana:
+    container_name: linka_grafana
+    image: grafana/grafana:11.6.0
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      GF_LOG_LEVEL: warn
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL}
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      prometheus:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - linka-net
+
+  caddy:
+    container_name: linka_caddy
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /home/${DEPLOY_USER}/frontend/dist:/srv/frontend:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    env_file:
+      - .env
+    depends_on:
+      zip-backend:
+        condition: service_started
+    networks:
+      - linka-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  nats_data:
+  minio_data:
+  loki_data:
+  alloy_data:
+  grafana_data:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+
+networks:
+  linka-net:

@@ -2,7 +2,7 @@ name: Build and Push Docker images
 
 on:
   push:
-    branches: [main]
+    branches: [main, deploy-test]
 
 env:
   REGISTRY: ghcr.io
@@ -54,6 +54,8 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+          build-args: |
+            VERSION=${{ github.sha }}
 
       - name: Docker meta AI Worker
         id: meta_ai_worker
@@ -76,3 +78,84 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Prepare server directories
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: mkdir -p ~/zip-backend ~/frontend/dist
+
+      - name: Copy files to server
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          source: "docker-compose.server.yaml,deploy/,scripts/"
+          target: "~/zip-backend"
+
+      - name: Set version
+        id: version
+        run: echo "tag=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        
+      - name: Deploy
+        uses: appleboy/ssh-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_HOST: ghcr.io
+          REGISTRY_USERNAME: ${{ github.actor }}
+          DEPLOY_VERSION: ${{ steps.version.outputs.tag }}
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          envs: GITHUB_TOKEN,REGISTRY_HOST,REGISTRY_USERNAME,DEPLOY_VERSION
+          script: |
+            cd ~/zip-backend
+
+            cat > .env << 'ENVFILE'
+APP_ENV=prod
+DB_URL=${{ secrets.DB_URL }}
+DEPLOY_USER=${{ secrets.DEPLOY_USER }}
+REDIS_URL=${{ secrets.REDIS_URL }}
+REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+JWT_SECRET=${{ secrets.JWT_SECRET }}
+CRYPTO_AES_KEY=${{ secrets.CRYPTO_AES_KEY }}
+CRYPTO_HMAC_KEY=${{ secrets.CRYPTO_HMAC_KEY }}
+MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }}
+MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }}
+MINIO_ENDPOINT=linka_minio:9000
+MINIO_USE_SSL=false
+NATS_CONNECTION_URL=nats://linka_nats:4222
+CADDY_DOMAIN_NAME=${{ vars.CADDY_DOMAIN_NAME }}
+CADDY_LETSENCRYPT_EMAIL=${{ vars.CADDY_LETSENCRYPT_EMAIL }}
+SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+GRAFANA_ADMIN_PASSWORD=${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+GRAFANA_ROOT_URL=${{ vars.GRAFANA_ROOT_URL }}
+ENVFILE
+            chmod 600 .env
+
+            printf '%s' "$GITHUB_TOKEN" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
+
+            bash scripts/server-deploy.sh $DEPLOY_VERSION
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: curl -sf http://localhost:9091/health || exit 1
