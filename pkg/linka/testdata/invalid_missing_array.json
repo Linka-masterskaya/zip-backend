@@ -1,0 +1,17 @@
+{
+	"metadata": {
+		"version": "2.0",
+		"title": "Missing Array Test"
+	},
+	"settings": {
+		"columns": 2,
+		"rows": 2
+	},
+	"blocks": [
+		{
+			"id": "block-1",
+			"type": "matching",
+			"elements": [{ "id": "el-1", "kind": "text", "value": "Тест" }]
+		}
+	]
+}

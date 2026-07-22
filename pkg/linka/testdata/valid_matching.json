@@ -1,0 +1,26 @@
+{
+	"metadata": {
+		"version": "2.0",
+		"title": "Matching Test"
+	},
+	"settings": {
+		"columns": 2,
+		"rows": 2
+	},
+	"blocks": [
+		{
+			"id": "block-1",
+			"type": "matching",
+			"elements": [
+				{ "id": "el-1", "kind": "text", "value": "Яблоко" },
+				{ "id": "el-2", "kind": "text", "value": "Красное" }
+			],
+			"pairs": [
+				{
+					"left_id": "el-1",
+					"right_id": "el-2"
+				}
+			]
+		}
+	]
+}

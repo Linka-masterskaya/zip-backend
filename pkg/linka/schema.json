@@ -65,6 +65,7 @@
 						"type": "array",
 						"items": {
 							"type": "object",
+							"required": ["element_id", "is_correct"],
 							"additionalProperties": false,
 							"properties": {
 								"element_id": { "type": "string" },
@@ -76,6 +77,7 @@
 						"type": "array",
 						"items": {
 							"type": "object",
+							"required": ["element_id", "order"],
 							"additionalProperties": false,
 							"properties": {
 								"element_id": { "type": "string" },
@@ -87,6 +89,7 @@
 						"type": "array",
 						"items": {
 							"type": "object",
+							"required": ["left_id", "right_id"],
 							"additionalProperties": false,
 							"properties": {
 								"left_id": { "type": "string" },
@@ -98,6 +101,7 @@
 						"type": "array",
 						"items": {
 							"type": "object",
+							"required": ["id", "name", "items"],
 							"additionalProperties": false,
 							"properties": {
 								"id": { "type": "string" },
@@ -109,7 +113,29 @@
 							}
 						}
 					}
-				}
+				},
+				"allOf": [
+					{
+						"if": {
+							"properties": {
+								"type": { "enum": ["single_choice", "multi_choice"] }
+							}
+						},
+						"then": { "required": ["answers"] }
+					},
+					{
+						"if": { "properties": { "type": { "const": "matching" } } },
+						"then": { "required": ["pairs"] }
+					},
+					{
+						"if": { "properties": { "type": { "const": "categories" } } },
+						"then": { "required": ["categories"] }
+					},
+					{
+						"if": { "properties": { "type": { "const": "sequence" } } },
+						"then": { "required": ["sequence"] }
+					}
+				]
 			}
 		}
 	}

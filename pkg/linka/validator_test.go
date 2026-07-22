@@ -21,6 +21,8 @@ func TestValidateConfig(t *testing.T) {
 		{"Valid Grid", "valid_grid.json", false, ""},
 		{"Valid Single Choice", "valid_single_choice.json", false, ""},
 		{"Valid Sequence", "valid_sequence.json", false, ""},
+		{"Valid Matching", "valid_matching.json", false, ""},
+		{"Valid Categories", "valid_categories.json", false, ""},
 		{"Invalid Single (0 correct)", "invalid_single_0.json", true, "requires exactly 1 correct answer"},
 		{"Invalid Single (2 correct)", "invalid_single_2.json", true, "requires exactly 1 correct answer"},
 		{"Invalid Multi (0 correct)", "invalid_multi_0.json", true, "requires at least 1 correct answer"},
@@ -31,6 +33,8 @@ func TestValidateConfig(t *testing.T) {
 		{"Invalid Typo Property", "invalid_typo_property.json", true, "schema validation failed"},
 		{"Invalid Broken Link", "invalid_broken_link.json", true, "invalid element_id"},
 		{"Invalid Duplicate Element ID", "invalid_duplicate_element_id.json", true, "duplicate element id found"},
+		{"Invalid Missing Array", "invalid_missing_array.json", true, "schema validation failed"},
+		{"Invalid Empty Object", "invalid_empty_object.json", true, "schema validation failed"},
 	}
 
 	for _, tt := range tests {
