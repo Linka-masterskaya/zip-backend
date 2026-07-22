@@ -189,3 +189,22 @@ deploy (SSH на edge-01)
 - [ ] Ввод валидируется на сервере (не только на клиенте)
 - [ ] PII шифруется в БД
 - [ ] Бэкапы проверены восстановлением (100%)
+
+### Локальная проверка email через Mailpit
+
+В docker-compose доступен Mailpit:
+- SMTP: `localhost:1025`
+- Web UI: `http://localhost:8025`
+
+Для локальной проверки отправки писем можно временно указать в dev-конфиге:
+
+```yaml
+smtp:
+  host: 'localhost'
+  port: 1025
+  username: 'admin'
+  password: 'smtppass'
+  from_email: 'noreply@example.com'
+  tls: false
+  timeout: "10s"
+```

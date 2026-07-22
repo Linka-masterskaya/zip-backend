@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,12 +18,14 @@ import (
 //go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
+	Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error)
 	verifyEmail(ctx context.Context, verifyToken string) error
 	resendEmail(ctx context.Context) error
 }
 
 type authHandlers struct {
 	svc             authServiceIface
+	accessTokenTTL  time.Duration
 	refreshTokenTTL time.Duration
 	cookieSecure    bool
 }
@@ -33,6 +36,7 @@ func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
 	}
 
 	if len(cfg) > 0 {
+		h.accessTokenTTL = cfg[0].AccessTokenTTL
 		h.refreshTokenTTL = cfg[0].RefreshTokenTTL
 		h.cookieSecure = cfg[0].CookieSecure
 	}
@@ -40,13 +44,22 @@ func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
 	return h
 }
 
+func (h *authHandlers) setRefreshCookie(w http.ResponseWriter, refreshToken string) {
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		Path:     "/api/v1/auth",
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-}
-
-type LoginResponse struct {
-	AccessToken string `json:"access_token"`
 }
 
 func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
@@ -65,21 +78,14 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	//nolint:gosec // Secure is configured separately for local and production environments.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    result.RefreshToken,
-		Path:     "/",
-		MaxAge:   int(h.refreshTokenTTL.Seconds()),
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-	})
+	h.setRefreshCookie(w, result.RefreshToken)
 
 	w.Header().Set("Content-Type", "application/json")
 
-	resp := LoginResponse{
+	resp := TokenResponse{
 		AccessToken: result.AccessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   int64(h.accessTokenTTL.Seconds()),
 	}
 
 	//nolint:gosec // The access token is intentionally returned in the response.
@@ -200,4 +206,40 @@ func (h *authHandlers) RegisterRoutes(
 			),
 		),
 	)
+}
+
+func (h *authHandlers) Register(w http.ResponseWriter, r *http.Request) error {
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
+	}
+	if err := ValidatePassword(req.Password); err != nil {
+		return err
+	}
+
+	resp, err := h.svc.Register(r.Context(), req)
+	if err != nil {
+		return err
+	}
+
+	h.setRefreshCookie(w, resp.RefreshToken)
+
+	var buf bytes.Buffer
+	//nolint:gosec // The access token is intentionally returned in the response.
+	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
+		return fmt.Errorf("encode register response: %w", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("write register response: %w", err)
+	}
+
+	return nil
 }

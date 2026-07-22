@@ -23,7 +23,13 @@ import (
 var ErrInvalidCredentials = errors.New("invalid credentials")
 var ErrEmailNotVerified = errors.New("email not verified")
 
-var dummyPasswordHash = []byte("$2a$10$UlCQgLZoLjUzrtYRUUlkPeh/m5L2pl9aYzDTUaZAD3R4Pd8ONSof6")
+var dummyPasswordHash = []byte("$2a$12$UqfJl/B1CJ86pDCgYZuNXefHab2GHToXW1tWtfTc4Ee59.q1GMkcS")
+
+const (
+	bcryptCost         int    = 12
+	RoleDefectologist  string = "defectologist"
+	PurposeEmailVerify string = "email_verify"
+)
 
 // runDummyPasswordCompare performs a bcrypt comparison only to keep the
 // execution time similar for existing and non-existing users.
@@ -49,6 +55,11 @@ type authRepoIface interface {
 		hash []byte,
 		expiresAt time.Time,
 	) error
+	EmailExists(ctx context.Context, emailHash []byte) (bool, error)
+	CreateOrganization(ctx context.Context, params CreateOrganizationParams) error
+	CreateUser(ctx context.Context, params CreateUserParams) error
+	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
+	CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error
 }
 
 type refreshStore interface {
@@ -63,6 +74,7 @@ type refreshStore interface {
 type cryptoService interface {
 	Hash(data []byte) []byte
 	Decrypt(ciphertext []byte) ([]byte, error)
+	Encrypt(plaintext []byte) ([]byte, error)
 }
 
 type Config struct {
@@ -260,9 +272,7 @@ func (au *authService) resendEmail(ctx context.Context) error {
 		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
-	verifyURL := au.cfg.FrontendURL +
-		"/verify-email?token=" +
-		base64.RawURLEncoding.EncodeToString(tokenRaw)
+	verifyURL := base64.RawURLEncoding.EncodeToString(tokenRaw)
 
 	err = au.mailer.Send(
 		ctx,
@@ -277,4 +287,149 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (au *authService) issueRegisterTokens(ctx context.Context, userID uuid.UUID) (*RegisterResponse, error) {
+	user := &User{
+		ID:            userID.String(),
+		Role:          RoleDefectologist,
+		EmailVerified: false,
+	}
+
+	accessToken, err := au.generateAccessToken(user)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: generate access token: %w", err)
+	}
+
+	jti := uuid.NewString()
+	fid := uuid.NewString()
+
+	refreshToken, err := au.generateRefreshToken(user, jti)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: generate refresh token: %w", err)
+	}
+
+	if err := au.cache.StoreRefresh(ctx, jti, cache.RefreshRecord{
+		FID:    fid,
+		Status: "active",
+	}, au.cfg.RefreshTokenTTL); err != nil {
+		return nil, fmt.Errorf("authService.Register: store refresh token: %w", err)
+	}
+
+	return &RegisterResponse{
+		TokenResponse: TokenResponse{
+			AccessToken: accessToken,
+			TokenType:   "Bearer",
+			ExpiresIn:   int64(au.cfg.AccessTokenTTL.Seconds()),
+		},
+		RefreshToken: refreshToken,
+	}, nil
+}
+
+func (au *authService) createEmailVerifyToken(ctx context.Context, repo authRepoIface, userID uuid.UUID) (string, error) {
+	verifyToken := make([]byte, 32)
+
+	if _, err := rand.Read(verifyToken); err != nil {
+		return "", err
+	}
+
+	verifyTokenString := base64.RawURLEncoding.EncodeToString(verifyToken)
+	tokenHash := sha256.Sum256(verifyToken)
+
+	verifyParams := CreateVerifyTokenParams{
+		ID:        uuid.New(),
+		UserID:    userID,
+		TokenHash: tokenHash[:],
+		ExpiresAt: time.Now().Add(au.cfg.VerifyEmailTokenTTL),
+		Purpose:   PurposeEmailVerify,
+	}
+
+	if err := repo.CreateVerifyToken(ctx, verifyParams); err != nil {
+		return "", err
+	}
+
+	return verifyTokenString, nil
+}
+
+// Register регистрирует пользователя по email и паролю.
+func (au *authService) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
+
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	emailHash := au.crp.Hash([]byte(email))
+
+	exists, err := au.repo.EmailExists(ctx, emailHash)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: check email exists: %w", err)
+	}
+
+	if exists {
+		runDummyPasswordCompare(req.Password)
+		return nil, apperr.ErrConflict.WithMessage("email already exists")
+	}
+
+	emailEncrypted, err := au.crp.Encrypt([]byte(email))
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: encrypt email: %w", err)
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: hash password: %w", err)
+	}
+
+	tx, err := au.repo.beginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: begin tx: %w", err)
+	}
+
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.Error("tx rollback failed", "err", err)
+		}
+	}()
+
+	txRepo := au.repo.withTx(tx)
+
+	// TODO: organization.name is not null. Пока в имя организации будет подставляться default value.
+	orgParams := CreateOrganizationParams{ID: uuid.New(), Name: "Personal organization"}
+
+	if err := txRepo.CreateOrganization(ctx, orgParams); err != nil {
+		return nil, fmt.Errorf("authService.Register: create organization: %w", err)
+	}
+
+	userParams := CreateUserParams{ID: uuid.New(), OrganizationID: orgParams.ID}
+
+	if err := txRepo.CreateUser(ctx, userParams); err != nil {
+		return nil, fmt.Errorf("authService.Register: create user: %w", err)
+	}
+
+	credParams := CreateAuthCredParams{
+		UserID:         userParams.ID,
+		EmailHash:      emailHash,
+		EmailEncrypted: emailEncrypted,
+		PasswordHash:   string(passwordHash),
+		Role:           RoleDefectologist,
+	}
+
+	if err := txRepo.CreateAuthCred(ctx, credParams); err != nil {
+		return nil, fmt.Errorf("authService.Register: create auth cred: %w", err)
+	}
+
+	verifyTokenString, err := au.createEmailVerifyToken(ctx, txRepo, userParams.ID)
+	if err != nil {
+		return nil, fmt.Errorf("authService.Register: create verify token: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("authService.Register: commit tx: %w", err)
+	}
+
+	mailTemplate := domain.EmailData{Token: verifyTokenString, Email: email}
+
+	// TODO: backlog: сделать  через NATS + метрика.
+	if err = au.mailer.Send(ctx, email, domain.EmailVerify, mailTemplate); err != nil {
+		slog.Error("failed to send verify email", "err", err)
+	}
+
+	return au.issueRegisterTokens(ctx, userParams.ID)
 }

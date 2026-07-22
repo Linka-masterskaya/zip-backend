@@ -114,6 +114,13 @@ func run() error {
 	)
 
 	mainMux.Handle(
+		"POST /api/v1/auth/register",
+		loginRateLimit(
+			middleware.ErrorMiddleware(authHandler.Register),
+		),
+	)
+
+	mainMux.Handle(
 		"POST /auth/forgot",
 		forgotRateLimit(
 			middleware.ErrorMiddleware(authHandler.ForgotPassword),

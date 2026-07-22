@@ -47,6 +47,10 @@ func (f *fakeCrypto) Decrypt(_ []byte) ([]byte, error) {
 	return nil, nil
 }
 
+func (f *fakeCrypto) Encrypt(_ []byte) ([]byte, error) {
+	return []byte("encrypted-email"), nil
+}
+
 func TestAuthService_Login_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)

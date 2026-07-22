@@ -16,9 +16,10 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
-	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
+	"github.com/google/uuid"
 )
 
 func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
@@ -38,7 +39,7 @@ func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 	if resp.AvatarURL == "" {
 		t.Fatal("expected avatar_url in response")
 	}
-	if !strings.HasPrefix(repo.avatarKeyValue(), "avatars/user-1/") {
+	if !strings.HasPrefix(repo.avatarKeyValue(), "avatars/11111111-1111-1111-1111-111111111111/") {
 		t.Fatalf("unexpected avatar key: %q", repo.avatarKeyValue())
 	}
 	if !store.hasObject(repo.avatarKeyValue()) {
@@ -230,7 +231,10 @@ func multipartAvatarRequest(t *testing.T, data []byte, filename string) *http.Re
 		t.Fatalf("close multipart writer: %v", err)
 	}
 
-	ctx := reqctx.PutUserID(context.Background(), "user-1")
+	ctx := authctx.SetUserIDToCtx(
+		context.Background(),
+		uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+	)
 	req := httptest.NewRequestWithContext(ctx, http.MethodPut, "/api/v1/profile/me/avatar", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req
