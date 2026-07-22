@@ -1,0 +1,24 @@
+{
+	"metadata": {
+		"version": "1.0",
+		"title": "Typo property test",
+		"versionn": "1.0"
+	},
+	"settings": {
+		"columns": 2,
+		"rows": 2
+	},
+	"blocks": [
+		{
+			"id": "block-1",
+			"type": "single_choice",
+			"elements": [
+				{
+					"id": "el-1",
+					"kind": "text",
+					"value": "Test"
+				}
+			]
+		}
+	]
+}
