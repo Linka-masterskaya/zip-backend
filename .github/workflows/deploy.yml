@@ -14,6 +14,8 @@ concurrency:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta_server.outputs.version }}
 
     permissions:
       contents: read
@@ -39,8 +41,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/linka-masterskaya/zip-backend/server
           tags: |
-            type=raw,value=latest
             type=sha,format=short
+            type=raw,value=latest
 
       - name: Build and push Server
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -63,8 +65,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/linka-masterskaya/zip-backend/ai-worker
           tags: |
-            type=raw,value=latest
             type=sha,format=short
+            type=raw,value=latest
 
       - name: Build and push AI Worker
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -87,6 +89,36 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Render deployment environment
+        env:
+          CI_APP_ENV: prod
+          CI_VERSION: ${{ needs.build-and-push.outputs.version }}
+          CI_DB_URL: ${{ secrets.DB_URL }}
+          CI_POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          CI_POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          CI_POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          CI_REDIS_URL: ${{ secrets.REDIS_URL }}
+          CI_REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          CI_JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CI_CRYPTO_AES_KEY: ${{ secrets.CRYPTO_AES_KEY }}
+          CI_CRYPTO_HMAC_KEY: ${{ secrets.CRYPTO_HMAC_KEY }}
+          CI_MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          CI_MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          CI_MINIO_ENDPOINT: ${{ vars.CADDY_DOMAIN_NAME }}
+          CI_MINIO_USE_SSL: "true"
+          CI_NATS_CONNECTION_URL: "nats://nats:4222"
+          CI_CADDY_DOMAIN_NAME: ${{ vars.CADDY_DOMAIN_NAME }}
+          CI_CADDY_LETSENCRYPT_EMAIL: ${{ vars.CADDY_LETSENCRYPT_EMAIL }}
+          CI_SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          CI_GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          CI_GRAFANA_ROOT_URL: ${{ vars.GRAFANA_ROOT_URL }}
+        run: |
+          pip3 install dump-env
+          dump-env \
+            -t .env.example \
+            -p 'CI_' > .env
+          chmod 600 .env
+
       - name: Prepare server directories
         uses: appleboy/ssh-action@v1
         with:
@@ -101,20 +133,16 @@ jobs:
           host: ${{ vars.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          source: "docker-compose.server.yaml,deploy/,scripts/"
+          source: "docker-compose.server.yaml,deploy/,scripts/,.env"
           target: "~/zip-backend"
 
-      - name: Set version
-        id: version
-        run: echo "tag=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
-        
       - name: Deploy
         uses: appleboy/ssh-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_HOST: ghcr.io
           REGISTRY_USERNAME: ${{ github.actor }}
-          DEPLOY_VERSION: ${{ steps.version.outputs.tag }}
+          DEPLOY_VERSION: ${{ needs.build-and-push.outputs.version }}
         with:
           host: ${{ vars.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -122,34 +150,7 @@ jobs:
           envs: GITHUB_TOKEN,REGISTRY_HOST,REGISTRY_USERNAME,DEPLOY_VERSION
           script: |
             cd ~/zip-backend
-
-            cat > .env << 'ENVFILE'
-APP_ENV=prod
-DB_URL=${{ secrets.DB_URL }}
-DEPLOY_USER=${{ secrets.DEPLOY_USER }}
-REDIS_URL=${{ secrets.REDIS_URL }}
-REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
-POSTGRES_USER=${{ secrets.POSTGRES_USER }}
-POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-POSTGRES_DB=${{ secrets.POSTGRES_DB }}
-JWT_SECRET=${{ secrets.JWT_SECRET }}
-CRYPTO_AES_KEY=${{ secrets.CRYPTO_AES_KEY }}
-CRYPTO_HMAC_KEY=${{ secrets.CRYPTO_HMAC_KEY }}
-MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }}
-MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }}
-MINIO_ENDPOINT=${{ vars.CADDY_DOMAIN_NAME }}
-MINIO_USE_SSL=true
-NATS_CONNECTION_URL=nats://linka_nats:4222
-CADDY_DOMAIN_NAME=${{ vars.CADDY_DOMAIN_NAME }}
-CADDY_LETSENCRYPT_EMAIL=${{ vars.CADDY_LETSENCRYPT_EMAIL }}
-SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
-GRAFANA_ADMIN_PASSWORD=${{ secrets.GRAFANA_ADMIN_PASSWORD }}
-GRAFANA_ROOT_URL=${{ vars.GRAFANA_ROOT_URL }}
-ENVFILE
-            chmod 600 .env
-
             printf '%s' "$GITHUB_TOKEN" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
-
             bash scripts/server-deploy.sh $DEPLOY_VERSION
 
       - name: Verify deployment
@@ -158,4 +159,6 @@ ENVFILE
           host: ${{ vars.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          script: curl -sf http://localhost:9091/health || exit 1
+          script: |
+            cd ~/zip-backend
+            docker compose -f docker-compose.server.yaml exec zip-backend wget -qO- http://localhost:9091/health || exit 1

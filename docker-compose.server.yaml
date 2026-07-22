@@ -1,13 +1,10 @@
 services:
   zip-backend:
-    container_name: zip-backend
     image: ghcr.io/linka-masterskaya/zip-backend/server:${VERSION}  # тянет готовый образ из GHCR
     restart: unless-stopped  # перезапускать всегда, кроме ручной остановки
     expose:
       - "8080"  # видно только внутри Docker network
       - "9091"
-    ports:
-      - "9091:9091"
     env_file:
       - .env
     depends_on:
@@ -23,7 +20,6 @@ services:
       - linka-net
 
   postgres:
-    container_name: linka_db
     image: postgres:17-alpine # стабильная версия
     restart: unless-stopped
     expose:
@@ -44,7 +40,6 @@ services:
       - linka-net
 
   redis:
-    container_name: linka_redis
     image: redis:7-alpine
     restart: unless-stopped
     expose:
@@ -64,7 +59,6 @@ services:
       - linka-net
 
   nats:
-    container_name: linka_nats
     image: nats:2.14-alpine
     restart: unless-stopped
     expose:
@@ -82,7 +76,6 @@ services:
       - linka-net
 
   minio:
-    container_name: linka_minio
     image: minio/minio:RELEASE.2025-10-15T17-29-55Z # minio более не поддерживается на беспплатной основе
     restart: unless-stopped
     expose:
@@ -105,7 +98,6 @@ services:
       - linka-net
 
   loki:
-    container_name: linka_loki
     image: grafana/loki:3.7.0
     restart: unless-stopped
     expose:
@@ -124,7 +116,6 @@ services:
       - linka-net
 
   alloy:
-    container_name: linka_alloy
     image: grafana/alloy:v1.17.0
     restart: unless-stopped
     volumes:
@@ -145,7 +136,6 @@ services:
       - linka-net
 
   prometheus:
-    container_name: linka_prometheus
     image: prom/prometheus:v2.51.0
     restart: unless-stopped
     expose:
@@ -160,7 +150,6 @@ services:
       - linka-net
 
   grafana:
-    container_name: linka_grafana
     image: grafana/grafana:11.6.0
     restart: unless-stopped
     expose:
@@ -186,7 +175,6 @@ services:
       - linka-net
 
   caddy:
-    container_name: linka_caddy
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
@@ -194,7 +182,7 @@ services:
     #  - "443:443"
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - /home/${DEPLOY_USER}/frontend/dist:/srv/frontend:ro
+      - ../frontend/dist:/srv/frontend:ro
       - caddy_data:/data
       - caddy_config:/config
     env_file:
