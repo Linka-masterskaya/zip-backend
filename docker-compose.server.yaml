@@ -105,12 +105,6 @@ services:
     volumes:
       - loki_data:/loki
       - ./deploy/loki/loki-config.yml:/etc/loki/config.yml
-    healthcheck:
-      test: ["CMD-SHELL", "echo > /dev/tcp/localhost/3100"]
-      start_period: 30s
-      interval: 10s
-      timeout: 5s
-      retries: 5
     command: -config.file=/etc/loki/config.yml
     networks:
       - linka-net
@@ -124,7 +118,7 @@ services:
       - alloy_data:/var/lib/alloy/data
     depends_on:
       loki:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:12345/-/ready"]
       interval: 10s
