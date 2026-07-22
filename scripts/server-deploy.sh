@@ -19,11 +19,11 @@ docker compose -f docker-compose.server.yaml up -d --remove-orphans
 docker compose -f docker-compose.server.yaml restart caddy
 
 for i in $(seq 1 30); do
-  curl -sf http://localhost:9091/health && break
+  docker compose -f docker-compose.server.yaml exec zip-backend wget -qO- http://localhost:9091/health && break
   sleep 2
 done
 
-if ! curl -sf http://localhost:9091/health; then
+if ! docker compose -f docker-compose.server.yaml exec zip-backend wget -qO- http://localhost:9091/health; then
   if [ -n "$PREV_VERSION" ]; then
     echo "Rollback to $PREV_VERSION"
     echo "$PREV_VERSION" > .version
