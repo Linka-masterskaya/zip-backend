@@ -6,9 +6,13 @@ type RegisterRequest struct {
 	Password string `json:"password"`
 }
 
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int64  `json:"expires_in"`
+}
+
 type RegisterResponse struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
+	TokenResponse
 	RefreshToken string `json:"-"`
 }

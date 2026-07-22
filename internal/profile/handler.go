@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 )
 
 const (
@@ -32,9 +32,9 @@ type avatarResponse struct {
 }
 
 func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
-	userID, ok := reqctx.GetUserID(r.Context())
-	if !ok {
-		return apperr.ErrUnauthorized
+	userID, err := authctx.UserIDFromCtx(r.Context())
+	if err != nil {
+		return err
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxAvatarBodyBytes)
@@ -71,7 +71,7 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
 
 	avatarURL, err := h.service.ReplaceAvatar(
 		r.Context(),
-		userID,
+		userID.String(),
 		bytes.NewReader(data),
 		int64(len(data)),
 		mimeType,
@@ -90,12 +90,12 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) DeleteAvatar(w http.ResponseWriter, r *http.Request) error {
-	userID, ok := reqctx.GetUserID(r.Context())
-	if !ok {
-		return apperr.ErrUnauthorized
+	userID, err := authctx.UserIDFromCtx(r.Context())
+	if err != nil {
+		return err
 	}
 
-	if err := h.service.DeleteAvatar(r.Context(), userID); err != nil {
+	if err := h.service.DeleteAvatar(r.Context(), userID.String()); err != nil {
 		return err
 	}
 

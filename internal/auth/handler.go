@@ -25,6 +25,7 @@ type authServiceIface interface {
 
 type authHandlers struct {
 	svc             authServiceIface
+	accessTokenTTL  time.Duration
 	refreshTokenTTL time.Duration
 	cookieSecure    bool
 }
@@ -35,6 +36,7 @@ func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
 	}
 
 	if len(cfg) > 0 {
+		h.accessTokenTTL = cfg[0].AccessTokenTTL
 		h.refreshTokenTTL = cfg[0].RefreshTokenTTL
 		h.cookieSecure = cfg[0].CookieSecure
 	}
@@ -42,13 +44,22 @@ func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
 	return h
 }
 
+func (h *authHandlers) setRefreshCookie(w http.ResponseWriter, refreshToken string) {
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		Path:     "/api/v1/auth",
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-}
-
-type LoginResponse struct {
-	AccessToken string `json:"access_token"`
 }
 
 func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
@@ -67,21 +78,14 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	//nolint:gosec // Secure is configured separately for local and production environments.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    result.RefreshToken,
-		Path:     "/",
-		MaxAge:   int(h.refreshTokenTTL.Seconds()),
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-	})
+	h.setRefreshCookie(w, result.RefreshToken)
 
 	w.Header().Set("Content-Type", "application/json")
 
-	resp := LoginResponse{
+	resp := TokenResponse{
 		AccessToken: result.AccessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   int64(h.accessTokenTTL.Seconds()),
 	}
 
 	//nolint:gosec // The access token is intentionally returned in the response.
@@ -222,16 +226,7 @@ func (h *authHandlers) Register(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	//nolint:gosec // Secure is configured separately for local and production environments.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    resp.RefreshToken,
-		Path:     "/api/v1/auth",
-		MaxAge:   int(h.refreshTokenTTL.Seconds()),
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteStrictMode,
-	})
+	h.setRefreshCookie(w, resp.RefreshToken)
 
 	var buf bytes.Buffer
 	//nolint:gosec // The access token is intentionally returned in the response.

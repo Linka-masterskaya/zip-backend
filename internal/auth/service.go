@@ -23,7 +23,7 @@ import (
 var ErrInvalidCredentials = errors.New("invalid credentials")
 var ErrEmailNotVerified = errors.New("email not verified")
 
-var dummyPasswordHash = []byte("$2a$10$UlCQgLZoLjUzrtYRUUlkPeh/m5L2pl9aYzDTUaZAD3R4Pd8ONSof6")
+var dummyPasswordHash = []byte("$2a$12$UqfJl/B1CJ86pDCgYZuNXefHab2GHToXW1tWtfTc4Ee59.q1GMkcS")
 
 const (
 	bcryptCost         int    = 12
@@ -272,9 +272,7 @@ func (au *authService) resendEmail(ctx context.Context) error {
 		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
-	verifyURL := au.cfg.FrontendURL +
-		"/verify-email?token=" +
-		base64.RawURLEncoding.EncodeToString(tokenRaw)
+	verifyURL := base64.RawURLEncoding.EncodeToString(tokenRaw)
 
 	err = au.mailer.Send(
 		ctx,
@@ -319,9 +317,11 @@ func (au *authService) issueRegisterTokens(ctx context.Context, userID uuid.UUID
 	}
 
 	return &RegisterResponse{
-		AccessToken:  accessToken,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(au.cfg.AccessTokenTTL.Seconds()),
+		TokenResponse: TokenResponse{
+			AccessToken: accessToken,
+			TokenType:   "Bearer",
+			ExpiresIn:   int64(au.cfg.AccessTokenTTL.Seconds()),
+		},
 		RefreshToken: refreshToken,
 	}, nil
 }
@@ -363,6 +363,7 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 	}
 
 	if exists {
+		runDummyPasswordCompare(req.Password)
 		return nil, apperr.ErrConflict.WithMessage("email already exists")
 	}
 
@@ -428,7 +429,6 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 	// TODO: backlog: сделать  через NATS + метрика.
 	if err = au.mailer.Send(ctx, email, domain.EmailVerify, mailTemplate); err != nil {
 		slog.Error("failed to send verify email", "err", err)
-		return nil, fmt.Errorf("authService.Register: send verify email: %w", err)
 	}
 
 	return au.issueRegisterTokens(ctx, userParams.ID)
