@@ -34,7 +34,7 @@ func (h *Handler) CreatePack(w http.ResponseWriter, r *http.Request) error {
 
 	if len(req.Config) > 0 {
 		if err := linka.ValidateConfig(r.Context(), req.Config); err != nil {
-			slog.Error("invalid pack config", "err", err)
+			slog.Error("invalid pack config on create", "err", err)
 			return apperr.ErrBadRequest
 		}
 	}
@@ -73,6 +73,41 @@ func (h *Handler) GetPack(w http.ResponseWriter, r *http.Request) error {
 
 func (h *Handler) ListPacks(w http.ResponseWriter, r *http.Request) error {
 	res, err := h.service.List(r.Context())
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		slog.Error("failed to encode response", "err", err)
+	}
+	return nil
+}
+
+type updatePackRequest struct {
+	Config json.RawMessage `json:"config,omitempty"`
+}
+
+func (h *Handler) UpdatePack(w http.ResponseWriter, r *http.Request) error {
+	id := r.PathValue("id")
+	if id == "" {
+		return apperr.ErrBadRequest
+	}
+
+	var req updatePackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest
+	}
+
+	if len(req.Config) > 0 {
+		if err := linka.ValidateConfig(r.Context(), req.Config); err != nil {
+			slog.Error("invalid pack config on update", "err", err)
+			return apperr.ErrBadRequest
+		}
+	}
+
+	res, err := h.service.Update(r.Context(), id)
 	if err != nil {
 		return err
 	}
