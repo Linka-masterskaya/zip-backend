@@ -106,7 +106,7 @@ services:
       - loki_data:/loki
       - ./deploy/loki/loki-config.yml:/etc/loki/config.yml
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      test: ["CMD-SHELL", "echo > /dev/tcp/localhost/3100"]
       start_period: 30s
       interval: 10s
       timeout: 5s
