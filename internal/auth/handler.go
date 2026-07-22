@@ -17,6 +17,7 @@ import (
 //go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
+	Logout(ctx context.Context, refreshToken string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
 	resendEmail(ctx context.Context) error
 }
@@ -153,6 +154,28 @@ func (h *authHandlers) EmailConfirm(w http.ResponseWriter, _ *http.Request) erro
 
 	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
 	return err
+}
+
+func (h *authHandlers) Logout(w http.ResponseWriter, r *http.Request) error {
+	if cookie, err := r.Cookie("refresh_token"); err == nil {
+		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+			return err
+		}
+	}
+
+	//nolint:gosec // Read above.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (h *authHandlers) RegisterRoutes(

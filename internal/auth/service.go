@@ -58,6 +58,8 @@ type refreshStore interface {
 		rec cache.RefreshRecord,
 		ttl time.Duration,
 	) error
+	GetRefresh(ctx context.Context, jti string) (*cache.RefreshRecord, error)
+	RevokeFamily(ctx context.Context, fid string) error
 }
 
 type cryptoService interface {
@@ -167,6 +169,33 @@ func (au *authService) Login(
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 	}, nil
+}
+
+// Logout отзывает семейство токенов при помощи refresh токена.
+func (au *authService) Logout(ctx context.Context, refreshToken string) error {
+	const op = "authService.Logout"
+	if refreshToken == "" {
+		return nil
+	}
+
+	claims, err := au.parseRefreshToken(refreshToken)
+	if err != nil {
+		return nil
+	}
+
+	rec, err := au.cache.GetRefresh(ctx, claims.ID)
+	if errors.Is(err, cache.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := au.cache.RevokeFamily(ctx, rec.FID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
 }
 
 func (au *authService) verifyEmail(

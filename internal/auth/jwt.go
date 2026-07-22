@@ -44,6 +44,31 @@ func (au *authService) generateAccessToken(user *User) (string, error) {
 	return tokenString, nil
 }
 
+func (au *authService) parseRefreshToken(tokenString string) (*RefreshClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &RefreshClaims{}, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("refresh unexpected signing method: %v", t.Header["alg"])
+		}
+		return []byte(au.cfg.JWTSecret), nil
+	},
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuer(jwtIssuer),
+		jwt.WithAudience(jwtAudience),
+		jwt.WithIssuedAt(),
+		jwt.WithLeeway(10*time.Second),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("parse refresh token: %w", err)
+	}
+
+	claims, ok := token.Claims.(*RefreshClaims)
+	if !ok {
+		return nil, fmt.Errorf("parse refresh token: unexpected claims type %T", token.Claims)
+	}
+
+	return claims, nil
+}
+
 func (au *authService) generateRefreshToken(user *User, jti string) (string, error) {
 	now := time.Now()
 
