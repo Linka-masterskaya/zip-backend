@@ -5,6 +5,8 @@ services:
     expose:
       - "8080"  # видно только внутри Docker network
       - "9091"
+    ports:
+      - "127.0.0.1:9091:9091"
     env_file:
       - .env
     depends_on:

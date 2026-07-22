@@ -120,7 +120,7 @@ jobs:
           chmod 600 .env
 
       - name: Prepare server directories
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ vars.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -128,7 +128,7 @@ jobs:
           script: mkdir -p ~/zip-backend ~/frontend/dist
 
       - name: Copy files to server
-        uses: appleboy/scp-action@v1
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ vars.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -137,7 +137,7 @@ jobs:
           target: "~/zip-backend"
 
       - name: Deploy
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_HOST: ghcr.io
@@ -154,11 +154,9 @@ jobs:
             bash scripts/server-deploy.sh $DEPLOY_VERSION
 
       - name: Verify deployment
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ vars.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          script: |
-            cd ~/zip-backend
-            docker compose -f docker-compose.server.yaml exec zip-backend wget -qO- http://localhost:9091/health || exit 1
+          script: curl -sf http://localhost:9091/health || exit 1
