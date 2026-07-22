@@ -1,9 +1,11 @@
 {
-    email {$CADDY_LETSENCRYPT_EMAIL}
+    # email {$CADDY_LETSENCRYPT_EMAIL}
+    auto_https off
 }
 
-{$CADDY_DOMAIN_NAME} {
-    header Strict-Transport-Security max-age=31536000;
+# {$CADDY_DOMAIN_NAME} {
+:80 {
+    # header Strict-Transport-Security max-age=31536000;
     header -Server
 
     handle /api/* {
