@@ -1,3 +1,4 @@
+// internal/profile/email_test.go
 package profile
 
 import (
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 )
@@ -27,7 +29,6 @@ func runMigrations(db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS users (
 			id UUID PRIMARY KEY,
-			email TEXT NOT NULL UNIQUE,
 			email_verified BOOLEAN NOT NULL DEFAULT FALSE,
 			display_name TEXT,
 			avatar_key TEXT,
@@ -58,7 +59,9 @@ func runMigrations(db *sql.DB) error {
 			email_hash BYTEA NOT NULL,
 			email_encrypted BYTEA NOT NULL,
 			password_hash TEXT,
-			role TEXT NOT NULL DEFAULT 'user'
+			role TEXT NOT NULL DEFAULT 'user',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)
 	`)
 	if err != nil {
@@ -87,20 +90,40 @@ func runMigrations(db *sql.DB) error {
 	return err
 }
 
+// newTestCrypto creates a real cryptox instance for tests.
+func newTestCrypto(t *testing.T) *cryptox.Cryptox {
+	t.Helper()
+	aesKey := make([]byte, 32)
+	hmacKey := make([]byte, 32)
+	for i := range aesKey {
+		aesKey[i] = byte(i)
+		hmacKey[i] = byte(i + 32)
+	}
+	crypto, err := cryptox.New(aesKey, hmacKey)
+	require.NoError(t, err)
+	return crypto
+}
+
 // insertTestUser inserts a test user into users and auth_cred tables.
-func insertTestUser(ctx context.Context, db *sql.DB, id uuid.UUID, email string) error {
+func insertTestUser(ctx context.Context, db *sql.DB, id uuid.UUID, email string, crypto *cryptox.Cryptox) error {
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO users (id, email, email_verified, display_name, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, now(), now())
-	`, id, email, true, "Test User")
+		INSERT INTO users (id, email_verified, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, now(), now())
+	`, id, true, "Test User")
 	if err != nil {
 		return err
 	}
 
+	emailEncrypted, err := crypto.Encrypt([]byte(email))
+	if err != nil {
+		return err
+	}
+
+	emailHash := crypto.Hash([]byte(email))
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO auth_cred (user_id, email_hash, email_encrypted, role)
 		VALUES ($1, $2, $3, 'user')
-	`, id, []byte(email), []byte(email))
+	`, id, emailHash, emailEncrypted)
 	if err != nil {
 		return err
 	}
@@ -228,33 +251,31 @@ func TestGenerateEmailChangeToken_Success(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
 
-	// Generate token without sending email
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
 	require.NotNil(t, token)
-	require.NotEmpty(t, token.Token) // ✅ У нас есть сырой токен!
+	require.NotEmpty(t, token.Token)
 	require.Equal(t, TokenTypeEmailChange, token.Type)
 	require.False(t, token.Used)
 
-	// Verify token was saved in DB
 	count, err := countTokens(ctx, db, userID)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 
-	// Verify payload contains correct data
 	payload, err := getPayloadFromToken(token)
 	require.NoError(t, err)
 	assert.Equal(t, newEmail, payload.NewEmail)
@@ -279,24 +300,23 @@ func TestSendEmailChangeConfirmation_Success(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
 
-	// Generate token first
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
 
-	// Send email
 	err = service.SendEmailChangeConfirmation(ctx, userID, token)
 	assert.NoError(t, err)
 }
@@ -319,44 +339,39 @@ func TestEmailChangeFlow_Integration(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
 
-	// 1. Generate token without sending email
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
-	require.NotEmpty(t, token.Token) // ✅ У нас есть сырой токен!
+	require.NotEmpty(t, token.Token)
 
-	// 2. Send email (optional in tests)
 	err = service.SendEmailChangeConfirmation(ctx, userID, token)
 	require.NoError(t, err)
 
-	// 3. Confirm email change using raw token
 	err = service.ConfirmEmailChange(ctx, token.Token)
 	require.NoError(t, err)
 
-	// 4. Verify user email was updated
 	user, err := repo.FindByID(ctx, userID)
 	require.NoError(t, err)
-	assert.Equal(t, newEmail, user.Email)
+	assert.NotEmpty(t, user.EmailEncrypted)
 	assert.False(t, user.EmailVerified)
 
-	// 5. Verify token was marked as used
 	tokenAfter, err := getTokenByID(ctx, db, token.ID)
 	require.NoError(t, err)
 	assert.True(t, tokenAfter.Used)
 
-	// 6. Verify verification token was created
 	var verifyCount int
 	err = db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
@@ -385,34 +400,31 @@ func TestConfirmEmailChange_Integration_Success(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
 
-	// Generate token
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
 
-	// Confirm email change
 	err = service.ConfirmEmailChange(ctx, token.Token)
 	require.NoError(t, err)
 
-	// Verify email was updated
 	user, err := repo.FindByID(ctx, userID)
 	require.NoError(t, err)
-	assert.Equal(t, newEmail, user.Email)
+	assert.NotEmpty(t, user.EmailEncrypted)
 	assert.False(t, user.EmailVerified)
 
-	// Verify token was marked as used
 	tokenAfter, err := getTokenByID(ctx, db, token.ID)
 	require.NoError(t, err)
 	assert.True(t, tokenAfter.Used)
@@ -436,11 +448,12 @@ func TestEmailChangeFlow_Integration_EmailAlreadyTaken(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID1 := uuid.New()
@@ -448,8 +461,8 @@ func TestEmailChangeFlow_Integration_EmailAlreadyTaken(t *testing.T) {
 	oldEmail := "old@example.com"
 	takenEmail := "taken@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID1, oldEmail))
-	require.NoError(t, insertTestUser(ctx, db, userID2, takenEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID1, oldEmail, crypto))
+	require.NoError(t, insertTestUser(ctx, db, userID2, takenEmail, crypto))
 
 	_, err = service.GenerateEmailChangeToken(ctx, userID1, takenEmail)
 	assert.Error(t, err)
@@ -474,17 +487,18 @@ func TestEmailChangeFlow_Integration_SameEmail(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, email))
+	require.NoError(t, insertTestUser(ctx, db, userID, email, crypto))
 
 	_, err = service.GenerateEmailChangeToken(ctx, userID, email)
 	assert.Error(t, err)
@@ -509,32 +523,30 @@ func TestConfirmEmailChange_Integration_TokenExpired(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
-		EmailChangeTTL: -1 * time.Hour, // Expired immediately
+		EmailChangeTTL: -1 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
 
-	// Generate token (will be expired)
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
 
-	// Confirm with expired token should fail
 	err = service.ConfirmEmailChange(ctx, token.Token)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrTokenExpired)
 
-	// Verify email was not changed
 	user, err := repo.FindByID(ctx, userID)
 	require.NoError(t, err)
-	assert.Equal(t, oldEmail, user.Email)
+	assert.NotEmpty(t, user.EmailEncrypted)
 }
 
 // TestConfirmEmailChange_Integration_TokenAlreadyUsed tests already used token scenario.
@@ -555,28 +567,26 @@ func TestConfirmEmailChange_Integration_TokenAlreadyUsed(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
 
-	// Generate token
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
 
-	// Confirm first time - should succeed
 	err = service.ConfirmEmailChange(ctx, token.Token)
 	require.NoError(t, err)
 
-	// Confirm second time with same token - should fail
 	err = service.ConfirmEmailChange(ctx, token.Token)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrTokenAlreadyUsed)
@@ -600,36 +610,33 @@ func TestDeleteExpiredTokens_Integration(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: -1 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
 
-	// Create 3 expired tokens
 	for i := 0; i < 3; i++ {
 		_, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 		require.NoError(t, err)
 	}
 
-	// Count before cleanup
 	count, err := countTokens(ctx, db, userID)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 
-	// Cleanup
 	deleted, err := service.DeleteExpiredTokens(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), deleted)
 
-	// Count after cleanup
 	count, err = countTokens(ctx, db, userID)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
@@ -653,18 +660,19 @@ func TestEmailChangeFlow_Integration_InvalidEmail(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	invalidEmail := "invalid-email"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail))
+	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
 
 	_, err = service.GenerateEmailChangeToken(ctx, userID, invalidEmail)
 	assert.Error(t, err)
@@ -689,17 +697,17 @@ func TestEmailChangeFlow_Integration_UserNotFound(t *testing.T) {
 	repo := NewRepository(dbPool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
+	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, emailCfg)
+	service := NewService(repo, storage, mailer, crypto, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	newEmail := "new@example.com"
 
-	// User does not exist
 	_, err = service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "user not found")

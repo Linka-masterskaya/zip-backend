@@ -161,10 +161,14 @@ func (h *Handler) ConfirmEmailChange(w http.ResponseWriter, r *http.Request) err
 		switch {
 		case errors.Is(err, ErrTokenNotFound):
 			return apperr.ErrVerifyTokenInvalid
+		case errors.Is(err, ErrTokenInvalid):
+			return apperr.ErrVerifyTokenInvalid.WithMessage("Invalid token format")
 		case errors.Is(err, ErrTokenExpired):
 			return apperr.ErrVerifyTokenInvalid.WithMessage("Token has expired")
 		case errors.Is(err, ErrTokenAlreadyUsed):
 			return apperr.ErrVerifyTokenInvalid.WithMessage("Token has already been used")
+		case errors.Is(err, ErrEmailAlreadyUsed):
+			return apperr.ErrConflict.WithMessage("Email already in use by another user")
 		case errors.Is(err, ErrEmailAlreadyUsed):
 			return apperr.ErrConflict.WithMessage("Email already in use by another user")
 		case errors.Is(err, ErrUserNotFound):

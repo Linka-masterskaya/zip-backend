@@ -36,13 +36,14 @@ type EmailConfirmRequest struct {
 
 // User represents a user entity.
 type User struct {
-	ID            string    `json:"id"`
-	Email         string    `json:"email"`
-	EmailVerified bool      `json:"email_verified"`
-	Username      string    `json:"username"`
-	DisplayName   *string   `json:"display_name"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	Email          string    `json:"email"`
+	EmailEncrypted []byte    `json:"-"` // Encrypted email for storage
+	EmailVerified  bool      `json:"email_verified"`
+	Username       string    `json:"username"`
+	DisplayName    *string   `json:"display_name"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // TokenType represents the type of token.

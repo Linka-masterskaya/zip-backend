@@ -1,3 +1,4 @@
+// internal/profile/avatar_test.go
 package profile
 
 import (
@@ -17,8 +18,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
@@ -33,6 +36,21 @@ func (f *fakeEmailSender) Send(ctx context.Context, to string, tmpl mailer.Templ
 	return nil
 }
 
+// newTestCryptox creates a real cryptox instance for tests.
+func newTestCryptox(t *testing.T) *cryptox.Cryptox {
+	t.Helper()
+	// Use fixed keys for deterministic tests
+	aesKey := make([]byte, 32)
+	hmacKey := make([]byte, 32)
+	for i := range aesKey {
+		aesKey[i] = byte(i)
+		hmacKey[i] = byte(i + 32)
+	}
+	crypto, err := cryptox.New(aesKey, hmacKey)
+	require.NoError(t, err)
+	return crypto
+}
+
 // defaultEmailConfig returns default config for tests.
 func defaultEmailConfig() EmailConfig {
 	return EmailConfig{
@@ -45,8 +63,9 @@ func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
 	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
-	handler := NewHandler(NewService(repo, store, mailer, cfg))
+	handler := NewHandler(NewService(repo, store, mailer, crypto, cfg))
 
 	rec := performAvatarUpload(t, handler, pngAvatarBytes(128), "avatar.txt")
 	if rec.Code != http.StatusOK {
@@ -78,8 +97,9 @@ func TestUploadAvatar_NonImageReturns400(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
 	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
-	handler := NewHandler(NewService(repo, store, mailer, cfg))
+	handler := NewHandler(NewService(repo, store, mailer, crypto, cfg))
 
 	rec := performAvatarUpload(t, handler, []byte("not an image"), "avatar.png")
 	if rec.Code != http.StatusBadRequest {
@@ -94,8 +114,9 @@ func TestUploadAvatar_FileOver2MBReturns413(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
 	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
-	handler := NewHandler(NewService(repo, store, mailer, cfg))
+	handler := NewHandler(NewService(repo, store, mailer, crypto, cfg))
 
 	oversized := bytes.Repeat([]byte{'x'}, int(MaxAvatarSizeBytes)+1)
 	rec := performAvatarUpload(t, handler, oversized, "avatar.png")
@@ -126,12 +147,13 @@ func TestReplaceAvatar_QuotaExceededSkipsPutObject(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
 	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	repo.storageUsed = 100
 	repo.storageQuota = 110
 	newData := pngAvatarBytes(16)
 
-	service := NewService(repo, store, mailer, cfg)
+	service := NewService(repo, store, mailer, crypto, cfg)
 	_, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err == nil {
 		t.Fatal("expected quota exceeded error")
@@ -154,6 +176,7 @@ func TestReplaceAvatar_DeletesOldObjectUpdatesUsageAndPresignsBeforeDB(t *testin
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
 	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	oldKey := "avatars/user-1/old"
 	oldData := []byte("old-avatar")
@@ -168,7 +191,7 @@ func TestReplaceAvatar_DeletesOldObjectUpdatesUsageAndPresignsBeforeDB(t *testin
 		}
 	}
 
-	service := NewService(repo, store, mailer, cfg)
+	service := NewService(repo, store, mailer, crypto, cfg)
 	url, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err != nil {
 		t.Fatalf("replace avatar: %v", err)
@@ -197,13 +220,14 @@ func TestReplaceAvatar_ReturnsCurrentURLWhenConcurrentRequestWins(t *testing.T) 
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
 	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	currentKey := "avatars/user-1/newer"
 	store.seed(currentKey, pngAvatarBytes(32), "image/png")
 	repo.currentAfterReplace = currentKey
 
 	newData := pngAvatarBytes(16)
-	service := NewService(repo, store, mailer, cfg)
+	service := NewService(repo, store, mailer, crypto, cfg)
 	url, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err != nil {
 		t.Fatalf("replace avatar: %v", err)
@@ -218,6 +242,7 @@ func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
 	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	oldKey := "avatars/user-1/old"
 	oldData := pngAvatarBytes(40)
@@ -226,7 +251,7 @@ func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 	repo.avatarKey = oldKey
 	repo.storageUsed = int64(len(oldData))
 
-	service := NewService(repo, store, mailer, cfg)
+	service := NewService(repo, store, mailer, crypto, cfg)
 	if err := service.DeleteAvatar(ctx, "user-1"); err != nil {
 		t.Fatalf("delete avatar: %v", err)
 	}
@@ -470,11 +495,11 @@ func (r *fakeAvatarRepo) FindByID(_ context.Context, _ uuid.UUID) (*User, error)
 	return nil, nil
 }
 
-func (r *fakeAvatarRepo) FindByEmail(_ context.Context, _ string) (*User, error) {
+func (r *fakeAvatarRepo) FindByEmailHash(_ context.Context, _ []byte) (*User, error) {
 	return nil, nil
 }
 
-func (r *fakeAvatarRepo) Update(_ context.Context, _ *User) error {
+func (r *fakeAvatarRepo) Update(_ context.Context, _ *User, _ []byte, _ []byte) error {
 	return nil
 }
 
@@ -510,11 +535,11 @@ func (r *fakeAvatarRepo) FindByIDWithTx(_ context.Context, _ pgx.Tx, _ uuid.UUID
 	return nil, nil
 }
 
-func (r *fakeAvatarRepo) FindByEmailWithTx(_ context.Context, _ pgx.Tx, _ string) (*User, error) {
+func (r *fakeAvatarRepo) FindByEmailHashWithTx(_ context.Context, _ pgx.Tx, _ []byte) (*User, error) {
 	return nil, nil
 }
 
-func (r *fakeAvatarRepo) UpdateWithTx(_ context.Context, _ pgx.Tx, _ *User) error {
+func (r *fakeAvatarRepo) UpdateEmailWithTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ []byte, _ []byte, _ bool) error {
 	return nil
 }
 

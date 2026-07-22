@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/mail"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,13 @@ import (
 )
 
 const avatarURLTTL = 15 * time.Minute
+
+// CryptoService defines interface for encryption operations.
+type CryptoService interface {
+	Encrypt(plaintext []byte) ([]byte, error)
+	Decrypt(ciphertext []byte) ([]byte, error)
+	Hash(data []byte) []byte
+}
 
 // ObjectStorage is the MinIO subset required by profile avatars.
 type ObjectStorage interface {
@@ -41,8 +49,7 @@ type RepoInterface interface {
 	CurrentAvatarKey(ctx context.Context, userID string) (string, error)
 
 	FindByID(ctx context.Context, id uuid.UUID) (*User, error)
-	FindByEmail(ctx context.Context, email string) (*User, error)
-	Update(ctx context.Context, user *User) error
+	FindByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
 
 	CreateToken(ctx context.Context, token *Token) error
 	FindTokenByHash(ctx context.Context, hash []byte) (*Token, error)
@@ -52,8 +59,8 @@ type RepoInterface interface {
 
 	BeginTx(ctx context.Context) (pgx.Tx, error)
 	FindByIDWithTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*User, error)
-	FindByEmailWithTx(ctx context.Context, tx pgx.Tx, email string) (*User, error)
-	UpdateWithTx(ctx context.Context, tx pgx.Tx, user *User) error
+	FindByEmailHashWithTx(ctx context.Context, tx pgx.Tx, emailHash []byte) (*User, error)
+	UpdateEmailWithTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, emailEncrypted []byte, emailHash []byte, emailVerified bool) error
 	MarkTokenUsedWithTx(ctx context.Context, tx pgx.Tx, id string) error
 }
 
@@ -62,6 +69,7 @@ type Service struct {
 	repo     RepoInterface
 	storage  ObjectStorage
 	mailer   EmailSender
+	crypto   CryptoService
 	emailCfg EmailConfig
 }
 
@@ -76,14 +84,35 @@ func NewService(
 	repo RepoInterface,
 	storageClient ObjectStorage,
 	mailer EmailSender,
+	crypto CryptoService,
 	emailCfg EmailConfig,
 ) *Service {
 	return &Service{
 		repo:     repo,
 		storage:  storageClient,
 		mailer:   mailer,
+		crypto:   crypto,
 		emailCfg: emailCfg,
 	}
+}
+
+// encryptEmail encrypts email using crypto service.
+func (s *Service) encryptEmail(email string) ([]byte, error) {
+	return s.crypto.Encrypt([]byte(email))
+}
+
+// decryptEmail decrypts email using crypto service.
+func (s *Service) decryptEmail(encrypted []byte) (string, error) {
+	decrypted, err := s.crypto.Decrypt(encrypted)
+	if err != nil {
+		return "", err
+	}
+	return string(decrypted), nil
+}
+
+// hashEmail hashes email using crypto service.
+func (s *Service) hashEmail(email string) []byte {
+	return s.crypto.Hash([]byte(email))
 }
 
 // ============ Avatar Methods ============
@@ -253,6 +282,8 @@ func avatarKey(userID string) string {
 	return fmt.Sprintf("avatars/%s/%s", userID, uuid.New().String())
 }
 
+// ============ Email Methods ============
+
 // EmailChangePayload represents the payload for email change tokens.
 type EmailChangePayload struct {
 	NewEmail string `json:"new_email"`
@@ -358,11 +389,20 @@ func (s *Service) GenerateEmailChangeToken(ctx context.Context, userID uuid.UUID
 		return nil, fmt.Errorf("find user: %w", err)
 	}
 
+	// Decrypt email for comparison
+	email, err := s.decryptEmail(user.EmailEncrypted)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt email: %w", err)
+	}
+	user.Email = email
+
 	if user.Email == newEmail {
 		return nil, ErrEmailSameAsCurrent
 	}
 
-	existingUser, err := s.repo.FindByEmail(ctx, newEmail)
+	// Check if new email is already taken by another user.
+	emailHash := s.hashEmail(newEmail)
+	existingUser, err := s.repo.FindByEmailHash(ctx, emailHash)
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
 		return nil, fmt.Errorf("check email availability: %w", err)
 	}
@@ -388,6 +428,13 @@ func (s *Service) SendEmailChangeConfirmation(ctx context.Context, userID uuid.U
 		return fmt.Errorf("find user: %w", err)
 	}
 
+	// Decrypt email for sending
+	email, err := s.decryptEmail(user.EmailEncrypted)
+	if err != nil {
+		return fmt.Errorf("decrypt email: %w", err)
+	}
+	user.Email = email
+
 	var payload EmailChangePayload
 	if err := json.Unmarshal([]byte(token.Payload), &payload); err != nil {
 		return fmt.Errorf("parse payload: %w", err)
@@ -409,6 +456,7 @@ func (s *Service) SendEmailChangeConfirmation(ctx context.Context, userID uuid.U
 
 // RequestEmailChange handles the initial email change request.
 func (s *Service) RequestEmailChange(ctx context.Context, userID uuid.UUID, newEmail string) error {
+	newEmail = strings.TrimSpace(strings.ToLower(newEmail))
 	token, err := s.GenerateEmailChangeToken(ctx, userID, newEmail)
 	if err != nil {
 		return err
@@ -472,12 +520,16 @@ func (s *Service) executeEmailChange(ctx context.Context, token *Token, payload 
 		return err
 	}
 
-	user.Email = payload.NewEmail
-	user.EmailVerified = false
-	user.UpdatedAt = time.Now()
+	// Encrypt email using crypto service.
+	emailEncrypted, err := s.encryptEmail(payload.NewEmail)
+	if err != nil {
+		return fmt.Errorf("encrypt email: %w", err)
+	}
+	emailHash := s.hashEmail(payload.NewEmail)
 
-	if err := s.repo.UpdateWithTx(ctx, tx, user); err != nil {
-		return fmt.Errorf("update user: %w", err)
+	// Update only email and email_verified.
+	if err := s.repo.UpdateEmailWithTx(ctx, tx, token.UserID, emailEncrypted, emailHash, false); err != nil {
+		return fmt.Errorf("update email: %w", err)
 	}
 
 	if err := s.repo.MarkTokenUsedWithTx(ctx, tx, token.ID); err != nil {
@@ -493,11 +545,20 @@ func (s *Service) executeEmailChange(ctx context.Context, token *Token, payload 
 
 // validateEmailChange validates the email change request.
 func (s *Service) validateEmailChange(ctx context.Context, tx pgx.Tx, user *User, payload *EmailChangePayload) error {
+	// Decrypt email for comparison
+	email, err := s.decryptEmail(user.EmailEncrypted)
+	if err != nil {
+		return fmt.Errorf("decrypt email: %w", err)
+	}
+	user.Email = email
+
 	if user.Email != payload.OldEmail {
 		return fmt.Errorf("email has already been changed")
 	}
 
-	existingUser, err := s.repo.FindByEmailWithTx(ctx, tx, payload.NewEmail)
+	// Double-check if new email is still available using transaction.
+	emailHash := s.hashEmail(payload.NewEmail)
+	existingUser, err := s.repo.FindByEmailHashWithTx(ctx, tx, emailHash)
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
 		return fmt.Errorf("check email availability: %w", err)
 	}
@@ -526,6 +587,16 @@ func (s *Service) sendVerificationEmail(ctx context.Context, userID uuid.UUID, n
 			"user_id", userID.String())
 		return err
 	}
+
+	// Decrypt email for sending
+	email, err := s.decryptEmail(user.EmailEncrypted)
+	if err != nil {
+		slog.Error("failed to decrypt email for verification",
+			"error", err,
+			"user_id", userID.String())
+		return err
+	}
+	user.Email = email
 
 	verifyData := mailer.EmailData{
 		Token:    verifyToken.Token,

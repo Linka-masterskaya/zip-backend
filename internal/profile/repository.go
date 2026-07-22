@@ -254,14 +254,16 @@ func nullInt64Value(value sql.NullInt64) int64 {
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	var user User
 	var displayName sql.NullString
+	var emailEncrypted []byte
 
 	err := r.db.QueryRow(ctx, `
-		SELECT id, email, email_verified, display_name, created_at, updated_at
-		FROM users
-		WHERE id = $1 AND deleted_at IS NULL
+		SELECT u.id, ac.email_encrypted, u.email_verified, u.display_name, u.created_at, u.updated_at
+		FROM users u
+		LEFT JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE u.id = $1 AND u.deleted_at IS NULL
 	`, id).Scan(
 		&user.ID,
-		&user.Email,
+		&emailEncrypted,
 		&user.EmailVerified,
 		&displayName,
 		&user.CreatedAt,
@@ -274,6 +276,8 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*User, error) 
 		return nil, fmt.Errorf("find user by id: %w", err)
 	}
 
+	user.EmailEncrypted = emailEncrypted
+
 	if displayName.Valid {
 		user.DisplayName = &displayName.String
 	}
@@ -282,19 +286,20 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*User, error) 
 	return &user, nil
 }
 
-// FindByEmail retrieves a user by email address.
-func (r *Repository) FindByEmail(ctx context.Context, email string) (*User, error) {
+// FindByEmailHash retrieves a user by email hash.
+func (r *Repository) FindByEmailHash(ctx context.Context, emailHash []byte) (*User, error) {
 	var user User
 	var displayName sql.NullString
+	var emailEncrypted []byte
 
 	err := r.db.QueryRow(ctx, `
-		SELECT u.id, u.email, u.email_verified, u.display_name, u.created_at, u.updated_at
+		SELECT u.id, ac.email_encrypted, u.email_verified, u.display_name, u.created_at, u.updated_at
 		FROM users u
-		LEFT JOIN auth_cred ac ON ac.user_id = u.id
-		WHERE u.email = $1 AND u.deleted_at IS NULL
-	`, email).Scan(
+		JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE ac.email_hash = $1 AND u.deleted_at IS NULL
+	`, emailHash).Scan(
 		&user.ID,
-		&user.Email,
+		&emailEncrypted,
 		&user.EmailVerified,
 		&displayName,
 		&user.CreatedAt,
@@ -304,8 +309,10 @@ func (r *Repository) FindByEmail(ctx context.Context, email string) (*User, erro
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("find user by email: %w", err)
+		return nil, fmt.Errorf("find user by email hash: %w", err)
 	}
+
+	user.EmailEncrypted = emailEncrypted
 
 	if displayName.Valid {
 		user.DisplayName = &displayName.String
@@ -313,19 +320,6 @@ func (r *Repository) FindByEmail(ctx context.Context, email string) (*User, erro
 	user.Username = displayName.String
 
 	return &user, nil
-}
-
-// Update updates user information.
-func (r *Repository) Update(ctx context.Context, user *User) error {
-	_, err := r.db.Exec(ctx, `
-		UPDATE users
-		SET email = $2, email_verified = $3, display_name = $4, updated_at = now()
-		WHERE id = $1 AND deleted_at IS NULL
-	`, user.ID, user.Email, user.EmailVerified, user.DisplayName)
-	if err != nil {
-		return fmt.Errorf("update user: %w", err)
-	}
-	return nil
 }
 
 // ============ Token Methods ============
@@ -426,14 +420,16 @@ func (r *Repository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 func (r *Repository) FindByIDWithTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*User, error) {
 	var user User
 	var displayName sql.NullString
+	var emailEncrypted []byte
 
 	err := tx.QueryRow(ctx, `
-		SELECT id, email, email_verified, display_name, created_at, updated_at
-		FROM users
-		WHERE id = $1 AND deleted_at IS NULL
+		SELECT u.id, ac.email_encrypted, u.email_verified, u.display_name, u.created_at, u.updated_at
+		FROM users u
+		LEFT JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE u.id = $1 AND u.deleted_at IS NULL
 	`, id).Scan(
 		&user.ID,
-		&user.Email,
+		&emailEncrypted,
 		&user.EmailVerified,
 		&displayName,
 		&user.CreatedAt,
@@ -446,6 +442,8 @@ func (r *Repository) FindByIDWithTx(ctx context.Context, tx pgx.Tx, id uuid.UUID
 		return nil, fmt.Errorf("find user by id with tx: %w", err)
 	}
 
+	user.EmailEncrypted = emailEncrypted
+
 	if displayName.Valid {
 		user.DisplayName = &displayName.String
 	}
@@ -454,19 +452,20 @@ func (r *Repository) FindByIDWithTx(ctx context.Context, tx pgx.Tx, id uuid.UUID
 	return &user, nil
 }
 
-// FindByEmailWithTx retrieves a user by email within a transaction.
-func (r *Repository) FindByEmailWithTx(ctx context.Context, tx pgx.Tx, email string) (*User, error) {
+// FindByEmailHashWithTx retrieves a user by email hash within a transaction.
+func (r *Repository) FindByEmailHashWithTx(ctx context.Context, tx pgx.Tx, emailHash []byte) (*User, error) {
 	var user User
 	var displayName sql.NullString
+	var emailEncrypted []byte
 
 	err := tx.QueryRow(ctx, `
-		SELECT u.id, u.email, u.email_verified, u.display_name, u.created_at, u.updated_at
+		SELECT u.id, ac.email_encrypted, u.email_verified, u.display_name, u.created_at, u.updated_at
 		FROM users u
-		LEFT JOIN auth_cred ac ON ac.user_id = u.id
-		WHERE u.email = $1 AND u.deleted_at IS NULL
-	`, email).Scan(
+		JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE ac.email_hash = $1 AND u.deleted_at IS NULL
+	`, emailHash).Scan(
 		&user.ID,
-		&user.Email,
+		&emailEncrypted,
 		&user.EmailVerified,
 		&displayName,
 		&user.CreatedAt,
@@ -476,8 +475,10 @@ func (r *Repository) FindByEmailWithTx(ctx context.Context, tx pgx.Tx, email str
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("find user by email with tx: %w", err)
+		return nil, fmt.Errorf("find user by email hash with tx: %w", err)
 	}
+
+	user.EmailEncrypted = emailEncrypted
 
 	if displayName.Valid {
 		user.DisplayName = &displayName.String
@@ -487,16 +488,28 @@ func (r *Repository) FindByEmailWithTx(ctx context.Context, tx pgx.Tx, email str
 	return &user, nil
 }
 
-// UpdateWithTx updates user information within a transaction.
-func (r *Repository) UpdateWithTx(ctx context.Context, tx pgx.Tx, user *User) error {
+// UpdateEmailWithTx updates only the user's email and email_verified status within a transaction.
+func (r *Repository) UpdateEmailWithTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, emailEncrypted []byte, emailHash []byte, emailVerified bool) error {
+	// Update auth_cred (email) with updated_at
 	_, err := tx.Exec(ctx, `
-		UPDATE users
-		SET email = $2, email_verified = $3, display_name = $4, updated_at = now()
-		WHERE id = $1 AND deleted_at IS NULL
-	`, user.ID, user.Email, user.EmailVerified, user.DisplayName)
+        UPDATE auth_cred
+        SET email_encrypted = $2, email_hash = $3, updated_at = now()
+        WHERE user_id = $1
+    `, userID, emailEncrypted, emailHash)
+	if err != nil {
+		return fmt.Errorf("update auth_cred with tx: %w", err)
+	}
+
+	// Update users (email_verified only)
+	_, err = tx.Exec(ctx, `
+        UPDATE users
+        SET email_verified = $2, updated_at = now()
+        WHERE id = $1 AND deleted_at IS NULL
+    `, userID, emailVerified)
 	if err != nil {
 		return fmt.Errorf("update user with tx: %w", err)
 	}
+
 	return nil
 }
 
