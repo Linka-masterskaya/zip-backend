@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 )
 
 type Handler struct {
@@ -17,7 +18,8 @@ func NewHandler(service *Service) *Handler {
 }
 
 type createPackRequest struct {
-	Name string `json:"name"`
+	Name   string          `json:"name"`
+	Config json.RawMessage `json:"config,omitempty"`
 }
 
 func (h *Handler) CreatePack(w http.ResponseWriter, r *http.Request) error {
@@ -28,6 +30,13 @@ func (h *Handler) CreatePack(w http.ResponseWriter, r *http.Request) error {
 
 	if req.Name == "" {
 		return apperr.ErrBadRequest
+	}
+
+	if len(req.Config) > 0 {
+		if err := linka.ValidateConfig(r.Context(), req.Config); err != nil {
+			slog.Error("invalid pack config", "err", err)
+			return apperr.ErrBadRequest
+		}
 	}
 
 	res, err := h.service.Create(r.Context(), req.Name)
