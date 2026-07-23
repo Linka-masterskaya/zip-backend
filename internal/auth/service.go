@@ -11,13 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/domain"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"golang.org/x/crypto/bcrypt"
 )
 
 var ErrInvalidCredentials = errors.New("invalid credentials")
@@ -36,6 +37,8 @@ func runDummyPasswordCompare(password string) {
 //go:generate mockgen -source=service.go -destination=mock_repo_test.go -package=auth
 type authRepoIface interface {
 	GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
+	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
+	ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (string, error)
 
 	beginTx(ctx context.Context) (pgx.Tx, error)
 	withTx(tx pgx.Tx) authRepoIface
@@ -58,6 +61,7 @@ type refreshStore interface {
 		rec cache.RefreshRecord,
 		ttl time.Duration,
 	) error
+	RevokeAllSessions(ctx context.Context, userID string) error
 }
 
 type cryptoService interface {
@@ -71,6 +75,8 @@ type Config struct {
 	AccessTokenTTL           time.Duration
 	RefreshTokenTTL          time.Duration
 	VerifyEmailTokenTTL      time.Duration
+	ResetPasswordTokenTTL    time.Duration
+	BcryptCost               int
 	RequireEmailVerification bool
 	CookieSecure             bool
 }
@@ -112,7 +118,7 @@ func (au *authService) Login(
 	emailHash := au.crp.Hash([]byte(email))
 
 	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
-	if errors.Is(err, ErrUserNotFound) {
+	if errors.Is(err, apperr.ErrUserNotFound) {
 		runDummyPasswordCompare(password)
 		return nil, ErrInvalidCredentials
 	}
@@ -152,6 +158,7 @@ func (au *authService) Login(
 	rec := cache.RefreshRecord{
 		FID:    fid,
 		Status: "active",
+		UserID: user.ID,
 	}
 
 	if err := au.cache.StoreRefresh(

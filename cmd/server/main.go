@@ -75,6 +75,8 @@ func run() error {
 		AccessTokenTTL:           deps.cfg.Auth.AccessTokenTTL,
 		RefreshTokenTTL:          deps.cfg.Auth.RefreshTokenTTL,
 		VerifyEmailTokenTTL:      deps.cfg.Auth.VerifyEmailTokenTTL,
+		ResetPasswordTokenTTL:    deps.cfg.Auth.ResetPasswordTokenTTL,
+		BcryptCost:               deps.cfg.Auth.BcryptCost,
 		RequireEmailVerification: deps.cfg.Auth.RequireEmailVerification,
 		CookieSecure:             deps.cfg.Auth.CookieSecure,
 	}
@@ -96,8 +98,6 @@ func run() error {
 	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	forgotRateLimit := middleware.RateLimit(deps.redis, "forgot", int64(deps.cfg.Auth.ForgotRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	resetRateLimit := middleware.RateLimit(deps.redis, "reset", int64(deps.cfg.Auth.ResetRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	verifyResendRateLimit := middleware.RateLimit(deps.redis, "verify-resend", int64(deps.cfg.Auth.VerifyResendRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	emailConfirmRateLimit := middleware.RateLimit(deps.redis, "email-confirm", int64(deps.cfg.Auth.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 
 	mainMux := http.NewServeMux()
 	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.CreatePack)))
@@ -106,42 +106,28 @@ func run() error {
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
+	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
+
 	mainMux.Handle(
-		"POST /auth/login",
+		"POST /api/v1/auth/login",
 		loginRateLimit(
 			middleware.ErrorMiddleware(authHandler.Login),
 		),
 	)
-
 	mainMux.Handle(
-		"POST /auth/forgot",
+		"POST /api/v1/auth/password/forgot",
 		forgotRateLimit(
 			middleware.ErrorMiddleware(authHandler.ForgotPassword),
 		),
 	)
-
 	mainMux.Handle(
-		"POST /auth/reset",
+		"POST /api/v1/auth/password/reset",
 		resetRateLimit(
 			middleware.ErrorMiddleware(authHandler.ResetPassword),
 		),
 	)
 
-	mainMux.Handle(
-		"POST /auth/verify-resend",
-		verifyResendRateLimit(
-			middleware.ErrorMiddleware(authHandler.VerifyResend),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /auth/email-confirm",
-		emailConfirmRateLimit(
-			middleware.ErrorMiddleware(authHandler.EmailConfirm),
-		),
-	)
-
-	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
+	// Verify/resend auth-маршруты подключаются в auth handler.
 	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
 
 	profileRepo := profile.NewRepository(deps.db)
@@ -289,7 +275,7 @@ func initInfra() (*infra, error) {
 		return nil, fmt.Errorf("cryptox init: %w", err)
 	}
 
-	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.PublicURL)
+	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.FrontendURL)
 	if err != nil {
 		return nil, fmt.Errorf("smtp init: %w", err)
 	}
