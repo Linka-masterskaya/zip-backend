@@ -17,7 +17,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/Linka-masterskaya/zip-backend/internal/auth"
+	"github.com/Linka-masterskaya/zip-backend/pkg/linka/cryptox"
 	_ "github.com/lib/pq"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
