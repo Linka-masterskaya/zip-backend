@@ -95,7 +95,6 @@ func (s *Service) handleExistingEmail(ctx context.Context, email, name, yandexID
 	}
 
 	slog.Warn("attempt to takeover existing email via yandex oauth",
-		"email", email,
 		"name", name,
 		"yandex_id", yandexID,
 		"existing_user_id", cred.UserID,
@@ -111,9 +110,6 @@ func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID str
 	}
 	if identity == nil {
 		return nil, nil, nil
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, ErrUserNotFound
 	}
 
 	user, err := s.repo.FindUserByID(ctx, identity.UserID)
