@@ -71,8 +71,8 @@ jwt:
   refresh_ttl: "720h"
 
 crypto:
-  aes_key: "01234567890123456789012345678901"
-  hmac_key: "abcdefghijklmnopqrstuvwxyz123456"
+  aes_key: "6dlGlnc2GSsJD1i46iimfgTPUzv9J10zbPIS9Um8vN8="
+  hmac_key: "LwhuzYj/PvQFpfun4y+XylcRdhIr8fOcGPFSyfWzlDU="
 
 yandex:
   client_id: ''
@@ -152,7 +152,3 @@ cors:
     - 'X-Total-Count'
   allow_credentials: true
   max_age: 86400
-
-crypto:
-  aes_key: "6dlGlnc2GSsJD1i46iimfgTPUzv9J10zbPIS9Um8vN8="
-  hmac_key: "LwhuzYj/PvQFpfun4y+XylcRdhIr8fOcGPFSyfWzlDU="

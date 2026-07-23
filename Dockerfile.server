@@ -26,6 +26,8 @@ FROM gcr.io/distroless/static-debian12
 WORKDIR /app
 
 COPY --from=builder /app/bin/server .
+COPY config/config.dev.yml /app/config/config.dev.yml
+
 
 EXPOSE 8080
 USER nonroot:nonroot

@@ -2,18 +2,19 @@ name: Build and Push Docker images
 
 on:
   push:
-    branches: [main]
+    branches: [main, deploy-test]
 
 env:
   REGISTRY: ghcr.io
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
     
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta_server.outputs.version }}
+    concurrency:
+      group: ${{ github.workflow }}-build-${{ github.ref }}
+      cancel-in-progress: true
 
     permissions:
       contents: read
@@ -39,8 +40,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/linka-masterskaya/zip-backend/server
           tags: |
+            type=sha,format=short,priority=250
             type=raw,value=latest
-            type=sha,format=short
 
       - name: Build and push Server
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -54,6 +55,8 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+          build-args: |
+            VERSION=${{ github.sha }}
 
       - name: Docker meta AI Worker
         id: meta_ai_worker
@@ -61,8 +64,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/linka-masterskaya/zip-backend/ai-worker
           tags: |
+            type=sha,format=short,priority=250
             type=raw,value=latest
-            type=sha,format=short
 
       - name: Build and push AI Worker
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -76,3 +79,91 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
+
+    concurrency:
+      group: ${{ github.workflow }}-deploy-${{ github.ref }}
+      cancel-in-progress: false
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Render deployment environment
+        env:
+          CI_APP_ENV: prod
+          CI_APP_FRONTEND_URL: ${{ vars.APP_FRONTEND_URL }}
+          CI_VERSION: ${{ needs.build-and-push.outputs.version }}
+          CI_DB_URL: ${{ secrets.DB_URL }}
+          CI_POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          CI_POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          CI_POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          CI_REDIS_URL: ${{ secrets.REDIS_URL }}
+          CI_REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          CI_JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CI_CRYPTO_AES_KEY: ${{ secrets.CRYPTO_AES_KEY }}
+          CI_CRYPTO_HMAC_KEY: ${{ secrets.CRYPTO_HMAC_KEY }}
+          CI_MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          CI_MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          CI_MINIO_ENDPOINT: ${{ vars.CADDY_DOMAIN_NAME }}
+          CI_MINIO_USE_SSL: "true"
+          CI_NATS_CONNECTION_URL: "nats://nats:4222"
+          CI_CADDY_DOMAIN_NAME: ${{ vars.CADDY_DOMAIN_NAME }}
+          CI_CADDY_LETSENCRYPT_EMAIL: ${{ vars.CADDY_LETSENCRYPT_EMAIL }}
+          CI_YANDEX_IAM_TOKEN: ${{ secrets.YANDEX_IAM_TOKEN }}
+          CI_YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
+          CI_SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          CI_GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          CI_GRAFANA_ROOT_URL: ${{ vars.GRAFANA_ROOT_URL }}
+        run: |
+          pip3 install dump-env
+          dump-env \
+            -t .env.example \
+            -p 'CI_' > .env
+          chmod 600 .env
+
+      - name: Prepare server directories
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: mkdir -p ~/zip-backend ~/frontend/dist
+
+      - name: Copy files to server
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          source: "docker-compose.server.yaml,deploy/,scripts/,.env"
+          target: "~/zip-backend"
+
+      - name: Deploy
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_HOST: ghcr.io
+          REGISTRY_USERNAME: ${{ github.actor }}
+          DEPLOY_VERSION: ${{ needs.build-and-push.outputs.version }}
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          envs: GITHUB_TOKEN,REGISTRY_HOST,REGISTRY_USERNAME,DEPLOY_VERSION
+          script: |
+            cd ~/zip-backend
+            printf '%s' "$GITHUB_TOKEN" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USERNAME" --password-stdin
+            bash scripts/server-deploy.sh $DEPLOY_VERSION
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: curl -sf http://localhost:9091/health || exit 1
