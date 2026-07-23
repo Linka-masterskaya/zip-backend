@@ -315,6 +315,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("crypto.hmac_key", "")
 
 	// Auth defaults
+	v.SetDefault("auth.reset_password_token_ttl", "1h")
 	v.SetDefault("auth.bcrypt_cost", 12)
 	v.SetDefault("auth.login_rate_limit", 5)
 	v.SetDefault("auth.require_email_verification", false)

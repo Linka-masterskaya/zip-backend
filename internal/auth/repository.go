@@ -75,14 +75,37 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 	return &user, nil
 }
 
-// CreatePasswordResetToken создает одноразовый reset-токен и сохраняет только его hash.
+// CreatePasswordResetToken гасит активные не истекшие reset-токены пользователя,
+// создает новый одноразовый reset-токен и сохраняет в БД его hash.
 func (r *authRepo) CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error) {
 	token, rawToken, err := newPasswordResetToken()
 	if err != nil {
 		return "", err
 	}
 
-	_, err = r.db.Exec(ctx, `
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return "", fmt.Errorf("authRepo.CreatePasswordResetToken: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.ErrorContext(ctx, "tx rollback failed", logger.Err(err))
+		}
+	}()
+
+	_, err = tx.Exec(ctx, `
+		UPDATE verify_tokens
+		SET used_at = now()
+		WHERE user_id = $1
+		  AND purpose = $2
+		  AND used_at IS NULL
+		  AND expires_at > now()
+	`, userID, passwordResetTokenPurpose)
+	if err != nil {
+		return "", fmt.Errorf("authRepo.CreatePasswordResetToken burn old tokens: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO verify_tokens (
 			id,
 			user_id,
@@ -93,7 +116,11 @@ func (r *authRepo) CreatePasswordResetToken(ctx context.Context, userID string, 
 		VALUES ($1, $2, $3, $4, $5)
 	`, uuid.New(), userID, passwordResetTokenPurpose, hashPasswordResetToken(rawToken), time.Now().Add(ttl))
 	if err != nil {
-		return "", fmt.Errorf("authRepo.CreatePasswordResetToken: %w", err)
+		return "", fmt.Errorf("authRepo.CreatePasswordResetToken insert token: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("authRepo.CreatePasswordResetToken commit: %w", err)
 	}
 
 	return token, nil

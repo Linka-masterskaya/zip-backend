@@ -13,7 +13,8 @@ import (
 )
 
 type passwordResetMailerFake struct {
-	calls int
+	called chan struct{}
+	calls  int
 
 	to       string
 	template domain.Template
@@ -32,6 +33,10 @@ func (f *passwordResetMailerFake) Send(
 	f.to = to
 	f.template = template
 	f.data = data
+
+	if f.called != nil {
+		close(f.called)
+	}
 
 	return f.err
 }
@@ -58,6 +63,15 @@ func testPasswordResetConfig() Config {
 	return cfg
 }
 
+func waitPasswordResetMailerCall(t *testing.T, mailer *passwordResetMailerFake) {
+	t.Helper()
+
+	select {
+	case <-mailer.called:
+	case <-time.After(time.Second):
+		t.Fatal("password reset email was not sent")
+	}
+}
 func TestAuthService_ForgotPassword_InvalidEmail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)
@@ -123,7 +137,7 @@ func TestAuthService_ForgotPassword_SendsResetEmail(t *testing.T) {
 		CreatePasswordResetToken(gomock.Any(), "user-id", cfg.ResetPasswordTokenTTL).
 		Return("reset-token", nil)
 
-	mailer := &passwordResetMailerFake{}
+	mailer := &passwordResetMailerFake{called: make(chan struct{})}
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
@@ -136,6 +150,7 @@ func TestAuthService_ForgotPassword_SendsResetEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
+	waitPasswordResetMailerCall(t, mailer)
 	if mailer.calls != 1 {
 		t.Fatalf("mailer calls = %d, want 1", mailer.calls)
 	}
@@ -165,10 +180,11 @@ func TestAuthService_ForgotPassword_MailerErrorIsSuccess(t *testing.T) {
 		CreatePasswordResetToken(gomock.Any(), "user-id", cfg.ResetPasswordTokenTTL).
 		Return("reset-token", nil)
 
+	mailer := &passwordResetMailerFake{called: make(chan struct{}), err: errors.New("smtp failed")}
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		&passwordResetMailerFake{err: errors.New("smtp failed")},
+		mailer,
 		cfg,
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
 	)
@@ -177,6 +193,7 @@ func TestAuthService_ForgotPassword_MailerErrorIsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
+	waitPasswordResetMailerCall(t, mailer)
 }
 
 func TestAuthService_ResetPassword_InvalidInput(t *testing.T) {
@@ -266,7 +283,7 @@ func TestAuthService_ResetPassword_UpdatesPasswordAndRevokesSessions(t *testing.
 	}
 }
 
-func TestAuthService_ResetPassword_LogsRevokerError(t *testing.T) {
+func TestAuthService_ResetPassword_ReturnsInternalErrorWhenRevokeFails(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)
 
@@ -285,8 +302,15 @@ func TestAuthService_ResetPassword_LogsRevokerError(t *testing.T) {
 	)
 
 	err := svc.ResetPassword(context.Background(), "reset-token", "NewPassword123")
-	if err != nil {
-		t.Fatalf("ResetPassword: %v", err)
+	var appErr *apperr.AppError
+	if !errors.As(err, &appErr) {
+		t.Fatalf("err = %v, want app error", err)
+	}
+	if appErr.Code != apperr.ErrInternal.Code {
+		t.Fatalf("code = %s, want %s", appErr.Code, apperr.ErrInternal.Code)
+	}
+	if !errors.Is(appErr.Err, revokerErr) {
+		t.Fatalf("wrapped err = %v, want %v", appErr.Err, revokerErr)
 	}
 	if cacheStore.revokeCalls == 0 {
 		t.Fatal("sessions revoke was not called")

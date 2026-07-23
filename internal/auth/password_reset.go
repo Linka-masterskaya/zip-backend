@@ -44,9 +44,18 @@ func (au *authService) ForgotPassword(ctx context.Context, email string) error {
 		return err
 	}
 
+	// Письмо отправляется асинхронно, чтобы ответ 202 не зависел от SMTP.
+	// WithoutCancel сохраняет context values для логов, но не отменяется после завершения HTTP-запроса,
+	// поэтому SMTP-отправка может завершиться уже после ответа клиенту.
+	go au.sendPasswordResetEmail(context.WithoutCancel(ctx), user.ID, email, token)
+
+	return nil
+}
+
+func (au *authService) sendPasswordResetEmail(ctx context.Context, userID, email, token string) {
 	if au.mailer == nil {
-		slog.ErrorContext(ctx, "password reset email sender is not configured", "user_id", user.ID)
-		return nil
+		slog.ErrorContext(ctx, "password reset email sender is not configured", "user_id", userID)
+		return
 	}
 
 	if err := au.mailer.Send(ctx, email, domain.PasswordReset, domain.EmailData{
@@ -54,13 +63,10 @@ func (au *authService) ForgotPassword(ctx context.Context, email string) error {
 		Email: email,
 	}); err != nil {
 		slog.ErrorContext(ctx, "password reset email send failed",
-			"user_id", user.ID,
+			"user_id", userID,
 			logger.Err(err),
 		)
-		return nil
 	}
-
-	return nil
 }
 
 // ResetPassword использует reset-токен, меняет пароль и отзывает сессии.
@@ -90,6 +96,7 @@ func (au *authService) ResetPassword(ctx context.Context, token string, newPassw
 			"user_id", userID,
 			logger.Err(err),
 		)
+		return apperr.ErrInternal.WithError(err)
 	}
 
 	return nil
