@@ -6,16 +6,15 @@ on:
 
 env:
   REGISTRY: ghcr.io
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
     
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta_server.outputs.version }}
+    concurrency:
+      group: ${{ github.workflow }}-build-${{ github.ref }}
+      cancel-in-progress: true
 
     permissions:
       contents: read
@@ -41,7 +40,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/linka-masterskaya/zip-backend/server
           tags: |
-            type=sha,format=short
+            type=sha,format=short,priority=250
             type=raw,value=latest
 
       - name: Build and push Server
@@ -65,7 +64,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/linka-masterskaya/zip-backend/ai-worker
           tags: |
-            type=sha,format=short
+            type=sha,format=short,priority=250
             type=raw,value=latest
 
       - name: Build and push AI Worker
@@ -84,6 +83,11 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
+
+    concurrency:
+      group: ${{ github.workflow }}-deploy-${{ github.ref }}
+      cancel-in-progress: false
     
     steps:
       - name: Checkout code
@@ -92,6 +96,7 @@ jobs:
       - name: Render deployment environment
         env:
           CI_APP_ENV: prod
+          CI_APP_FRONTEND_URL: ${{ vars.APP_FRONTEND_URL }}
           CI_VERSION: ${{ needs.build-and-push.outputs.version }}
           CI_DB_URL: ${{ secrets.DB_URL }}
           CI_POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
@@ -104,11 +109,13 @@ jobs:
           CI_CRYPTO_HMAC_KEY: ${{ secrets.CRYPTO_HMAC_KEY }}
           CI_MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           CI_MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
-          CI_MINIO_ENDPOINT: "minio:9000"
-          CI_MINIO_USE_SSL: "false"
+          CI_MINIO_ENDPOINT: ${{ vars.CADDY_DOMAIN_NAME }}
+          CI_MINIO_USE_SSL: "true"
           CI_NATS_CONNECTION_URL: "nats://nats:4222"
           CI_CADDY_DOMAIN_NAME: ${{ vars.CADDY_DOMAIN_NAME }}
           CI_CADDY_LETSENCRYPT_EMAIL: ${{ vars.CADDY_LETSENCRYPT_EMAIL }}
+          CI_YANDEX_IAM_TOKEN: ${{ secrets.YANDEX_IAM_TOKEN }}
+          CI_YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
           CI_SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           CI_GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           CI_GRAFANA_ROOT_URL: ${{ vars.GRAFANA_ROOT_URL }}
