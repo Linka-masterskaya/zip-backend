@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
@@ -70,6 +71,7 @@ type Service struct {
 	storage  ObjectStorage
 	mailer   EmailSender
 	crypto   CryptoService
+	sessions SessionRevoker
 	emailCfg EmailConfig
 }
 
@@ -85,6 +87,7 @@ func NewService(
 	storageClient ObjectStorage,
 	mailer EmailSender,
 	crypto CryptoService,
+	sessions SessionRevoker,
 	emailCfg EmailConfig,
 ) *Service {
 	return &Service{
@@ -92,6 +95,7 @@ func NewService(
 		storage:  storageClient,
 		mailer:   mailer,
 		crypto:   crypto,
+		sessions: sessions,
 		emailCfg: emailCfg,
 	}
 }
@@ -282,8 +286,6 @@ func avatarKey(userID string) string {
 	return fmt.Sprintf("avatars/%s/%s", userID, uuid.New().String())
 }
 
-// ============ Email Methods ============
-
 // EmailChangePayload represents the payload for email change tokens.
 type EmailChangePayload struct {
 	NewEmail string `json:"new_email"`
@@ -389,7 +391,6 @@ func (s *Service) GenerateEmailChangeToken(ctx context.Context, userID uuid.UUID
 		return nil, fmt.Errorf("find user: %w", err)
 	}
 
-	// Decrypt email for comparison
 	email, err := s.decryptEmail(user.EmailEncrypted)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt email: %w", err)
@@ -400,7 +401,6 @@ func (s *Service) GenerateEmailChangeToken(ctx context.Context, userID uuid.UUID
 		return nil, ErrEmailSameAsCurrent
 	}
 
-	// Check if new email is already taken by another user.
 	emailHash := s.hashEmail(newEmail)
 	existingUser, err := s.repo.FindByEmailHash(ctx, emailHash)
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
@@ -428,7 +428,6 @@ func (s *Service) SendEmailChangeConfirmation(ctx context.Context, userID uuid.U
 		return fmt.Errorf("find user: %w", err)
 	}
 
-	// Decrypt email for sending
 	email, err := s.decryptEmail(user.EmailEncrypted)
 	if err != nil {
 		return fmt.Errorf("decrypt email: %w", err)
@@ -493,6 +492,13 @@ func (s *Service) ConfirmEmailChange(ctx context.Context, tokenStr string) error
 			"new_email", payload.NewEmail)
 	}
 
+	if err := s.sessions.RevokeAllSessions(ctx, token.UserID.String()); err != nil {
+		slog.Error("revoke all sessions after password change failed",
+			"user_id", token.UserID.String(),
+			logger.Err(err),
+		)
+	}
+
 	return nil
 }
 
@@ -520,14 +526,12 @@ func (s *Service) executeEmailChange(ctx context.Context, token *Token, payload 
 		return err
 	}
 
-	// Encrypt email using crypto service.
 	emailEncrypted, err := s.encryptEmail(payload.NewEmail)
 	if err != nil {
 		return fmt.Errorf("encrypt email: %w", err)
 	}
 	emailHash := s.hashEmail(payload.NewEmail)
 
-	// Update only email and email_verified.
 	if err := s.repo.UpdateEmailWithTx(ctx, tx, token.UserID, emailEncrypted, emailHash, false); err != nil {
 		return fmt.Errorf("update email: %w", err)
 	}
@@ -545,7 +549,6 @@ func (s *Service) executeEmailChange(ctx context.Context, token *Token, payload 
 
 // validateEmailChange validates the email change request.
 func (s *Service) validateEmailChange(ctx context.Context, tx pgx.Tx, user *User, payload *EmailChangePayload) error {
-	// Decrypt email for comparison
 	email, err := s.decryptEmail(user.EmailEncrypted)
 	if err != nil {
 		return fmt.Errorf("decrypt email: %w", err)
@@ -556,7 +559,6 @@ func (s *Service) validateEmailChange(ctx context.Context, tx pgx.Tx, user *User
 		return fmt.Errorf("email has already been changed")
 	}
 
-	// Double-check if new email is still available using transaction.
 	emailHash := s.hashEmail(payload.NewEmail)
 	existingUser, err := s.repo.FindByEmailHashWithTx(ctx, tx, emailHash)
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
@@ -588,7 +590,6 @@ func (s *Service) sendVerificationEmail(ctx context.Context, userID uuid.UUID, n
 		return err
 	}
 
-	// Decrypt email for sending
 	email, err := s.decryptEmail(user.EmailEncrypted)
 	if err != nil {
 		slog.Error("failed to decrypt email for verification",

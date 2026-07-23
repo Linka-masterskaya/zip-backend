@@ -262,12 +262,9 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*User, error) 
 		LEFT JOIN auth_cred ac ON ac.user_id = u.id
 		WHERE u.id = $1 AND u.deleted_at IS NULL
 	`, id).Scan(
-		&user.ID,
-		&emailEncrypted,
-		&user.EmailVerified,
-		&displayName,
-		&user.CreatedAt,
-		&user.UpdatedAt,
+		&user.ID, &emailEncrypted,
+		&user.EmailVerified, &displayName,
+		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -298,12 +295,9 @@ func (r *Repository) FindByEmailHash(ctx context.Context, emailHash []byte) (*Us
 		JOIN auth_cred ac ON ac.user_id = u.id
 		WHERE ac.email_hash = $1 AND u.deleted_at IS NULL
 	`, emailHash).Scan(
-		&user.ID,
-		&emailEncrypted,
-		&user.EmailVerified,
-		&displayName,
-		&user.CreatedAt,
-		&user.UpdatedAt,
+		&user.ID, &emailEncrypted,
+		&user.EmailVerified, &displayName,
+		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -347,13 +341,9 @@ func (r *Repository) FindTokenByHash(ctx context.Context, hash []byte) (*Token, 
 		FROM verify_tokens
 		WHERE token_hash = $1
 	`, hash).Scan(
-		&token.ID,
-		&token.UserID,
-		&token.Type,
-		&payload,
-		&token.ExpiresAt,
-		&usedAt,
-		&token.CreatedAt,
+		&token.ID, &token.UserID,
+		&token.Type, &payload,
+		&token.ExpiresAt, &usedAt, &token.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTokenNotFound
@@ -428,12 +418,9 @@ func (r *Repository) FindByIDWithTx(ctx context.Context, tx pgx.Tx, id uuid.UUID
 		LEFT JOIN auth_cred ac ON ac.user_id = u.id
 		WHERE u.id = $1 AND u.deleted_at IS NULL
 	`, id).Scan(
-		&user.ID,
-		&emailEncrypted,
-		&user.EmailVerified,
-		&displayName,
-		&user.CreatedAt,
-		&user.UpdatedAt,
+		&user.ID, &emailEncrypted,
+		&user.EmailVerified, &displayName,
+		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -464,12 +451,9 @@ func (r *Repository) FindByEmailHashWithTx(ctx context.Context, tx pgx.Tx, email
 		JOIN auth_cred ac ON ac.user_id = u.id
 		WHERE ac.email_hash = $1 AND u.deleted_at IS NULL
 	`, emailHash).Scan(
-		&user.ID,
-		&emailEncrypted,
-		&user.EmailVerified,
-		&displayName,
-		&user.CreatedAt,
-		&user.UpdatedAt,
+		&user.ID, &emailEncrypted,
+		&user.EmailVerified, &displayName,
+		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -490,7 +474,6 @@ func (r *Repository) FindByEmailHashWithTx(ctx context.Context, tx pgx.Tx, email
 
 // UpdateEmailWithTx updates only the user's email and email_verified status within a transaction.
 func (r *Repository) UpdateEmailWithTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, emailEncrypted []byte, emailHash []byte, emailVerified bool) error {
-	// Update auth_cred (email) with updated_at
 	_, err := tx.Exec(ctx, `
         UPDATE auth_cred
         SET email_encrypted = $2, email_hash = $3, updated_at = now()
@@ -500,7 +483,6 @@ func (r *Repository) UpdateEmailWithTx(ctx context.Context, tx pgx.Tx, userID uu
 		return fmt.Errorf("update auth_cred with tx: %w", err)
 	}
 
-	// Update users (email_verified only)
 	_, err = tx.Exec(ctx, `
         UPDATE users
         SET email_verified = $2, updated_at = now()

@@ -104,8 +104,8 @@ func newTestCrypto(t *testing.T) *cryptox.Cryptox {
 	return crypto
 }
 
-// insertTestUser inserts a test user into users and auth_cred tables.
-func insertTestUser(ctx context.Context, db *sql.DB, id uuid.UUID, email string, crypto *cryptox.Cryptox) error {
+// insertTempUser inserts a test user into users and auth_cred tables.
+func insertTempUser(ctx context.Context, db *sql.DB, id uuid.UUID, email string, crypto *cryptox.Cryptox) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO users (id, email_verified, display_name, created_at, updated_at)
 		VALUES ($1, $2, $3, now(), now())
@@ -231,6 +231,18 @@ func (s *testStorage) PresignedURL(ctx context.Context, key string, ttl time.Dur
 	return "https://storage.test/" + key, nil
 }
 
+type fakeRevoker struct {
+	revokeErr    error
+	revokedID    string
+	revokeCalled bool
+}
+
+func (f *fakeRevoker) RevokeAllSessions(ctx context.Context, userID string) error {
+	f.revokeCalled = true
+	f.revokedID = userID
+	return f.revokeErr
+}
+
 // ============ Integration Tests ============
 
 // TestGenerateEmailChangeToken_Success tests token generation without email.
@@ -256,14 +268,15 @@ func TestGenerateEmailChangeToken_Success(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -305,14 +318,15 @@ func TestSendEmailChangeConfirmation_Success(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -344,14 +358,15 @@ func TestEmailChangeFlow_Integration(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -405,14 +420,15 @@ func TestConfirmEmailChange_Integration_Success(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -453,7 +469,8 @@ func TestEmailChangeFlow_Integration_EmailAlreadyTaken(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID1 := uuid.New()
@@ -461,8 +478,8 @@ func TestEmailChangeFlow_Integration_EmailAlreadyTaken(t *testing.T) {
 	oldEmail := "old@example.com"
 	takenEmail := "taken@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID1, oldEmail, crypto))
-	require.NoError(t, insertTestUser(ctx, db, userID2, takenEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID1, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID2, takenEmail, crypto))
 
 	_, err = service.GenerateEmailChangeToken(ctx, userID1, takenEmail)
 	assert.Error(t, err)
@@ -492,13 +509,14 @@ func TestEmailChangeFlow_Integration_SameEmail(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, email, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, email, crypto))
 
 	_, err = service.GenerateEmailChangeToken(ctx, userID, email)
 	assert.Error(t, err)
@@ -528,14 +546,15 @@ func TestConfirmEmailChange_Integration_TokenExpired(t *testing.T) {
 		EmailChangeTTL: -1 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -572,14 +591,15 @@ func TestConfirmEmailChange_Integration_TokenAlreadyUsed(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -615,14 +635,15 @@ func TestDeleteExpiredTokens_Integration(t *testing.T) {
 		EmailChangeTTL: -1 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
 
 	for i := 0; i < 3; i++ {
 		_, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
@@ -665,14 +686,15 @@ func TestEmailChangeFlow_Integration_InvalidEmail(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	invalidEmail := "invalid-email"
 
-	require.NoError(t, insertTestUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
 
 	_, err = service.GenerateEmailChangeToken(ctx, userID, invalidEmail)
 	assert.Error(t, err)
@@ -702,7 +724,8 @@ func TestEmailChangeFlow_Integration_UserNotFound(t *testing.T) {
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
 	}
-	service := NewService(repo, storage, mailer, crypto, emailCfg)
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
 	ctx := context.Background()
 	userID := uuid.New()

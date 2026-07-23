@@ -147,7 +147,7 @@ func run() error {
 	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
 
 	profileRepo := profile.NewRepository(deps.db)
-	profileService := profile.NewService(profileRepo, deps.storage, deps.mailer, deps.crypto,
+	profileService := profile.NewService(profileRepo, deps.storage, deps.mailer, deps.crypto, deps.redis,
 		profile.EmailConfig{
 			EmailChangeTTL: deps.cfg.Profile.EmailChangeTTL,
 			EmailVerifyTTL: deps.cfg.Profile.EmailVerifyTTL},
