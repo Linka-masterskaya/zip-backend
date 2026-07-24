@@ -99,7 +99,7 @@ func run() error {
 	verifyResendRateLimit := middleware.RateLimit(deps.redis, "verify-resend", int64(deps.cfg.Auth.VerifyResendRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	emailConfirmRateLimit := middleware.RateLimit(deps.redis, "email-confirm", int64(deps.cfg.Auth.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	profileEmailChangeRateLimit := middleware.RateLimit(deps.redis, "profile-email-change", int64(deps.cfg.Profile.EmailChangeRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	profileEmailConfirmRateLimit := middleware.RateLimit(deps.redis, "profile-email-confirm", int64(deps.cfg.Auth.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	profileEmailConfirmRateLimit := middleware.RateLimit(deps.redis, "profile-email-confirm", int64(deps.cfg.Profile.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 
 	mainMux := http.NewServeMux()
 	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.CreatePack)))

@@ -11,9 +11,10 @@ import (
 
 // Email-related errors.
 var (
-	ErrEmailInvalid       = errors.New("invalid email format")
-	ErrEmailAlreadyUsed   = errors.New("email already in use by another user")
-	ErrEmailSameAsCurrent = errors.New("new email is the same as current email")
+	ErrEmailInvalid        = errors.New("invalid email format")
+	ErrEmailAlreadyUsed    = errors.New("email already in use by another user")
+	ErrEmailSameAsCurrent  = errors.New("new email is the same as current email")
+	ErrEmailAlreadyChanged = errors.New("email has already been changed")
 )
 
 // Token-related errors.

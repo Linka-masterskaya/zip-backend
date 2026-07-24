@@ -169,8 +169,8 @@ func (h *Handler) ConfirmEmailChange(w http.ResponseWriter, r *http.Request) err
 			return apperr.ErrVerifyTokenInvalid.WithMessage("Token has already been used")
 		case errors.Is(err, ErrEmailAlreadyUsed):
 			return apperr.ErrConflict.WithMessage("Email already in use by another user")
-		case errors.Is(err, ErrEmailAlreadyUsed):
-			return apperr.ErrConflict.WithMessage("Email already in use by another user")
+		case errors.Is(err, ErrEmailAlreadyChanged):
+			return apperr.ErrConflict.WithMessage("Email has already been changed")
 		case errors.Is(err, ErrUserNotFound):
 			return apperr.ErrVerifyTokenInvalid
 		default:

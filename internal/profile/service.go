@@ -556,7 +556,7 @@ func (s *Service) validateEmailChange(ctx context.Context, tx pgx.Tx, user *User
 	user.Email = email
 
 	if user.Email != payload.OldEmail {
-		return fmt.Errorf("email has already been changed")
+		return ErrEmailAlreadyChanged
 	}
 
 	emailHash := s.hashEmail(payload.NewEmail)
