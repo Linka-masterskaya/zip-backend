@@ -14,7 +14,8 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/domain"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -85,7 +86,7 @@ type LoginResult struct {
 type authService struct {
 	repo   authRepoIface
 	cache  refreshStore
-	mailer domain.EmailSender
+	mailer mailer.EmailSender
 	cfg    Config
 	crp    cryptoService
 }
@@ -93,7 +94,7 @@ type authService struct {
 func NewAuthService(
 	repo authRepoIface,
 	cache refreshStore,
-	mailer domain.EmailSender,
+	mailer mailer.EmailSender,
 	cfg Config,
 	crp cryptoService,
 ) *authService {
@@ -269,8 +270,8 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	err = au.mailer.Send(
 		ctx,
 		string(email),
-		domain.EmailVerify,
-		domain.EmailData{
+		mailer.EmailVerify,
+		mailer.EmailData{
 			Token: verifyURL,
 		},
 	)

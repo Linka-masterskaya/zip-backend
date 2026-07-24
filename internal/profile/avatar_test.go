@@ -1,3 +1,4 @@
+// internal/profile/avatar_test.go
 package profile
 
 import (
@@ -16,17 +17,68 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
+
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
 
+// fakeEmailSender implements EmailSender interface for tests.
+type fakeEmailSender struct{}
+
+func (f *fakeEmailSender) Send(ctx context.Context, to string, tmpl mailer.Template, data mailer.EmailData) error {
+	return nil
+}
+
+// newTestCryptox creates a real cryptox instance for tests.
+func newTestCryptox(t *testing.T) *cryptox.Cryptox {
+	t.Helper()
+	// Use fixed keys for deterministic tests
+	aesKey := make([]byte, 32)
+	hmacKey := make([]byte, 32)
+	for i := range aesKey {
+		aesKey[i] = byte(i)
+		hmacKey[i] = byte(i + 32)
+	}
+	crypto, err := cryptox.New(aesKey, hmacKey)
+	require.NoError(t, err)
+	return crypto
+}
+
+// defaultEmailConfig returns default config for tests.
+func defaultEmailConfig() EmailConfig {
+	return EmailConfig{
+		EmailChangeTTL: 24 * time.Hour,
+		EmailVerifyTTL: 24 * time.Hour,
+	}
+}
+
+type testRevoker struct {
+	revokeErr    error
+	revokedID    string
+	revokeCalled bool
+}
+
+func (f *testRevoker) RevokeAllSessions(ctx context.Context, userID string) error {
+	f.revokeCalled = true
+	f.revokedID = userID
+	return f.revokeErr
+}
+
 func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	handler := NewHandler(NewService(repo, store, nil))
+	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
+	cfg := defaultEmailConfig()
+	sessions := &testRevoker{}
+	handler := NewHandler(NewService(repo, store, mailer, crypto, sessions, cfg))
 
 	rec := performAvatarUpload(t, handler, pngAvatarBytes(128), "avatar.txt")
 	if rec.Code != http.StatusOK {
@@ -57,7 +109,11 @@ func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 func TestUploadAvatar_NonImageReturns400(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	handler := NewHandler(NewService(repo, store, nil))
+	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
+	cfg := defaultEmailConfig()
+	sessions := &testRevoker{}
+	handler := NewHandler(NewService(repo, store, mailer, crypto, sessions, cfg))
 
 	rec := performAvatarUpload(t, handler, []byte("not an image"), "avatar.png")
 	if rec.Code != http.StatusBadRequest {
@@ -71,7 +127,11 @@ func TestUploadAvatar_NonImageReturns400(t *testing.T) {
 func TestUploadAvatar_FileOver2MBReturns413(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	handler := NewHandler(NewService(repo, store, nil))
+	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
+	cfg := defaultEmailConfig()
+	sessions := &testRevoker{}
+	handler := NewHandler(NewService(repo, store, mailer, crypto, sessions, cfg))
 
 	oversized := bytes.Repeat([]byte{'x'}, int(MaxAvatarSizeBytes)+1)
 	rec := performAvatarUpload(t, handler, oversized, "avatar.png")
@@ -101,11 +161,15 @@ func TestReplaceAvatar_QuotaExceededSkipsPutObject(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
+	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
+	cfg := defaultEmailConfig()
 	repo.storageUsed = 100
 	repo.storageQuota = 110
 	newData := pngAvatarBytes(16)
+	sessions := &testRevoker{}
 
-	service := NewService(repo, store, nil)
+	service := NewService(repo, store, mailer, crypto, sessions, cfg)
 	_, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err == nil {
 		t.Fatal("expected quota exceeded error")
@@ -127,6 +191,10 @@ func TestReplaceAvatar_DeletesOldObjectUpdatesUsageAndPresignsBeforeDB(t *testin
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
+	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
+	cfg := defaultEmailConfig()
+	sessions := &testRevoker{}
 	oldKey := "avatars/user-1/old"
 	oldData := []byte("old-avatar")
 	newData := pngAvatarBytes(64)
@@ -140,7 +208,7 @@ func TestReplaceAvatar_DeletesOldObjectUpdatesUsageAndPresignsBeforeDB(t *testin
 		}
 	}
 
-	service := NewService(repo, store, nil)
+	service := NewService(repo, store, mailer, crypto, sessions, cfg)
 	url, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err != nil {
 		t.Fatalf("replace avatar: %v", err)
@@ -168,12 +236,16 @@ func TestReplaceAvatar_ReturnsCurrentURLWhenConcurrentRequestWins(t *testing.T) 
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
+	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
+	cfg := defaultEmailConfig()
+	sessions := &testRevoker{}
 	currentKey := "avatars/user-1/newer"
 	store.seed(currentKey, pngAvatarBytes(32), "image/png")
 	repo.currentAfterReplace = currentKey
 
 	newData := pngAvatarBytes(16)
-	service := NewService(repo, store, nil)
+	service := NewService(repo, store, mailer, crypto, sessions, cfg)
 	url, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err != nil {
 		t.Fatalf("replace avatar: %v", err)
@@ -187,6 +259,10 @@ func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
+	mailer := &fakeEmailSender{}
+	crypto := newTestCryptox(t)
+	cfg := defaultEmailConfig()
+	sessions := &testRevoker{}
 	oldKey := "avatars/user-1/old"
 	oldData := pngAvatarBytes(40)
 
@@ -194,7 +270,7 @@ func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 	repo.avatarKey = oldKey
 	repo.storageUsed = int64(len(oldData))
 
-	service := NewService(repo, store, nil)
+	service := NewService(repo, store, mailer, crypto, sessions, cfg)
 	if err := service.DeleteAvatar(ctx, "user-1"); err != nil {
 		t.Fatalf("delete avatar: %v", err)
 	}
@@ -359,6 +435,8 @@ func newFakeAvatarRepo() *fakeAvatarRepo {
 	}
 }
 
+// ============ Avatar methods ============
+
 func (r *fakeAvatarRepo) AvatarState(_ context.Context, _ string) (AvatarState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -429,6 +507,66 @@ func (r *fakeAvatarRepo) CurrentAvatarKey(_ context.Context, _ string) (string, 
 	}
 	return r.avatarKey, nil
 }
+
+// ============ User methods ============
+
+func (r *fakeAvatarRepo) FindByID(_ context.Context, _ uuid.UUID) (*User, error) {
+	return nil, nil
+}
+
+func (r *fakeAvatarRepo) FindByEmailHash(_ context.Context, _ []byte) (*User, error) {
+	return nil, nil
+}
+
+func (r *fakeAvatarRepo) Update(_ context.Context, _ *User, _ []byte, _ []byte) error {
+	return nil
+}
+
+// ============ Token methods ============
+
+func (r *fakeAvatarRepo) CreateToken(_ context.Context, _ *Token) error {
+	return nil
+}
+
+func (r *fakeAvatarRepo) FindTokenByHash(_ context.Context, _ []byte) (*Token, error) {
+	return nil, nil
+}
+
+func (r *fakeAvatarRepo) MarkTokenUsed(_ context.Context, _ string) error {
+	return nil
+}
+
+func (r *fakeAvatarRepo) DeleteToken(_ context.Context, _ string) error {
+	return nil
+}
+
+func (r *fakeAvatarRepo) DeleteExpiredTokens(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
+// ============ Transaction methods ============
+
+func (r *fakeAvatarRepo) BeginTx(_ context.Context) (pgx.Tx, error) {
+	return nil, nil
+}
+
+func (r *fakeAvatarRepo) FindByIDWithTx(_ context.Context, _ pgx.Tx, _ uuid.UUID) (*User, error) {
+	return nil, nil
+}
+
+func (r *fakeAvatarRepo) FindByEmailHashWithTx(_ context.Context, _ pgx.Tx, _ []byte) (*User, error) {
+	return nil, nil
+}
+
+func (r *fakeAvatarRepo) UpdateEmailWithTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ []byte, _ []byte, _ bool) error {
+	return nil
+}
+
+func (r *fakeAvatarRepo) MarkTokenUsedWithTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+
+// ============ Helper methods ============
 
 func (r *fakeAvatarRepo) avatarKeyValue() string {
 	r.mu.Lock()
