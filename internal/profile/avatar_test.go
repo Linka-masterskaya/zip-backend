@@ -587,6 +587,6 @@ func (r *fakeAvatarRepo) addStorageUsage(delta int64) {
 	}
 }
 
-func (f *fakeAvatarRepo) GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error) {
+func (r *fakeAvatarRepo) GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error) {
 	return nil, nil
 }

@@ -42,6 +42,7 @@ type ObjectStorage interface {
 
 // RepoInterface defines all repository methods needed by the service.
 type RepoInterface interface {
+	GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error)
 	AvatarState(ctx context.Context, userID string) (AvatarState, error)
 	ReplaceAvatar(ctx context.Context, userID, expectedOldKey, newKey string, oldSize, storageDelta int64) (AvatarChange, error)
 	ClearAvatar(ctx context.Context, userID, expectedOldKey string, oldSize int64) (AvatarChange, error)
@@ -75,6 +76,18 @@ type Service struct {
 	emailCfg EmailConfig
 }
 
+// Response struct of profile response.
+type Response struct {
+	ID            string    `json:"id"`
+	Email         string    `json:"email"`
+	DisplayName   *string   `json:"display_name"`
+	AvatarURL     *string   `json:"avatar_url"`
+	Role          string    `json:"role"`
+	EmailVerified bool      `json:"email_verified"`
+	OrgID         *string   `json:"org_id"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 // EmailConfig holds configuration for the email service.
 type EmailConfig struct {
 	EmailChangeTTL time.Duration
@@ -98,6 +111,51 @@ func NewService(
 		sessions: sessions,
 		emailCfg: emailCfg,
 	}
+}
+
+// GetProfile retrieves the full user profile.
+func (s *Service) GetProfile(ctx context.Context, userID uuid.UUID) (*Response, error) {
+	// 1. get raw data
+	user, err := s.repo.GetUserProfile(ctx, userID)
+	if err != nil {
+		return nil, profileError(err)
+	}
+
+	// 2. decrypt email
+	plainEmailBytes, err := s.crypto.Decrypt(user.EncryptedEmail)
+	if err != nil {
+		slog.Error("failed to decrypt user email", "user_id", userID, logger.Err(err))
+		return nil, apperr.ErrInternal.WithMessage("failed to process user data")
+	}
+
+	// 3. build a base response
+	resp := &Response{
+		ID:            user.ID.String(),
+		Email:         string(plainEmailBytes),
+		Role:          user.Role,
+		EmailVerified: user.EmailVerified,
+		CreatedAt:     user.CreatedAt,
+	}
+
+	// 4. extract nullable fields
+	if user.DisplayName.Valid {
+		resp.DisplayName = &user.DisplayName.String
+	}
+	if user.OrgID.Valid {
+		resp.OrgID = &user.OrgID.String
+	}
+
+	// 5. generate a presigned URL only if the avatar exists
+	if user.AvatarKey.Valid && user.AvatarKey.String != "" {
+		avatarURL, err := s.storage.PresignedURL(ctx, user.AvatarKey.String, avatarURLTTL)
+		if err != nil {
+			slog.Warn("failed to generate presigned url for avatar", "key", user.AvatarKey.String, logger.Err(err))
+			resp.AvatarURL = nil
+		} else {
+			resp.AvatarURL = &avatarURL
+		}
+	}
+	return resp, nil
 }
 
 // encryptEmail encrypts email using crypto service.

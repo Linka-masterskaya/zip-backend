@@ -20,12 +20,14 @@ import (
 
 // mockService implements the ProfileService interface for testing.
 type mockService struct {
-	getProfileFn    func(ctx context.Context, userID uuid.UUID) (*ProfileResponse, error)
-	replaceAvatarFn func(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error)
-	deleteAvatarFn  func(ctx context.Context, userID string) error
+	getProfileFn         func(ctx context.Context, userID uuid.UUID) (*Response, error)
+	replaceAvatarFn      func(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error)
+	deleteAvatarFn       func(ctx context.Context, userID string) error
+	requestEmailChangeFn func(ctx context.Context, userID uuid.UUID, newEmail string) error
+	confirmEmailChangeFn func(ctx context.Context, tokenStr string) error
 }
 
-func (m *mockService) GetProfile(ctx context.Context, userID uuid.UUID) (*ProfileResponse, error) {
+func (m *mockService) GetProfile(ctx context.Context, userID uuid.UUID) (*Response, error) {
 	if m.getProfileFn != nil {
 		return m.getProfileFn(ctx, userID)
 	}
@@ -46,13 +48,27 @@ func (m *mockService) DeleteAvatar(ctx context.Context, userID string) error {
 	return nil
 }
 
+func (m *mockService) RequestEmailChange(ctx context.Context, userID uuid.UUID, newEmail string) error {
+	if m.requestEmailChangeFn != nil {
+		return m.requestEmailChangeFn(ctx, userID, newEmail)
+	}
+	return nil
+}
+
+func (m *mockService) ConfirmEmailChange(ctx context.Context, tokenStr string) error {
+	if m.confirmEmailChangeFn != nil {
+		return m.confirmEmailChangeFn(ctx, tokenStr)
+	}
+	return nil
+}
+
 func TestHandler_GetProfile(t *testing.T) {
 	testUserID := uuid.New()
 
 	tests := []struct {
 		name               string
 		setupContext       func(ctx context.Context) context.Context
-		mockServiceFn      func(ctx context.Context, userID uuid.UUID) (*ProfileResponse, error)
+		mockServiceFn      func(ctx context.Context, userID uuid.UUID) (*Response, error)
 		expectedStatusCode int
 		expectedEmail      string
 		checkNullFields    bool
@@ -60,11 +76,10 @@ func TestHandler_GetProfile(t *testing.T) {
 		{
 			name: "успешный запрос",
 			setupContext: func(ctx context.Context) context.Context {
-				// FIXED: use authctx.SetUserIDToCtx
 				return authctx.SetUserIDToCtx(ctx, testUserID)
 			},
-			mockServiceFn: func(ctx context.Context, userID uuid.UUID) (*ProfileResponse, error) {
-				return &ProfileResponse{
+			mockServiceFn: func(ctx context.Context, userID uuid.UUID) (*Response, error) {
+				return &Response{
 					ID:            userID.String(),
 					Email:         "test1234@example.com",
 					DisplayName:   nil,
@@ -92,7 +107,7 @@ func TestHandler_GetProfile(t *testing.T) {
 			setupContext: func(ctx context.Context) context.Context {
 				return authctx.SetUserIDToCtx(ctx, testUserID)
 			},
-			mockServiceFn: func(ctx context.Context, userID uuid.UUID) (*ProfileResponse, error) {
+			mockServiceFn: func(ctx context.Context, userID uuid.UUID) (*Response, error) {
 				return nil, apperr.ErrUnauthorized
 			},
 			expectedStatusCode: http.StatusUnauthorized,
@@ -122,7 +137,7 @@ func TestHandler_GetProfile(t *testing.T) {
 			assert.Equal(t, tt.expectedStatusCode, rr.Code)
 
 			if tt.expectedStatusCode == http.StatusOK {
-				var profile ProfileResponse
+				var profile Response
 				err := json.Unmarshal(rr.Body.Bytes(), &profile)
 				require.NoError(t, err)
 
