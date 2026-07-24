@@ -586,3 +586,7 @@ func (r *fakeAvatarRepo) addStorageUsage(delta int64) {
 		r.storageUsed = 0
 	}
 }
+
+func (f *fakeAvatarRepo) GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error) {
+	return nil, nil
+}

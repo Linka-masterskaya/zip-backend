@@ -154,6 +154,10 @@ func run() error {
 	)
 	profileHandler := profile.NewHandler(profileService)
 	mainMux.Handle(
+		"GET /api/v1/profile/me",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.GetProfile)),
+	)
+	mainMux.Handle(
 		"PUT /api/v1/profile/me/avatar",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.UploadAvatar)),
 	)

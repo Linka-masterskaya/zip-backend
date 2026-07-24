@@ -2,12 +2,15 @@ package profile
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
@@ -23,7 +26,13 @@ const (
 
 // Handler handles HTTP requests for profile operations.
 type Handler struct {
-	service *Service
+	service ProfileService
+}
+
+type ProfileService interface {
+	GetProfile(ctx context.Context, userID uuid.UUID) (*ProfileResponse, error)
+	ReplaceAvatar(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error)
+	DeleteAvatar(ctx context.Context, userID string) error
 }
 
 // NewHandler creates a new Handler instance.
