@@ -11,17 +11,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
-	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 )
 
-var ErrInvalidCredentials = errors.New("invalid credentials")
-var ErrEmailNotVerified = errors.New("email not verified")
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrEmailNotVerified   = errors.New("email not verified")
+)
 
 var dummyPasswordHash = []byte("$2a$12$UqfJl/B1CJ86pDCgYZuNXefHab2GHToXW1tWtfTc4Ee59.q1GMkcS")
 
@@ -42,6 +45,8 @@ func runDummyPasswordCompare(password string) {
 //go:generate mockgen -source=service.go -destination=mock_repo_test.go -package=auth
 type authRepoIface interface {
 	GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
+	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
+	ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (string, error)
 
 	beginTx(ctx context.Context) (pgx.Tx, error)
 	withTx(tx pgx.Tx) authRepoIface
@@ -69,6 +74,7 @@ type refreshStore interface {
 		rec cache.RefreshRecord,
 		ttl time.Duration,
 	) error
+	RevokeAllSessions(ctx context.Context, userID string) error
 }
 
 type cryptoService interface {
@@ -83,6 +89,8 @@ type Config struct {
 	AccessTokenTTL           time.Duration
 	RefreshTokenTTL          time.Duration
 	VerifyEmailTokenTTL      time.Duration
+	ResetPasswordTokenTTL    time.Duration
+	BcryptCost               int
 	RequireEmailVerification bool
 	CookieSecure             bool
 }
@@ -95,7 +103,7 @@ type LoginResult struct {
 type authService struct {
 	repo   authRepoIface
 	cache  refreshStore
-	mailer domain.EmailSender
+	mailer mailer.EmailSender
 	cfg    Config
 	crp    cryptoService
 }
@@ -103,7 +111,7 @@ type authService struct {
 func NewAuthService(
 	repo authRepoIface,
 	cache refreshStore,
-	mailer domain.EmailSender,
+	mailer mailer.EmailSender,
 	cfg Config,
 	crp cryptoService,
 ) *authService {
@@ -124,7 +132,7 @@ func (au *authService) Login(
 	emailHash := au.crp.Hash([]byte(email))
 
 	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
-	if errors.Is(err, ErrUserNotFound) {
+	if errors.Is(err, apperr.ErrUserNotFound) {
 		runDummyPasswordCompare(password)
 		return nil, ErrInvalidCredentials
 	}
@@ -164,6 +172,7 @@ func (au *authService) Login(
 	rec := cache.RefreshRecord{
 		FID:    fid,
 		Status: "active",
+		UserID: user.ID,
 	}
 
 	if err := au.cache.StoreRefresh(
@@ -277,8 +286,8 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	err = au.mailer.Send(
 		ctx,
 		string(email),
-		domain.EmailVerify,
-		domain.EmailData{
+		mailer.EmailVerify,
+		mailer.EmailData{
 			Token: verifyURL,
 		},
 	)
@@ -424,10 +433,10 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 		return nil, fmt.Errorf("authService.Register: commit tx: %w", err)
 	}
 
-	mailTemplate := domain.EmailData{Token: verifyTokenString, Email: email}
+	mailTemplate := mailer.EmailData{Token: verifyTokenString, Email: email}
 
 	// TODO: backlog: сделать  через NATS + метрика.
-	if err = au.mailer.Send(ctx, email, domain.EmailVerify, mailTemplate); err != nil {
+	if err = au.mailer.Send(ctx, email, mailer.EmailVerify, mailTemplate); err != nil {
 		slog.Error("failed to send verify email", "err", err)
 	}
 
