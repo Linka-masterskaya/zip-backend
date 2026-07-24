@@ -84,6 +84,8 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
+    permissions:
+      contents: read
 
     concurrency:
       group: ${{ github.workflow }}-deploy-${{ github.ref }}
@@ -114,8 +116,14 @@ jobs:
           CI_NATS_CONNECTION_URL: "nats://nats:4222"
           CI_CADDY_DOMAIN_NAME: ${{ vars.CADDY_DOMAIN_NAME }}
           CI_CADDY_LETSENCRYPT_EMAIL: ${{ vars.CADDY_LETSENCRYPT_EMAIL }}
+          CI_YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
+          CI_YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
+          CI_YANDEX_REDIRECT_URL: ${{ vars.YANDEX_REDIRECT_URL }}
           CI_YANDEX_IAM_TOKEN: ${{ secrets.YANDEX_IAM_TOKEN }}
           CI_YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
+          CI_SMTP_HOST: ${{ vars.SMTP_HOST }}
+          CI_SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          CI_SMTP_FROM_EMAIL: ${{ vars.SMTP_FROM_EMAIL }}
           CI_SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           CI_GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           CI_GRAFANA_ROOT_URL: ${{ vars.GRAFANA_ROOT_URL }}

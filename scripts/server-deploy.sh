@@ -3,6 +3,7 @@
 set -euo pipefail
 
 cd ~/zip-backend
+source .env
 
 NEW_VERSION=$1
 PREV_VERSION=$(cat .version 2>/dev/null || echo "")
@@ -12,8 +13,10 @@ export VERSION=$NEW_VERSION
 
 docker compose -f docker-compose.server.yaml pull
 
-docker compose -f docker-compose.server.yaml exec -T postgres \
-  pg_dump -U linka linka > ~/zip-backend/backup_$(date +%Y%m%d_%H%M%S).sql
+if docker compose -f docker-compose.server.yaml ps postgres --status running -q 2>/dev/null; then
+  docker compose -f docker-compose.server.yaml exec -T postgres \
+    pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB" > ~/zip-backend/backup_$(date +%Y%m%d_%H%M%S).sql
+fi
 
 docker compose -f docker-compose.server.yaml run --rm zip-backend --migrate
 
@@ -32,7 +35,7 @@ if ! curl -sf http://localhost:9091/health; then
     LATEST_BACKUP=$(ls -t ~/zip-backend/backup_*.sql 2>/dev/null | head -1)
     if [ -n "$LATEST_BACKUP" ]; then
       docker compose -f docker-compose.server.yaml exec -T postgres \
-        psql -U linka linka < "$LATEST_BACKUP"
+        psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$LATEST_BACKUP"
     fi
     echo "$PREV_VERSION" > .version
     export VERSION=$PREV_VERSION
@@ -42,5 +45,7 @@ if ! curl -sf http://localhost:9091/health; then
 fi
 
 docker compose -f docker-compose.server.yaml ps
+
+find ~/zip-backend -name "backup_*.sql" -mtime +7 -delete
 
 docker image prune -f

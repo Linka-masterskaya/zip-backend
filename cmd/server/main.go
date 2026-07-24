@@ -101,7 +101,7 @@ func run() error {
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
 	mainMux.Handle(
-		"POST /auth/login",
+		"POST /api/v1/auth/login",
 		loginRateLimit(
 			middleware.ErrorMiddleware(authHandler.Login),
 		),
