@@ -74,11 +74,11 @@ func (f *testRevoker) RevokeAllSessions(ctx context.Context, userID string) erro
 func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	mailer := &fakeEmailSender{}
+	emailSender := &fakeEmailSender{}
 	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	sessions := &testRevoker{}
-	handler := NewHandler(NewService(repo, store, mailer, crypto, sessions, cfg))
+	handler := NewHandler(NewService(repo, store, emailSender, crypto, sessions, cfg))
 
 	rec := performAvatarUpload(t, handler, pngAvatarBytes(128), "avatar.txt")
 	if rec.Code != http.StatusOK {
@@ -109,11 +109,11 @@ func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 func TestUploadAvatar_NonImageReturns400(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	mailer := &fakeEmailSender{}
+	emailSender := &fakeEmailSender{}
 	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	sessions := &testRevoker{}
-	handler := NewHandler(NewService(repo, store, mailer, crypto, sessions, cfg))
+	handler := NewHandler(NewService(repo, store, emailSender, crypto, sessions, cfg))
 
 	rec := performAvatarUpload(t, handler, []byte("not an image"), "avatar.png")
 	if rec.Code != http.StatusBadRequest {
@@ -127,11 +127,11 @@ func TestUploadAvatar_NonImageReturns400(t *testing.T) {
 func TestUploadAvatar_FileOver2MBReturns413(t *testing.T) {
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	mailer := &fakeEmailSender{}
+	emailSender := &fakeEmailSender{}
 	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	sessions := &testRevoker{}
-	handler := NewHandler(NewService(repo, store, mailer, crypto, sessions, cfg))
+	handler := NewHandler(NewService(repo, store, emailSender, crypto, sessions, cfg))
 
 	oversized := bytes.Repeat([]byte{'x'}, int(MaxAvatarSizeBytes)+1)
 	rec := performAvatarUpload(t, handler, oversized, "avatar.png")
@@ -161,7 +161,7 @@ func TestReplaceAvatar_QuotaExceededSkipsPutObject(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	mailer := &fakeEmailSender{}
+	emailSender := &fakeEmailSender{}
 	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	repo.storageUsed = 100
@@ -169,7 +169,7 @@ func TestReplaceAvatar_QuotaExceededSkipsPutObject(t *testing.T) {
 	newData := pngAvatarBytes(16)
 	sessions := &testRevoker{}
 
-	service := NewService(repo, store, mailer, crypto, sessions, cfg)
+	service := NewService(repo, store, emailSender, crypto, sessions, cfg)
 	_, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err == nil {
 		t.Fatal("expected quota exceeded error")
@@ -191,7 +191,7 @@ func TestReplaceAvatar_DeletesOldObjectUpdatesUsageAndPresignsBeforeDB(t *testin
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	mailer := &fakeEmailSender{}
+	emailSender := &fakeEmailSender{}
 	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	sessions := &testRevoker{}
@@ -208,7 +208,7 @@ func TestReplaceAvatar_DeletesOldObjectUpdatesUsageAndPresignsBeforeDB(t *testin
 		}
 	}
 
-	service := NewService(repo, store, mailer, crypto, sessions, cfg)
+	service := NewService(repo, store, emailSender, crypto, sessions, cfg)
 	url, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err != nil {
 		t.Fatalf("replace avatar: %v", err)
@@ -236,7 +236,7 @@ func TestReplaceAvatar_ReturnsCurrentURLWhenConcurrentRequestWins(t *testing.T) 
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	mailer := &fakeEmailSender{}
+	emailSender := &fakeEmailSender{}
 	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	sessions := &testRevoker{}
@@ -245,7 +245,7 @@ func TestReplaceAvatar_ReturnsCurrentURLWhenConcurrentRequestWins(t *testing.T) 
 	repo.currentAfterReplace = currentKey
 
 	newData := pngAvatarBytes(16)
-	service := NewService(repo, store, mailer, crypto, sessions, cfg)
+	service := NewService(repo, store, emailSender, crypto, sessions, cfg)
 	url, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
 	if err != nil {
 		t.Fatalf("replace avatar: %v", err)
@@ -259,7 +259,7 @@ func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
 	store := newFakeObjectStorage()
-	mailer := &fakeEmailSender{}
+	emailSender := &fakeEmailSender{}
 	crypto := newTestCryptox(t)
 	cfg := defaultEmailConfig()
 	sessions := &testRevoker{}
@@ -270,7 +270,7 @@ func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 	repo.avatarKey = oldKey
 	repo.storageUsed = int64(len(oldData))
 
-	service := NewService(repo, store, mailer, crypto, sessions, cfg)
+	service := NewService(repo, store, emailSender, crypto, sessions, cfg)
 	if err := service.DeleteAvatar(ctx, "user-1"); err != nil {
 		t.Fatalf("delete avatar: %v", err)
 	}

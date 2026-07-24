@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
@@ -19,6 +20,10 @@ type fakeCache struct {
 	ttl time.Duration
 
 	err error
+
+	revokeCalls   int
+	revokedUserID string
+	revokeErr     error
 }
 
 func (f *fakeCache) StoreRefresh(
@@ -33,6 +38,13 @@ func (f *fakeCache) StoreRefresh(
 	f.ttl = ttl
 
 	return f.err
+}
+
+func (f *fakeCache) RevokeAllSessions(_ context.Context, userID string) error {
+	f.revokeCalls++
+	f.revokedUserID = userID
+
+	return f.revokeErr
 }
 
 type fakeCrypto struct {
@@ -105,6 +117,12 @@ func TestAuthService_Login_Success(t *testing.T) {
 			cacheStore.rec.Status,
 		)
 	}
+	if cacheStore.rec.UserID != "user-id" {
+		t.Fatalf(
+			"refresh user id = %q, want user-id",
+			cacheStore.rec.UserID,
+		)
+	}
 	if cacheStore.ttl != time.Hour {
 		t.Fatalf(
 			"ttl = %v, want %v",
@@ -170,7 +188,7 @@ func TestAuthService_Login_UserNotFound(t *testing.T) {
 
 	repo.EXPECT().
 		GetUserByEmailHash(gomock.Any(), gomock.Any()).
-		Return(nil, ErrUserNotFound)
+		Return(nil, apperr.ErrUserNotFound)
 
 	cacheStore := &fakeCache{}
 	crypto := &fakeCrypto{hash: []byte("email-hash")}
