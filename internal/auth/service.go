@@ -18,11 +18,13 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/domain"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 )
 
-var ErrInvalidCredentials = errors.New("invalid credentials")
-var ErrEmailNotVerified = errors.New("email not verified")
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrEmailNotVerified   = errors.New("email not verified")
+)
 
 var dummyPasswordHash = []byte("$2a$10$UlCQgLZoLjUzrtYRUUlkPeh/m5L2pl9aYzDTUaZAD3R4Pd8ONSof6")
 
@@ -89,7 +91,7 @@ type LoginResult struct {
 type authService struct {
 	repo   authRepoIface
 	cache  refreshStore
-	mailer domain.EmailSender
+	mailer mailer.EmailSender
 	cfg    Config
 	crp    cryptoService
 }
@@ -97,7 +99,7 @@ type authService struct {
 func NewAuthService(
 	repo authRepoIface,
 	cache refreshStore,
-	mailer domain.EmailSender,
+	mailer mailer.EmailSender,
 	cfg Config,
 	crp cryptoService,
 ) *authService {
@@ -274,8 +276,8 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	err = au.mailer.Send(
 		ctx,
 		string(email),
-		domain.EmailVerify,
-		domain.EmailData{
+		mailer.EmailVerify,
+		mailer.EmailData{
 			Token: verifyURL,
 		},
 	)

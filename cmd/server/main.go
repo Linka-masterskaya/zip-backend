@@ -98,6 +98,8 @@ func run() error {
 	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	forgotRateLimit := middleware.RateLimit(deps.redis, "forgot", int64(deps.cfg.Auth.ForgotRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	resetRateLimit := middleware.RateLimit(deps.redis, "reset", int64(deps.cfg.Auth.ResetRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	profileEmailChangeRateLimit := middleware.RateLimit(deps.redis, "profile-email-change", int64(deps.cfg.Profile.EmailChangeRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	profileEmailConfirmRateLimit := middleware.RateLimit(deps.redis, "profile-email-confirm", int64(deps.cfg.Profile.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 
 	mainMux := http.NewServeMux()
 	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.CreatePack)))
@@ -131,8 +133,16 @@ func run() error {
 	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
 
 	profileRepo := profile.NewRepository(deps.db)
-	profileService := profile.NewService(profileRepo, deps.storage)
+	profileService := profile.NewService(profileRepo, deps.storage, deps.mailer, deps.crypto, deps.redis,
+		profile.EmailConfig{
+			EmailChangeTTL: deps.cfg.Profile.EmailChangeTTL,
+			EmailVerifyTTL: deps.cfg.Profile.EmailVerifyTTL},
+	)
 	profileHandler := profile.NewHandler(profileService)
+	mainMux.Handle(
+		"GET /api/v1/profile/me",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.GetProfile)),
+	)
 	mainMux.Handle(
 		"PUT /api/v1/profile/me/avatar",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.UploadAvatar)),
@@ -140,6 +150,18 @@ func run() error {
 	mainMux.Handle(
 		"DELETE /api/v1/profile/me/avatar",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.DeleteAvatar)),
+	)
+	mainMux.Handle(
+		"POST /api/v1/profile/me/email",
+		profileEmailChangeRateLimit(
+			middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.RequestEmailChange)),
+		),
+	)
+	mainMux.Handle(
+		"POST /api/v1/profile/me/email/confirm",
+		profileEmailConfirmRateLimit(
+			middleware.ErrorMiddleware(profileHandler.ConfirmEmailChange),
+		),
 	)
 
 	changePasswordRepo := profile.NewChangePasswordRepo(deps.db)

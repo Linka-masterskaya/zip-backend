@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/domain"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -17,8 +17,8 @@ type passwordResetMailerFake struct {
 	calls  int
 
 	to       string
-	template domain.Template
-	data     domain.EmailData
+	template mailer.Template
+	data     mailer.EmailData
 
 	err error
 }
@@ -26,8 +26,8 @@ type passwordResetMailerFake struct {
 func (f *passwordResetMailerFake) Send(
 	_ context.Context,
 	to string,
-	template domain.Template,
-	data domain.EmailData,
+	template mailer.Template,
+	data mailer.EmailData,
 ) error {
 	f.calls++
 	f.to = to
@@ -137,11 +137,11 @@ func TestAuthService_ForgotPassword_SendsResetEmail(t *testing.T) {
 		CreatePasswordResetToken(gomock.Any(), "user-id", cfg.ResetPasswordTokenTTL).
 		Return("reset-token", nil)
 
-	mailer := &passwordResetMailerFake{called: make(chan struct{})}
+	fakeMailer := &passwordResetMailerFake{called: make(chan struct{})}
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		mailer,
+		fakeMailer,
 		cfg,
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
 	)
@@ -150,21 +150,21 @@ func TestAuthService_ForgotPassword_SendsResetEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
-	waitPasswordResetMailerCall(t, mailer)
-	if mailer.calls != 1 {
-		t.Fatalf("mailer calls = %d, want 1", mailer.calls)
+	waitPasswordResetMailerCall(t, fakeMailer)
+	if fakeMailer.calls != 1 {
+		t.Fatalf("mailer calls = %d, want 1", fakeMailer.calls)
 	}
-	if mailer.to != "user@example.com" {
-		t.Fatalf("mailer to = %q, want user@example.com", mailer.to)
+	if fakeMailer.to != "user@example.com" {
+		t.Fatalf("mailer to = %q, want user@example.com", fakeMailer.to)
 	}
-	if mailer.template != domain.PasswordReset {
-		t.Fatalf("template = %q, want %q", mailer.template, domain.PasswordReset)
+	if fakeMailer.template != mailer.PasswordReset {
+		t.Fatalf("template = %q, want %q", fakeMailer.template, mailer.PasswordReset)
 	}
-	if mailer.data.Token != "reset-token" {
-		t.Fatalf("token = %q, want reset-token", mailer.data.Token)
+	if fakeMailer.data.Token != "reset-token" {
+		t.Fatalf("token = %q, want reset-token", fakeMailer.data.Token)
 	}
-	if mailer.data.Email != "user@example.com" {
-		t.Fatalf("email = %q, want user@example.com", mailer.data.Email)
+	if fakeMailer.data.Email != "user@example.com" {
+		t.Fatalf("email = %q, want user@example.com", fakeMailer.data.Email)
 	}
 }
 
@@ -180,11 +180,11 @@ func TestAuthService_ForgotPassword_MailerErrorIsSuccess(t *testing.T) {
 		CreatePasswordResetToken(gomock.Any(), "user-id", cfg.ResetPasswordTokenTTL).
 		Return("reset-token", nil)
 
-	mailer := &passwordResetMailerFake{called: make(chan struct{}), err: errors.New("smtp failed")}
+	fakeMailer := &passwordResetMailerFake{called: make(chan struct{}), err: errors.New("smtp failed")}
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		mailer,
+		fakeMailer,
 		cfg,
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
 	)
@@ -193,7 +193,7 @@ func TestAuthService_ForgotPassword_MailerErrorIsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
-	waitPasswordResetMailerCall(t, mailer)
+	waitPasswordResetMailerCall(t, fakeMailer)
 }
 
 func TestAuthService_ResetPassword_InvalidInput(t *testing.T) {

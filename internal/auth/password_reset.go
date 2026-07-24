@@ -13,8 +13,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/domain"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 )
 
 const (
@@ -58,7 +58,7 @@ func (au *authService) sendPasswordResetEmail(ctx context.Context, userID, email
 		return
 	}
 
-	if err := au.mailer.Send(ctx, email, domain.PasswordReset, domain.EmailData{
+	if err := au.mailer.Send(ctx, email, mailer.PasswordReset, mailer.EmailData{
 		Token: token,
 		Email: email,
 	}); err != nil {
