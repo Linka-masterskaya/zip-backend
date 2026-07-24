@@ -6,14 +6,29 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrUserNotFound = errors.New("user not found")
-var ErrStorageQuotaExceeded = errors.New("organization storage quota exceeded")
-var ErrAvatarChanged = errors.New("avatar changed concurrently")
+var (
+	ErrUserNotFound         = errors.New("user not found")
+	ErrStorageQuotaExceeded = errors.New("organization storage quota exceeded")
+	ErrAvatarChanged        = errors.New("avatar changed concurrently")
+)
+
+type UserProfile struct {
+	ID             uuid.UUID
+	EncryptedEmail []byte
+	DisplayName    sql.NullString
+	AvatarKey      sql.NullString
+	Role           string
+	EmailVerified  bool
+	OrgID          sql.NullString
+	CreatedAt      time.Time
+}
 
 type Repository struct {
 	db *pgxpool.Pool
@@ -40,6 +55,30 @@ type AvatarChange struct {
 	OldKey  string
 	OldSize int64
 	OrgID   sql.NullString
+}
+
+// GetUserProfile retrieves user data by ID, joining the users and auth_cred tables.
+// Accepts userID as a string for consistency with the Avatar methods.
+func (r *Repository) GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error) {
+	var profile UserProfile
+	err := r.db.QueryRow(ctx, `
+		SELECT u.id, ac.email_encrypted, u.display_name, u.avatar_key, ac.role, u.email_verified, u.org_id::text, u.created_at
+		FROM users u
+		JOIN auth_cred ac ON u.id = ac.user_id
+		WHERE u.id = $1 AND u.deleted_at IS NULL
+	`, userID).Scan(
+		&profile.ID, &profile.EncryptedEmail, &profile.DisplayName, &profile.AvatarKey, &profile.Role,
+		&profile.EmailVerified, &profile.OrgID, &profile.CreatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get user profile: %w", err)
+	}
+
+	return &profile, nil
 }
 
 func (r *Repository) AvatarState(ctx context.Context, userID string) (AvatarState, error) {
