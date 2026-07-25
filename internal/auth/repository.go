@@ -4,17 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-)
 
-var ErrUserNotFound = errors.New("user not found")
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/logger"
+)
 
 type User struct {
 	ID            string
@@ -65,13 +66,118 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 		&user.EmailVerified,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrUserNotFound
+		return nil, apperr.ErrUserNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("authRepo.GetUserByEmailHash: %w", err)
 	}
 
 	return &user, nil
+}
+
+// CreatePasswordResetToken гасит активные не истекшие reset-токены пользователя,
+// создает новый одноразовый reset-токен и сохраняет в БД его hash.
+func (r *authRepo) CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error) {
+	token, rawToken, err := newPasswordResetToken()
+	if err != nil {
+		return "", err
+	}
+
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return "", fmt.Errorf("authRepo.CreatePasswordResetToken: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.ErrorContext(ctx, "tx rollback failed", logger.Err(err))
+		}
+	}()
+
+	_, err = tx.Exec(ctx, `
+		UPDATE verify_tokens
+		SET used_at = now()
+		WHERE user_id = $1
+		  AND purpose = $2
+		  AND used_at IS NULL
+		  AND expires_at > now()
+	`, userID, passwordResetTokenPurpose)
+	if err != nil {
+		return "", fmt.Errorf("authRepo.CreatePasswordResetToken burn old tokens: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO verify_tokens (
+			id,
+			user_id,
+			purpose,
+			token_hash,
+			expires_at
+		)
+		VALUES ($1, $2, $3, $4, $5)
+	`, uuid.New(), userID, passwordResetTokenPurpose, hashPasswordResetToken(rawToken), time.Now().Add(ttl))
+	if err != nil {
+		return "", fmt.Errorf("authRepo.CreatePasswordResetToken insert token: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("authRepo.CreatePasswordResetToken commit: %w", err)
+	}
+
+	return token, nil
+}
+
+// ResetPasswordByToken меняет пароль по валидному reset-токену в одной транзакции.
+func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (string, error) {
+	rawToken, err := decodePasswordResetToken(token)
+	if err != nil {
+		return "", err
+	}
+
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.ErrorContext(ctx, "tx rollback failed", logger.Err(err))
+		}
+	}()
+
+	var userID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		UPDATE verify_tokens
+		SET used_at = now()
+		WHERE token_hash = $1
+		  AND purpose = $2
+		  AND used_at IS NULL
+		  AND expires_at > now()
+		RETURNING user_id
+	`, hashPasswordResetToken(rawToken), passwordResetTokenPurpose).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", apperr.ErrInvalidResetToken
+	}
+	if err != nil {
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken consume token: %w", err)
+	}
+
+	res, err := tx.Exec(ctx, `
+		UPDATE auth_cred
+		SET password_hash = $1,
+		    updated_at = now()
+		WHERE user_id = $2
+	`, passwordHash, userID)
+	if err != nil {
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken update password: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return "", apperr.ErrInternal.WithMessage("password credentials not found")
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken commit: %w", err)
+	}
+
+	return userID.String(), nil
 }
 
 func (r *authRepo) withTx(tx pgx.Tx) authRepoIface {
