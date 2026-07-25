@@ -112,8 +112,6 @@ func run() error {
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
-	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
-
 	mainMux.Handle(
 		"POST /api/v1/auth/login",
 		loginRateLimit(
