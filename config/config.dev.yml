@@ -120,7 +120,7 @@ profile:
 rate_limit:
   resend:
     scope: "resend"
-    limit: 500
+    limit: 5
     window: 1h
   login:
     scope: "login"

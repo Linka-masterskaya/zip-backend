@@ -79,10 +79,12 @@ func run() error {
 		BcryptCost:               deps.cfg.Auth.BcryptCost,
 		RequireEmailVerification: deps.cfg.Auth.RequireEmailVerification,
 		CookieSecure:             deps.cfg.Auth.CookieSecure,
+		RateLimit:                deps.cfg.RateLimit,
 	}
 
 	authService := auth.NewAuthService(
 		authRepo,
+		deps.redis,
 		deps.redis,
 		deps.mailer,
 		authCfg,

@@ -59,6 +59,11 @@ components:
       required: [token]
       properties: { token: { type: string } }
 
+    ResendEmailRequest:
+      type: object
+      required: [email]
+      properties: { email: { type: string, format: email } }
+
     ForgotPasswordRequest:
       type: object
       required: [email]
@@ -161,11 +166,14 @@ paths:
     post:
       tags: [auth]
       summary: Переслать письмо верификации текущему пользователю
-      description: "Если verify-письмо потеряно. Использует email из access-токена. Под rate-limit (A-10)."
-      security: [{ bearerAuth: [] }]
+      description: "Если verify-письмо потеряно. Использует email из тела запроса."
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ResendEmailRequest' } } }
       responses:
         '202': { description: Если email ещё не подтверждён — письмо отправлено }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/login:

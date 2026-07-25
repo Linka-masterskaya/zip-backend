@@ -119,40 +119,41 @@ func TestVerifyEmail(t *testing.T) {
 func TestResendEmail(t *testing.T) {
 	tests := []struct {
 		name       string
+		body       string
 		mockSetup  func(m *MockauthServiceIface)
 		wantStatus int
 		wantCode   string
 	}{
 		{
 			name: "success",
+			body: `{"email":"test@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any()).Return(nil)
+				m.EXPECT().resendEmail(gomock.Any(), "test@example.com").Return(nil)
 			},
 			wantStatus: http.StatusAccepted,
 		},
 		{
-			name: "no user in context (auth middleware not in chain)",
-			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any()).Return(apperr.ErrUnauthorized)
-			},
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   "UNAUTHORIZED",
-		},
-		{
-			name: "user not found",
-			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any()).Return(apperr.ErrUserNotFound)
-			},
-			wantStatus: http.StatusNotFound,
-			wantCode:   "USER_NOT_FOUND",
-		},
-		{
 			name: "mailer/decrypt/db failure",
+			body: `{"email":"test@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any()).Return(apperr.ErrInternal)
+				m.EXPECT().resendEmail(gomock.Any(), "test@example.com").Return(apperr.ErrInternal)
 			},
 			wantStatus: http.StatusInternalServerError,
 			wantCode:   "INTERNAL",
+		},
+		{
+			name:       "bad request",
+			body:       `{"email":`,
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name:       "empty body",
+			body:       ``,
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
 		},
 	}
 
@@ -169,7 +170,7 @@ func TestResendEmail(t *testing.T) {
 				context.Background(),
 				http.MethodPost,
 				"/auth/verify-email/resend",
-				nil,
+				bytes.NewBufferString(tt.body),
 			)
 			rec := httptest.NewRecorder()
 

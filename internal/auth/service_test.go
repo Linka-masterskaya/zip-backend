@@ -6,8 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	pgx "github.com/jackc/pgx/v5"
+
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -59,6 +64,22 @@ func (f *fakeCrypto) Decrypt(_ []byte) ([]byte, error) {
 	return nil, nil
 }
 
+type fakeRateLimiter struct {
+	allowed bool
+	err     error
+}
+
+func (f *fakeRateLimiter) Allow(_ context.Context, _ cache.RateLimitRequest) (bool, int64, error) {
+	return f.allowed, 0, f.err
+}
+
+type fakeTx struct {
+	pgx.Tx
+}
+
+func (f *fakeTx) Commit(_ context.Context) error   { return nil }
+func (f *fakeTx) Rollback(_ context.Context) error { return nil }
+
 func TestAuthService_Login_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)
@@ -88,6 +109,7 @@ func TestAuthService_Login_Success(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		cacheStore,
+		&fakeRateLimiter{allowed: true},
 		nil,
 		testAuthConfig(),
 		crypto,
@@ -160,6 +182,7 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		cacheStore,
+		&fakeRateLimiter{allowed: true},
 		nil,
 		testAuthConfig(),
 		crypto,
@@ -196,6 +219,7 @@ func TestAuthService_Login_UserNotFound(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		cacheStore,
+		&fakeRateLimiter{allowed: true},
 		nil,
 		testAuthConfig(),
 		crypto,
@@ -250,6 +274,7 @@ func TestAuthService_Login_EmailNotVerified(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		cacheStore,
+		&fakeRateLimiter{allowed: true},
 		nil,
 		cfg,
 		crypto,
@@ -272,6 +297,147 @@ func TestAuthService_Login_EmailNotVerified(t *testing.T) {
 	}
 }
 
+func testResendConfig() Config {
+	cfg := testAuthConfig()
+	cfg.VerifyEmailTokenTTL = 24 * time.Hour
+	cfg.FrontendURL = "https://example.com"
+	cfg.RateLimit = config.RateLimitConfig{
+		Resend: config.RateLimitRule{
+			Scope:  "resend",
+			Limit:  5,
+			Window: time.Hour,
+		},
+	}
+	return cfg
+}
+
+func TestAuthService_ResendEmail_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	userID := uuid.Must(uuid.NewV7())
+
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
+		Return(&User{
+			ID:            userID.String(),
+			EmailVerified: false,
+		}, nil)
+
+	repo.EXPECT().
+		rotateEmailTokens(gomock.Any(), gomock.Any(), userID, gomock.Any(), gomock.Any()).
+		Return(nil)
+
+	ml := &passwordResetMailerFake{}
+	crypto := &passwordResetCryptoFake{hash: []byte("email-hash")}
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		ml,
+		testResendConfig(),
+		crypto,
+	)
+
+	err := svc.resendEmail(context.Background(), "user@example.com")
+	if err != nil {
+		t.Fatalf("resendEmail: %v", err)
+	}
+
+	if ml.calls != 1 {
+		t.Fatalf("mailer calls = %d, want 1", ml.calls)
+	}
+	if ml.to != "user@example.com" {
+		t.Fatalf("mailer to = %q, want user@example.com", ml.to)
+	}
+	if ml.template != mailer.EmailVerify {
+		t.Fatalf("mailer template = %v, want EmailVerify", ml.template)
+	}
+}
+
+func TestAuthService_ResendEmail_RateLimited(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	crypto := &passwordResetCryptoFake{hash: []byte("email-hash")}
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: false},
+		&passwordResetMailerFake{},
+		testResendConfig(),
+		crypto,
+	)
+
+	err := svc.resendEmail(context.Background(), "user@example.com")
+	if !errors.Is(err, apperr.ErrTooManyRequests) {
+		t.Fatalf("err = %v, want ErrTooManyRequests", err)
+	}
+}
+
+func TestAuthService_ResendEmail_UserNotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
+		Return(nil, apperr.ErrUserNotFound)
+
+	ml := &passwordResetMailerFake{}
+	crypto := &passwordResetCryptoFake{hash: []byte("email-hash")}
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		ml,
+		testResendConfig(),
+		crypto,
+	)
+
+	err := svc.resendEmail(context.Background(), "unknown@example.com")
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if ml.calls != 0 {
+		t.Fatal("mailer should not be called")
+	}
+}
+
+func TestAuthService_ResendEmail_AlreadyVerified(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
+		Return(&User{
+			ID:            uuid.Must(uuid.NewV7()).String(),
+			EmailVerified: true,
+		}, nil)
+
+	ml := &passwordResetMailerFake{}
+	crypto := &passwordResetCryptoFake{hash: []byte("email-hash")}
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		ml,
+		testResendConfig(),
+		crypto,
+	)
+
+	err := svc.resendEmail(context.Background(), "verified@example.com")
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if ml.calls != 0 {
+		t.Fatal("mailer should not be called for verified email")
+	}
+}
+
 func testAuthConfig() Config {
 	return Config{
 		JWTSecret:       "01234567890123456789012345678901",
@@ -282,4 +448,135 @@ func testAuthConfig() Config {
 
 func ptrString(value string) *string {
 	return &value
+}
+
+func TestAuthService_VerifyEmail_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+	txRepo := NewMockauthRepoIface(ctrl)
+
+	tx := &fakeTx{}
+	userID := uuid.Must(uuid.NewV7())
+
+	repo.EXPECT().
+		beginTx(gomock.Any()).
+		Return(tx, nil)
+
+	repo.EXPECT().
+		withTx(tx).
+		Return(txRepo)
+
+	txRepo.EXPECT().
+		useEmailVerifyToken(gomock.Any(), gomock.Any()).
+		Return(userID, uuid.Nil, nil)
+
+	txRepo.EXPECT().
+		verifyUser(gomock.Any(), userID).
+		Return(nil)
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		&passwordResetMailerFake{},
+		testAuthConfig(),
+		&fakeCrypto{},
+	)
+
+	err := svc.verifyEmail(context.Background(), "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEy")
+	if err != nil {
+		t.Fatalf("verifyEmail: %v", err)
+	}
+}
+
+func TestAuthService_VerifyEmail_InvalidBase64(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		&passwordResetMailerFake{},
+		testAuthConfig(),
+		&fakeCrypto{},
+	)
+
+	err := svc.verifyEmail(context.Background(), "!!!invalid-base64!!!")
+	if !errors.Is(err, apperr.ErrVerifyTokenInvalid) {
+		t.Fatalf("err = %v, want ErrVerifyTokenInvalid", err)
+	}
+}
+
+func TestAuthService_VerifyEmail_TokenNotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+	txRepo := NewMockauthRepoIface(ctrl)
+
+	tx := &fakeTx{}
+
+	repo.EXPECT().
+		beginTx(gomock.Any()).
+		Return(tx, nil)
+
+	repo.EXPECT().
+		withTx(tx).
+		Return(txRepo)
+
+	txRepo.EXPECT().
+		useEmailVerifyToken(gomock.Any(), gomock.Any()).
+		Return(uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid)
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		&passwordResetMailerFake{},
+		testAuthConfig(),
+		&fakeCrypto{},
+	)
+
+	err := svc.verifyEmail(context.Background(), "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEy")
+	if !errors.Is(err, apperr.ErrVerifyTokenInvalid) {
+		t.Fatalf("err = %v, want ErrVerifyTokenInvalid", err)
+	}
+}
+
+func TestAuthService_VerifyEmail_Student(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+	txRepo := NewMockauthRepoIface(ctrl)
+
+	tx := &fakeTx{}
+	studentID := uuid.Must(uuid.NewV7())
+
+	repo.EXPECT().
+		beginTx(gomock.Any()).
+		Return(tx, nil)
+
+	repo.EXPECT().
+		withTx(tx).
+		Return(txRepo)
+
+	txRepo.EXPECT().
+		useEmailVerifyToken(gomock.Any(), gomock.Any()).
+		Return(uuid.Nil, studentID, nil)
+
+	txRepo.EXPECT().
+		verifyStudent(gomock.Any(), studentID).
+		Return(nil)
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		&passwordResetMailerFake{},
+		testAuthConfig(),
+		&fakeCrypto{},
+	)
+
+	err := svc.verifyEmail(context.Background(), "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEy")
+	if err != nil {
+		t.Fatalf("verifyEmail: %v", err)
+	}
 }

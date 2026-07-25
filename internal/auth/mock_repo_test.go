@@ -104,22 +104,6 @@ func (mr *MockauthRepoIfaceMockRecorder) beginTx(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "beginTx", reflect.TypeOf((*MockauthRepoIface)(nil).beginTx), ctx)
 }
 
-// getUserContactForResend mocks base method.
-func (m *MockauthRepoIface) getUserContactForResend(ctx context.Context, userID uuid.UUID) ([]byte, bool, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "getUserContactForResend", ctx, userID)
-	ret0, _ := ret[0].([]byte)
-	ret1, _ := ret[1].(bool)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// getUserContactForResend indicates an expected call of getUserContactForResend.
-func (mr *MockauthRepoIfaceMockRecorder) getUserContactForResend(ctx, userID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getUserContactForResend", reflect.TypeOf((*MockauthRepoIface)(nil).getUserContactForResend), ctx, userID)
-}
-
 // rotateEmailTokens mocks base method.
 func (m *MockauthRepoIface) rotateEmailTokens(ctx context.Context, tokenID, userID uuid.UUID, hash []byte, expiresAt time.Time) error {
 	m.ctrl.T.Helper()
@@ -242,6 +226,46 @@ func (m *MockrefreshStore) StoreRefresh(ctx context.Context, jti string, rec cac
 func (mr *MockrefreshStoreMockRecorder) StoreRefresh(ctx, jti, rec, ttl any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StoreRefresh", reflect.TypeOf((*MockrefreshStore)(nil).StoreRefresh), ctx, jti, rec, ttl)
+}
+
+// MockrateLimit is a mock of rateLimit interface.
+type MockrateLimit struct {
+	ctrl     *gomock.Controller
+	recorder *MockrateLimitMockRecorder
+	isgomock struct{}
+}
+
+// MockrateLimitMockRecorder is the mock recorder for MockrateLimit.
+type MockrateLimitMockRecorder struct {
+	mock *MockrateLimit
+}
+
+// NewMockrateLimit creates a new mock instance.
+func NewMockrateLimit(ctrl *gomock.Controller) *MockrateLimit {
+	mock := &MockrateLimit{ctrl: ctrl}
+	mock.recorder = &MockrateLimitMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockrateLimit) EXPECT() *MockrateLimitMockRecorder {
+	return m.recorder
+}
+
+// Allow mocks base method.
+func (m *MockrateLimit) Allow(ctx context.Context, req cache.RateLimitRequest) (bool, int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Allow", ctx, req)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(int64)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// Allow indicates an expected call of Allow.
+func (mr *MockrateLimitMockRecorder) Allow(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Allow", reflect.TypeOf((*MockrateLimit)(nil).Allow), ctx, req)
 }
 
 // MockcryptoService is a mock of cryptoService interface.

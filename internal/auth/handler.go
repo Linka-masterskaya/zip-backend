@@ -20,7 +20,7 @@ type authServiceIface interface {
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
-	resendEmail(ctx context.Context) error
+	resendEmail(ctx context.Context, email string) error
 }
 
 type authHandlers struct {
@@ -109,6 +109,10 @@ type verifyEmailRequest struct {
 	Token string `json:"token"`
 }
 
+type resendEmailRequest struct {
+	Email string `json:"email"`
+}
+
 func (h *authHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) error {
 	var req verifyEmailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -128,7 +132,17 @@ func (h *authHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) error
 }
 
 func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error {
-	if err := h.svc.resendEmail(r.Context()); err != nil {
+	var email resendEmailRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&email); err != nil {
+		return apperr.ErrBadRequest
+	}
+
+	if err := ValidateEmail(email.Email); err != nil {
+		return err
+	}
+
+	if err := h.svc.resendEmail(r.Context(), email.Email); err != nil {
 		return err
 	}
 
@@ -186,12 +200,6 @@ func (h *authHandlers) RegisterRoutes(
 		cfg.App.TrustedProxies,
 	)
 
-	resendPolicy := middleware.RateLimitPolicy{
-		Scope:  cfg.RateLimit.Resend.Scope,
-		Limit:  cfg.RateLimit.Resend.Limit,
-		Window: cfg.RateLimit.Resend.Window,
-	}
-
 	mux.Handle(
 		"POST /api/v1/auth/verify-email",
 		verifyEmailIPLimit(
@@ -202,11 +210,7 @@ func (h *authHandlers) RegisterRoutes(
 	mux.Handle(
 		"POST /api/v1/auth/verify-email/resend",
 		verifyResendIPLimit(
-			middleware.ErrorMiddleware(
-				authMW.AuthMiddleware(
-					middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
-				),
-			),
+			middleware.ErrorMiddleware(h.ResendEmail),
 		),
 	)
 }

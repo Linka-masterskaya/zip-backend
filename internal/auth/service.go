@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,8 +17,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 )
 
@@ -47,7 +48,6 @@ type authRepoIface interface {
 	useEmailVerifyToken(ctx context.Context, token []byte) (uuid.UUID, uuid.UUID, error)
 	verifyUser(ctx context.Context, userID uuid.UUID) error
 	verifyStudent(ctx context.Context, studentID uuid.UUID) error
-	getUserContactForResend(ctx context.Context, userID uuid.UUID) ([]byte, bool, error)
 	rotateEmailTokens(
 		ctx context.Context,
 		tokenID, userID uuid.UUID,
@@ -66,6 +66,10 @@ type refreshStore interface {
 	RevokeAllSessions(ctx context.Context, userID string) error
 }
 
+type rateLimit interface {
+	Allow(ctx context.Context, req cache.RateLimitRequest) (bool, int64, error)
+}
+
 type cryptoService interface {
 	Hash(data []byte) []byte
 	Decrypt(ciphertext []byte) ([]byte, error)
@@ -81,6 +85,7 @@ type Config struct {
 	BcryptCost               int
 	RequireEmailVerification bool
 	CookieSecure             bool
+	RateLimit                config.RateLimitConfig
 }
 
 type LoginResult struct {
@@ -89,26 +94,29 @@ type LoginResult struct {
 }
 
 type authService struct {
-	repo   authRepoIface
-	cache  refreshStore
-	mailer mailer.EmailSender
-	cfg    Config
-	crp    cryptoService
+	repo    authRepoIface
+	cache   refreshStore
+	rlCache rateLimit
+	mailer  mailer.EmailSender
+	cfg     Config
+	crp     cryptoService
 }
 
 func NewAuthService(
 	repo authRepoIface,
 	cache refreshStore,
+	rlCache rateLimit,
 	mailer mailer.EmailSender,
 	cfg Config,
 	crp cryptoService,
 ) *authService {
 	return &authService{
-		repo:   repo,
-		cache:  cache,
-		mailer: mailer,
-		cfg:    cfg,
-		crp:    crp,
+		repo:    repo,
+		rlCache: rlCache,
+		cache:   cache,
+		mailer:  mailer,
+		cfg:     cfg,
+		crp:     crp,
 	}
 }
 
@@ -227,23 +235,34 @@ func (au *authService) verifyEmail(
 	return nil
 }
 
-func (au *authService) resendEmail(ctx context.Context) error {
-	userID, err := authctx.UserIDFromCtx(ctx)
+func (au *authService) resendEmail(ctx context.Context, strEmail string) error {
+	strEmail = strings.TrimSpace(strings.ToLower(strEmail))
+	emailHash := au.crp.Hash([]byte(strEmail))
+
+	rlCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	hashKey := hex.EncodeToString(emailHash)
+	allowed, _, err := au.rlCache.Allow(rlCtx, cache.RateLimitRequest{
+		Scope: au.cfg.RateLimit.Resend.Scope, Key: hashKey,
+		Limit: au.cfg.RateLimit.Resend.Limit, WindowSize: au.cfg.RateLimit.Resend.Window,
+	})
 	if err != nil {
-		return err
+		return apperr.ErrInternal.WithError(fmt.Errorf("cache.Allow: %w", err))
+	}
+	if !allowed {
+		return apperr.ErrTooManyRequests
 	}
 
-	emailEncrypted, emailVerified, err := au.repo.getUserContactForResend(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if emailVerified {
+	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
+	if errors.Is(err, apperr.ErrUserNotFound) {
 		return nil
 	}
-
-	email, err := au.crp.Decrypt(emailEncrypted)
 	if err != nil {
-		return fmt.Errorf("authService.resendEmail: %w", err)
+		return err
+	}
+	if user.EmailVerified {
+		return nil
 	}
 
 	tokenRaw := make([]byte, 32)
@@ -254,6 +273,11 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	hashToken := sha256.Sum256(tokenRaw)
 
 	tokenID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("authService.resendEmail: %w", err)
+	}
+
+	userID, err := uuid.Parse(user.ID)
 	if err != nil {
 		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
@@ -275,7 +299,7 @@ func (au *authService) resendEmail(ctx context.Context) error {
 
 	err = au.mailer.Send(
 		ctx,
-		string(email),
+		strEmail,
 		mailer.EmailVerify,
 		mailer.EmailData{
 			Token: verifyURL,
