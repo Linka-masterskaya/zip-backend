@@ -105,6 +105,7 @@ func run() error {
 	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.CreatePack)))
 	mainMux.Handle("GET /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(packHandler.GetPack)))
 	mainMux.Handle("GET /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.ListPacks)))
+	mainMux.Handle("PATCH /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(packHandler.UpdatePack)))
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
