@@ -2,7 +2,7 @@
 CREATE TABLE folders (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id      UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
-    owner_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    owner_id    UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     parent_id   UUID REFERENCES folders(id) ON DELETE RESTRICT,
     section     TEXT NOT NULL CHECK (section IN ('library', 'my', 'students')),
     kind        TEXT NOT NULL CHECK (kind IN ('folder', 'student')),
