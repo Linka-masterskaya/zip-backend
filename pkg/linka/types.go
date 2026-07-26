@@ -45,11 +45,12 @@ type Block struct {
 }
 
 type Element struct {
-	ID       string     `json:"id"`
-	Kind     string     `json:"kind"`
-	Value    string     `json:"value,omitempty"`
-	MediaID  *uuid.UUID `json:"media_id,omitempty"`
-	MediaURL string     `json:"media_url,omitempty"`
+	ID              string     `json:"id"`
+	Kind            string     `json:"kind"`
+	Value           string     `json:"value,omitempty"`
+	MediaID         *uuid.UUID `json:"media_id,omitempty"`
+	MediaURL        string     `json:"media_url,omitempty"`
+	SourcePictureID *uuid.UUID `json:"source_picture_id,omitempty"`
 }
 
 type Answer struct {

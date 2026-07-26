@@ -14,6 +14,7 @@ tags:
   - name: folders
   - name: packs
   - name: media
+  - name: pictures
   - name: students
 
 components:
@@ -168,6 +169,24 @@ components:
         size_bytes:  { type: integer, format: int64 }
         created_at:  { type: string, format: date-time }
         url:         { type: string, format: uri, description: Временная presigned MinIO URL }
+
+    PictureCategory:
+      type: object
+      required: [id, name]
+      properties:
+        id:   { type: string, format: uuid }
+        name: { type: string }
+
+    Picture:
+      type: object
+      required: [id, name, categories]
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        mimeType:   { type: string }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/PictureCategory' }
 
     PackAdaptation:
       type: object
@@ -608,6 +627,81 @@ paths:
         '204': { description: Метаданные, объект MinIO и занятая квота удалены }
         '404': { description: Media не найдено или принадлежит другому пользователю }
         '409': { description: Media ещё используется набором или адаптацией }
+
+  /pictures/categories:
+    get:
+      tags: [pictures]
+      summary: Получить категории LINKa Pictures Bank через защищённый proxy
+      description: Ответ кэшируется; исходящие запросы глобально ограничены через Redis.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Категории
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PictureCategory' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '503': { description: Pictures Bank недоступен или исчерпан исходящий бюджет }
+
+  /pictures/search:
+    get:
+      tags: [pictures]
+      summary: Найти изображения в LINKa Pictures Bank
+      description: Одинаковые одновременные запросы объединяются, результаты кэшируются.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: query, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 100 } }
+      responses:
+        '200':
+          description: Результаты поиска
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Picture' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '503': { description: Pictures Bank недоступен или исчерпан исходящий бюджет }
+
+  /pictures/{id}/content:
+    get:
+      tags: [pictures]
+      summary: Получить изображение Pictures Bank через ограниченный proxy
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Изображение с браузерным Cache-Control
+          content:
+            image/png:  { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            image/gif:  { schema: { type: string, format: binary } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '503': { description: Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME }
+
+  /pictures/{id}/import:
+    post:
+      tags: [pictures]
+      summary: Импортировать изображение Pictures Bank в приватное хранилище организации
+      description: Использует тот же исходящий лимит, SHA-256 дедупликацию и квоту, что обычный media upload.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201':
+          description: Изображение сохранено или дедуплицировано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Media' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { description: Файл или квота превышены }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '503': { description: Pictures Bank недоступен или исчерпан исходящий бюджет }
 
   /packs/{id}/config:
     put:

@@ -59,3 +59,22 @@ func TestValidateConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateConfigAllowsPicturesBankSourceID(t *testing.T) {
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{
+			"id":"block","type":"grid",
+			"elements":[{
+				"id":"image","kind":"image",
+				"media_id":"9153ae50-9c6a-4b71-a8de-df458a905d51",
+				"source_picture_id":"0ca59ca4-2298-4a70-a37b-a5107e90844e"
+			}]
+		}]
+	}`)
+
+	if err := ValidateConfig(t.Context(), config); err != nil {
+		t.Fatalf("config with source_picture_id must be valid: %v", err)
+	}
+}

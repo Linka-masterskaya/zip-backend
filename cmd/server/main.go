@@ -37,6 +37,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
+	"github.com/Linka-masterskaya/zip-backend/internal/picturebank"
 	"github.com/Linka-masterskaya/zip-backend/internal/profile"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 	"github.com/Linka-masterskaya/zip-backend/internal/student"
@@ -84,6 +85,12 @@ func run() error {
 	studentService := student.NewService(studentRepo, deps.crypto)
 	studentHandler := student.NewHandler(studentService)
 
+	picturesClient, err := picturebank.NewClient(deps.cfg.PicturesBank, deps.redis)
+	if err != nil {
+		return fmt.Errorf("pictures bank client: %w", err)
+	}
+	picturesHandler := picturebank.NewHandler(picturebank.NewService(picturesClient, mediaService))
+
 	authRepo := auth.NewAuthRepo(deps.db)
 
 	authCfg := auth.Config{
@@ -112,6 +119,7 @@ func run() error {
 	}
 
 	packRateLimit := middleware.RateLimit(deps.redis, "packs_api", int64(deps.cfg.Auth.PackRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	picturesRateLimit := middleware.RateLimit(deps.redis, "pictures_api", deps.cfg.PicturesBank.InboundPerMinute, time.Minute, deps.cfg.App.TrustedProxies)
 	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	forgotRateLimit := middleware.RateLimit(deps.redis, "forgot", int64(deps.cfg.Auth.ForgotRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	resetRateLimit := middleware.RateLimit(deps.redis, "reset", int64(deps.cfg.Auth.ResetRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
@@ -124,6 +132,7 @@ func run() error {
 		Pack: packHandler, Content: contentHandler, Media: mediaHandler,
 		Folder: folderHandler, Student: studentHandler,
 	})
+	httpapi.RegisterPictureBankRoutes(mainMux, authMW, picturesRateLimit, picturesHandler)
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 

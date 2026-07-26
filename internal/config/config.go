@@ -159,7 +159,14 @@ type OpenAIConfig struct {
 
 // PicturesBankConfig contains Pictures Bank settings.
 type PicturesBankConfig struct {
-	URL string `mapstructure:"url"`
+	URL               string        `mapstructure:"url"`
+	Timeout           time.Duration `mapstructure:"timeout"`
+	RequestsPerSecond int64         `mapstructure:"requests_per_second"`
+	InboundPerMinute  int64         `mapstructure:"inbound_per_minute"`
+	MaxConcurrent     int           `mapstructure:"max_concurrent"`
+	CacheTTL          time.Duration `mapstructure:"cache_ttl"`
+	MaxMetadataBytes  int64         `mapstructure:"max_metadata_bytes"`
+	MaxImageBytes     int64         `mapstructure:"max_image_bytes"`
 }
 
 // SMTPConfig contains Email settings.
@@ -308,7 +315,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("openai.base_url", "https://api.openai.com/v1")
 
 	// Pictures Bank defaults
-	v.SetDefault("pictures_bank.url", "")
+	v.SetDefault("pictures_bank.url", "https://pictures.linka.su")
+	v.SetDefault("pictures_bank.timeout", "5s")
+	v.SetDefault("pictures_bank.requests_per_second", 5)
+	v.SetDefault("pictures_bank.inbound_per_minute", 120)
+	v.SetDefault("pictures_bank.max_concurrent", 4)
+	v.SetDefault("pictures_bank.cache_ttl", "5m")
+	v.SetDefault("pictures_bank.max_metadata_bytes", 2097152)
+	v.SetDefault("pictures_bank.max_image_bytes", 10485760)
 
 	// SMTP defaults
 	v.SetDefault("smtp.host", "smtp.yandex.ru")

@@ -57,7 +57,8 @@
 								},
 								"value": { "type": "string" },
 								"media_id": { "type": "string", "format": "uuid" },
-								"media_url": { "type": "string", "format": "uri-reference" }
+								"media_url": { "type": "string", "format": "uri-reference" },
+								"source_picture_id": { "type": "string", "format": "uuid" }
 							}
 						}
 					},

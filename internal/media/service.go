@@ -80,7 +80,7 @@ func (s *Service) Upload(ctx context.Context, data []byte) (*Response, error) {
 	}
 	mimeType := detectMIME(data)
 	if mimeType == "" {
-		return nil, apperr.ErrBadRequest.WithMessage("media must be png, jpeg, webp, mp3, wav, or ogg")
+		return nil, apperr.ErrBadRequest.WithMessage("media must be png, jpeg, webp, gif, mp3, wav, or ogg")
 	}
 	orgID, err := s.repo.UserOrg(ctx, userID)
 	if err != nil {
@@ -145,7 +145,7 @@ func (s *Service) response(ctx context.Context, file *File) (*Response, error) {
 func detectMIME(data []byte) string {
 	detected := http.DetectContentType(data)
 	switch detected {
-	case "image/png", "image/jpeg", "image/webp", "audio/mpeg", "audio/wav", "audio/ogg",
+	case "image/png", "image/jpeg", "image/webp", "image/gif", "audio/mpeg", "audio/wav", "audio/ogg",
 		"audio/x-wav", "application/ogg":
 		return detected
 	default:
