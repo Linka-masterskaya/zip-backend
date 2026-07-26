@@ -2,7 +2,7 @@ name: Build and Push Docker images
 
 on:
   push:
-    branches: [main, deploy-test]
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
@@ -83,7 +83,7 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
+    environment: production
     permissions:
       contents: read
 

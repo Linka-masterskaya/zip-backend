@@ -3,7 +3,14 @@
 set -euo pipefail
 
 cd ~/zip-backend
-source .env
+
+if [ -z "${1:-}" ]; then
+  echo "Usage: $0 <version>"
+  exit 1
+fi
+
+POSTGRES_USER=$(grep '^POSTGRES_USER=' .env | cut -d= -f2-)
+POSTGRES_DB=$(grep '^POSTGRES_DB=' .env | cut -d= -f2-)
 
 NEW_VERSION=$1
 PREV_VERSION=$(cat .version 2>/dev/null || echo "")
@@ -13,7 +20,7 @@ export VERSION=$NEW_VERSION
 
 docker compose -f docker-compose.server.yaml pull
 
-if docker compose -f docker-compose.server.yaml ps postgres --status running -q 2>/dev/null; then
+if [ -n "$(docker compose -f docker-compose.server.yaml ps -q --status running postgres)" ]; then
   docker compose -f docker-compose.server.yaml exec -T postgres \
     pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB" > ~/zip-backend/backup_$(date +%Y%m%d_%H%M%S).sql
 fi
@@ -21,8 +28,6 @@ fi
 docker compose -f docker-compose.server.yaml run --rm zip-backend --migrate
 
 docker compose -f docker-compose.server.yaml up -d --remove-orphans
-
-docker compose -f docker-compose.server.yaml restart caddy
 
 for i in $(seq 1 30); do
   curl -sf http://localhost:9091/health && break
@@ -35,7 +40,7 @@ if ! curl -sf http://localhost:9091/health; then
     LATEST_BACKUP=$(ls -t ~/zip-backend/backup_*.sql 2>/dev/null | head -1)
     if [ -n "$LATEST_BACKUP" ]; then
       docker compose -f docker-compose.server.yaml exec -T postgres \
-        psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$LATEST_BACKUP"
+        psql --set ON_ERROR_STOP=1 --single-transaction -U "$POSTGRES_USER" "$POSTGRES_DB" < "$LATEST_BACKUP"
     fi
     echo "$PREV_VERSION" > .version
     export VERSION=$PREV_VERSION
