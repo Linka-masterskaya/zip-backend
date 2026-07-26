@@ -92,8 +92,10 @@ func insertTestFolder(t *testing.T, ownerID uuid.UUID, section, kind string, stu
 	t.Helper()
 	id := uuid.New()
 	_, err := pool.Exec(ctx, `
-		INSERT INTO folders (id, owner_id, section, kind, student_id)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO folders (id, org_id, owner_id, section, kind, student_id, name, depth)
+		SELECT $1, u.org_id, u.id, $3, $4, $5, 'Test Folder', 0
+		FROM users u
+		WHERE u.id = $2
 	`, id, ownerID, section, kind, studentID)
 	require.NoError(t, err)
 	return id
@@ -145,9 +147,9 @@ func insertTestMediaFile(t *testing.T, orgID, uploaderID uuid.UUID) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	_, err := pool.Exec(ctx, `
-		INSERT INTO media_files (id, org_id, uploader_id, status, source_text)
-		VALUES ($1, $2, $3, 'pending', 'test tts text')
-	`, id, orgID, uploaderID)
+		INSERT INTO media_files (id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key)
+		VALUES ($1, $2, $3, $4, 'audio/mpeg', 4, $5)
+	`, id, orgID, uploaderID, id.String(), "test/"+id.String())
 	require.NoError(t, err)
 	return id
 }
@@ -200,14 +202,14 @@ func TestFoldersKindStudentIDCheck(t *testing.T) {
 	studentID := insertTestStudent(t, ownerID)
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO folders (owner_id, section, kind, student_id)
-		VALUES ($1, 'my', 'folder', $2)
-	`, ownerID, studentID)
+		INSERT INTO folders (org_id, owner_id, section, kind, student_id, name, depth)
+		VALUES ($1, $2, 'my', 'folder', $3, 'invalid', 0)
+	`, orgID, ownerID, studentID)
 
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
 	assert.Equal(t, "23514", pgErr.Code)
-	assert.Equal(t, "folders_kind_student_id_chk", pgErr.ConstraintName)
+	assert.Equal(t, "folders_kind_student_chk", pgErr.ConstraintName)
 }
 
 func TestDeletePackCascadesFavoritesAndVersions(t *testing.T) {

@@ -63,7 +63,7 @@ func run() error {
 		}
 	}()
 
-	packRepo := pack.NewRepository(deps.redis)
+	packRepo := pack.NewRepository(deps.db)
 	packService := pack.NewService(packRepo, deps.pub)
 	packHandler := pack.NewHandler(packService)
 
@@ -101,15 +101,16 @@ func run() error {
 	profileEmailChangeRateLimit := middleware.RateLimit(deps.redis, "profile-email-change", int64(deps.cfg.Profile.EmailChangeRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	profileEmailConfirmRateLimit := middleware.RateLimit(deps.redis, "profile-email-confirm", int64(deps.cfg.Profile.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 
+	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 	mainMux := http.NewServeMux()
-	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.CreatePack)))
-	mainMux.Handle("GET /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(packHandler.GetPack)))
-	mainMux.Handle("GET /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.ListPacks)))
-	mainMux.Handle("PATCH /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(packHandler.UpdatePack)))
+	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.CreatePack))))
+	mainMux.Handle("GET /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.GetPack))))
+	mainMux.Handle("GET /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.ListPacks))))
+	mainMux.Handle("PATCH /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.UpdatePack))))
+	mainMux.Handle("DELETE /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.DeletePack))))
+	mainMux.Handle("POST /api/v1/packs/{id}/move", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.MovePack))))
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
-
-	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 
 	mainMux.Handle(
 		"POST /api/v1/auth/login",
