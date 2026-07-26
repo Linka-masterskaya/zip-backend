@@ -1,0 +1,11 @@
+{
+	"metadata": {
+		"version": "1.0",
+		"title": "Empty pack test"
+	},
+	"settings": {
+		"columns": 2,
+		"rows": 2
+	},
+	"blocks": []
+}

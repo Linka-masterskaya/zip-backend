@@ -35,3 +35,9 @@ func (s *Service) List(ctx context.Context) ([]*Pack, error) {
 	_ = ctx
 	return []*Pack{}, nil
 }
+
+// Update — заглушка (stub) для обновления пака.
+func (s *Service) Update(ctx context.Context, id string) (*Pack, error) {
+	_ = ctx
+	return &Pack{ID: id, Name: "stub-updated-name"}, nil
+}

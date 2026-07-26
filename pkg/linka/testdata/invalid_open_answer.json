@@ -1,0 +1,11 @@
+{
+	"metadata": { "version": "2.0" },
+	"settings": { "columns": 2, "rows": 2 },
+	"blocks": [
+		{
+			"id": "b1",
+			"type": "open_answer",
+			"elements": [{ "id": "e1", "kind": "text" }]
+		}
+	]
+}
