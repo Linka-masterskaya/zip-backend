@@ -76,7 +76,8 @@ const deletePackQuery = `
 	  AND p.owner_id = u.id
 	  AND p.org_id = u.org_id
 	  AND p.published_at IS NULL
-	  AND u.deleted_at IS NULL`
+	  AND u.deleted_at IS NULL
+	RETURNING p.id`
 
 const packPublishedQuery = `
 	SELECT EXISTS (
@@ -141,6 +142,30 @@ const folderAllowedQuery = `
 		  AND u.org_id IS NOT NULL
 		  AND u.deleted_at IS NULL
 	)`
+
+const countPackMediaQuery = `
+	SELECT count(*) FROM media_files
+	WHERE org_id = $1 AND id = ANY($2::uuid[])`
+
+const deletePackMediaUsagesQuery = `
+	DELETE FROM media_usages WHERE source_type = 'pack' AND source_id = $1`
+
+const insertPackMediaUsagesQuery = `
+	INSERT INTO media_usages (media_id, source_type, source_id)
+	SELECT unnest($1::uuid[]), 'pack', $2`
+
+const savePackConfigQuery = `
+	UPDATE packs p SET config = $3, updated_at = now()
+	WHERE p.id = $2 AND p.owner_id = $1
+	RETURNING ` + qualifiedPackColumns
+
+const archiveMediaQuery = `
+	SELECT m.id, m.org_id, m.uploader_id, m.sha256, m.mime_type,
+	       m.size_bytes, m.minio_key, m.created_at
+	FROM media_usages mu
+	JOIN media_files m ON m.id = mu.media_id
+	WHERE mu.source_type = 'pack' AND mu.source_id = $1
+	ORDER BY m.id`
 
 const packColumns = `
 	id, org_id, owner_id, folder_id, library_folder_id, published_at,

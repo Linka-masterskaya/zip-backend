@@ -1,5 +1,7 @@
 package linka
 
+import "github.com/google/uuid"
+
 const (
 	BlockTypeGrid         = "grid"
 	BlockTypeSingleChoice = "single_choice"
@@ -43,10 +45,11 @@ type Block struct {
 }
 
 type Element struct {
-	ID       string `json:"id"`
-	Kind     string `json:"kind"`
-	Value    string `json:"value,omitempty"`
-	MediaURL string `json:"media_url,omitempty"`
+	ID       string     `json:"id"`
+	Kind     string     `json:"kind"`
+	Value    string     `json:"value,omitempty"`
+	MediaID  *uuid.UUID `json:"media_id,omitempty"`
+	MediaURL string     `json:"media_url,omitempty"`
 }
 
 type Answer struct {

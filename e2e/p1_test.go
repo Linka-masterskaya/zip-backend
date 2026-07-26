@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
+	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/student"
@@ -75,6 +77,39 @@ func TestE2E_P1UserJourney(t *testing.T) {
 		`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`,
 		string(createdPack.Config),
 	)
+
+	uploaded := e2eUploadMedia(t, server, ownerToken, tinyPNG())
+	foreignMedia := e2eUploadMedia(t, server, readerToken, tinyPNG())
+	foreignConfig := packImageConfig(foreignMedia.ID)
+	foreignResponse := e2eRequest(t, server, ownerToken, http.MethodPut,
+		"/api/v1/packs/"+createdPack.ID.String()+"/config", foreignConfig)
+	assert.Equal(t, http.StatusForbidden, foreignResponse.StatusCode)
+	e2eClose(t, foreignResponse)
+
+	config := packImageConfig(uploaded.ID)
+	configured := e2eJSON[pack.Pack](
+		t,
+		e2eRequest(t, server, ownerToken, http.MethodPut,
+			"/api/v1/packs/"+createdPack.ID.String()+"/config", config),
+		http.StatusOK,
+	)
+	assert.Contains(t, string(configured.Config), uploaded.ID.String())
+
+	exported := e2eRequest(
+		t, server, ownerToken, http.MethodGet,
+		"/api/v1/packs/"+createdPack.ID.String()+"/export", nil,
+	)
+	exportBytes := e2eBody(t, exported, http.StatusOK)
+	assert.Equal(t, "application/vnd.linka+zip", exported.Header.Get("Content-Type"))
+	imported := e2eImportPack(t, server, ownerToken, root.ID, exportBytes)
+	assert.Equal(t, "Импортированный набор", imported.Title)
+	assert.Contains(t, string(imported.Config), uploaded.ID.String())
+	var storageUsed int64
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT o.storage_used_bytes
+		FROM organizations o JOIN users u ON u.org_id = o.id
+		WHERE u.id = $1`, ownerID).Scan(&storageUsed))
+	assert.Equal(t, int64(len(tinyPNG())), storageUsed, "deduplicated import must not consume quota twice")
 
 	updatedPack := e2eJSON[pack.Pack](
 		t,
@@ -249,7 +284,16 @@ func e2eServer(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
 	crypto, err := cryptox.New(bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32))
 	require.NoError(t, err)
 
-	packHandler := pack.NewHandler(pack.NewService(pack.NewRepository(pool), nil))
+	objectStorage, cleanupStorage := testutil.NewMinIO(t)
+	t.Cleanup(cleanupStorage)
+	packRepo := pack.NewRepository(pool)
+	packService := pack.NewService(packRepo, nil)
+	packHandler := pack.NewHandler(packService)
+	mediaService := media.NewService(media.NewRepository(pool), objectStorage)
+	mediaHandler := media.NewHandler(mediaService)
+	contentHandler := pack.NewContentHandler(
+		pack.NewContentService(packRepo, objectStorage, mediaService, packService),
+	)
 	folderHandler := folder.NewHandler(folder.NewService(folder.NewRepository(pool)))
 	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto))
 
@@ -259,7 +303,8 @@ func e2eServer(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
 		middleware.NewAuthMW([]byte(e2eJWTSecret)),
 		func(next http.Handler) http.Handler { return next },
 		httpapi.P1Handlers{
-			Pack: packHandler, Folder: folderHandler, Student: studentHandler,
+			Pack: packHandler, Content: contentHandler, Media: mediaHandler,
+			Folder: folderHandler, Student: studentHandler,
 		},
 	)
 	server := httptest.NewServer(middleware.Chain(
@@ -269,6 +314,95 @@ func e2eServer(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
 	))
 	t.Cleanup(server.Close)
 	return server
+}
+
+func e2eUploadMedia(
+	t *testing.T,
+	server *httptest.Server,
+	token string,
+	data []byte,
+) media.Response {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "pixel.png")
+	require.NoError(t, err)
+	_, err = part.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	request, err := http.NewRequestWithContext(
+		t.Context(), http.MethodPost, server.URL+"/api/v1/media", &body,
+	)
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := server.Client().Do(request)
+	require.NoError(t, err)
+	return e2eJSON[media.Response](t, response, http.StatusCreated)
+}
+
+func e2eImportPack(
+	t *testing.T,
+	server *httptest.Server,
+	token string,
+	folderID uuid.UUID,
+	data []byte,
+) pack.Pack {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("title", "Импортированный набор"))
+	require.NoError(t, writer.WriteField("folder_id", folderID.String()))
+	part, err := writer.CreateFormFile("file", "pack.linka")
+	require.NoError(t, err)
+	_, err = part.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	request, err := http.NewRequestWithContext(
+		t.Context(), http.MethodPost, server.URL+"/api/v1/packs/import", &body,
+	)
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := server.Client().Do(request)
+	require.NoError(t, err)
+	return e2eJSON[pack.Pack](t, response, http.StatusCreated)
+}
+
+func tinyPNG() []byte {
+	return []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+		0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99,
+		0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+		0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+	}
+}
+
+func packImageConfig(mediaID uuid.UUID) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{"version": "2.0"},
+		"settings": map[string]any{"columns": 1, "rows": 1},
+		"blocks": []any{map[string]any{
+			"id": "block-1", "type": "grid",
+			"elements": []any{map[string]any{
+				"id": "image-1", "kind": "image", "media_id": mediaID,
+			}},
+		}},
+	}
+}
+
+func e2eBody(t *testing.T, response *http.Response, expectedStatus int) []byte {
+	t.Helper()
+	defer e2eClose(t, response)
+	data, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Equal(t, expectedStatus, response.StatusCode, "unexpected response: %s", data)
+	return data
 }
 
 func e2eUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {

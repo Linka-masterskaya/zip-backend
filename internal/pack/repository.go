@@ -14,6 +14,7 @@ import (
 var (
 	ErrPackNotFound        = errors.New("pack not found")
 	ErrFolderNotAllowed    = errors.New("folder is not accessible")
+	ErrMediaNotAllowed     = errors.New("media is not accessible")
 	ErrInvalidPackMetadata = errors.New("invalid pack metadata")
 	ErrPackPublished       = errors.New("pack is published")
 	ErrAlreadyPublished    = errors.New("pack is published in another folder")
@@ -144,13 +145,16 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 
 // Delete removes an owned pack from the authenticated user's organization.
 func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, deletePackQuery, userID, packID)
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("pack repository delete: %w", err)
+		return fmt.Errorf("pack repository delete begin: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	defer rollbackPackTx(ctx, tx)
+	var deletedID uuid.UUID
+	err = tx.QueryRow(ctx, deletePackQuery, userID, packID).Scan(&deletedID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		var published bool
-		err = r.pool.QueryRow(ctx, packPublishedQuery, userID, packID).Scan(&published)
+		err = tx.QueryRow(ctx, packPublishedQuery, userID, packID).Scan(&published)
 		if err != nil {
 			return fmt.Errorf("pack repository delete state: %w", err)
 		}
@@ -158,6 +162,15 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 			return ErrPackPublished
 		}
 		return ErrPackNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("pack repository delete: %w", err)
+	}
+	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, deletedID); err != nil {
+		return fmt.Errorf("pack repository delete media usages: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pack repository delete commit: %w", err)
 	}
 	return nil
 }

@@ -13,6 +13,7 @@ tags:
   - name: profile
   - name: folders
   - name: packs
+  - name: media
   - name: students
 
 components:
@@ -155,6 +156,18 @@ components:
         config:            { type: object, additionalProperties: true }
         created_at:        { type: string, format: date-time }
         updated_at:        { type: string, format: date-time }
+
+    Media:
+      type: object
+      required: [id, uploader_id, sha256, mime_type, size_bytes, created_at, url]
+      properties:
+        id:          { type: string, format: uuid }
+        uploader_id: { type: string, format: uuid }
+        sha256:      { type: string, pattern: '^[a-f0-9]{64}$' }
+        mime_type:   { type: string }
+        size_bytes:  { type: integer, format: int64 }
+        created_at:  { type: string, format: date-time }
+        url:         { type: string, format: uri, description: Временная presigned MinIO URL }
 
     Student:
       type: object
@@ -514,6 +527,92 @@ paths:
                   limit:  { type: integer }
                   offset: { type: integer }
         '404': { description: Папка не найдена }
+
+  /media:
+    post:
+      tags: [media]
+      summary: Загрузить изображение или аудио в приватное объектное хранилище
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary, description: Максимум 20 MiB }
+      responses:
+        '201': { description: Загружено или найдено по SHA-256, content: { application/json: { schema: { $ref: '#/components/schemas/Media' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { description: Файл или квота превышены }
+
+  /media/{id}:
+    get:
+      tags: [media]
+      summary: Получить метаданные и временную ссылку на media
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Media доступно, content: { application/json: { schema: { $ref: '#/components/schemas/Media' } } } }
+        '404': { description: Media не найдено или недоступно }
+
+  /packs/{id}/config:
+    put:
+      tags: [packs]
+      summary: Полностью сохранить валидный Linka 2.0 config и его media usages
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Config сохранён атомарно, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Набор не найден }
+
+  /packs/{id}/export:
+    get:
+      tags: [packs]
+      summary: Скачать `.linka` ZIP (`config.json` и каталог `media/`)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Архив до 50 MiB
+          content:
+            application/vnd.linka+zip:
+              schema: { type: string, format: binary }
+        '404': { description: Набор не найден }
+        '413': { description: Архив превышает 50 MiB }
+
+  /packs/import:
+    post:
+      tags: [packs]
+      summary: Импортировать безопасный `.linka` ZIP в папку
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, folder_id, title]
+              properties:
+                file:      { type: string, format: binary, description: Максимум 50 MiB }
+                folder_id: { type: string, format: uuid }
+                title:     { type: string }
+      responses:
+        '201': { description: Набор импортирован, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { description: Архив, распакованные данные или квота превышены }
 
   /packs/{id}/publication:
     post:

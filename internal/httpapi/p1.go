@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
+	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/student"
@@ -13,6 +14,8 @@ import (
 // P1Handlers contains the handlers exposed by the P1 API.
 type P1Handlers struct {
 	Pack    *pack.Handler
+	Content *pack.ContentHandler
+	Media   *media.Handler
 	Folder  *folder.Handler
 	Student *student.Handler
 }
@@ -36,6 +39,11 @@ func RegisterP1Routes(
 	mux.Handle("POST /api/v1/packs/{id}/move", protected(handlers.Pack.MovePack))
 	mux.Handle("POST /api/v1/packs/{id}/publication", protected(handlers.Pack.PublishPack))
 	mux.Handle("DELETE /api/v1/packs/{id}/publication", protected(handlers.Pack.UnpublishPack))
+	mux.Handle("PUT /api/v1/packs/{id}/config", protected(handlers.Content.SaveConfig))
+	mux.Handle("GET /api/v1/packs/{id}/export", protected(handlers.Content.Export))
+	mux.Handle("POST /api/v1/packs/import", protected(handlers.Content.Import))
+	mux.Handle("POST /api/v1/media", protected(handlers.Media.Upload))
+	mux.Handle("GET /api/v1/media/{id}", protected(handlers.Media.Get))
 
 	mux.Handle("POST /api/v1/folders", protected(handlers.Folder.Create))
 	mux.Handle("GET /api/v1/folders", protected(handlers.Folder.List))

@@ -56,6 +56,7 @@
 									"enum": ["text", "image", "audio"]
 								},
 								"value": { "type": "string" },
+								"media_id": { "type": "string", "format": "uuid" },
 								"media_url": { "type": "string", "format": "uri-reference" }
 							}
 						}

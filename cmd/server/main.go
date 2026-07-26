@@ -33,6 +33,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
+	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
@@ -69,6 +70,11 @@ func run() error {
 	packRepo := pack.NewRepository(deps.db)
 	packService := pack.NewService(packRepo, deps.pub)
 	packHandler := pack.NewHandler(packService)
+	mediaRepo := media.NewRepository(deps.db)
+	mediaService := media.NewService(mediaRepo, deps.storage)
+	mediaHandler := media.NewHandler(mediaService)
+	contentService := pack.NewContentService(packRepo, deps.storage, mediaService, packService)
+	contentHandler := pack.NewContentHandler(contentService)
 
 	folderRepo := folder.NewRepository(deps.db)
 	folderService := folder.NewService(folderRepo)
@@ -115,7 +121,8 @@ func run() error {
 	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 	mainMux := http.NewServeMux()
 	httpapi.RegisterP1Routes(mainMux, authMW, packRateLimit, httpapi.P1Handlers{
-		Pack: packHandler, Folder: folderHandler, Student: studentHandler,
+		Pack: packHandler, Content: contentHandler, Media: mediaHandler,
+		Folder: folderHandler, Student: studentHandler,
 	})
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
