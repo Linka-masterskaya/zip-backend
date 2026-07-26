@@ -1,6 +1,6 @@
 //go:build e2e
 
-package main
+package e2e_test
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
+	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/student"
@@ -253,11 +254,13 @@ func e2eServer(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
 	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto))
 
 	mux := http.NewServeMux()
-	registerP1Routes(
+	httpapi.RegisterP1Routes(
 		mux,
 		middleware.NewAuthMW([]byte(e2eJWTSecret)),
 		func(next http.Handler) http.Handler { return next },
-		p1Handlers{pack: packHandler, folder: folderHandler, student: studentHandler},
+		httpapi.P1Handlers{
+			Pack: packHandler, Folder: folderHandler, Student: studentHandler,
+		},
 	)
 	server := httptest.NewServer(middleware.Chain(
 		mux,

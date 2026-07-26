@@ -30,6 +30,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/db"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
+	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
@@ -113,8 +114,8 @@ func run() error {
 
 	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 	mainMux := http.NewServeMux()
-	registerP1Routes(mainMux, authMW, packRateLimit, p1Handlers{
-		pack: packHandler, folder: folderHandler, student: studentHandler,
+	httpapi.RegisterP1Routes(mainMux, authMW, packRateLimit, httpapi.P1Handlers{
+		Pack: packHandler, Folder: folderHandler, Student: studentHandler,
 	})
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
@@ -249,44 +250,6 @@ func run() error {
 	}
 
 	return nil
-}
-
-type p1Handlers struct {
-	pack    *pack.Handler
-	folder  *folder.Handler
-	student *student.Handler
-}
-
-func registerP1Routes(
-	mux *http.ServeMux,
-	authMW *middleware.AuthMW,
-	rateLimit func(http.Handler) http.Handler,
-	handlers p1Handlers,
-) {
-	protected := func(next middleware.AppHandler) http.Handler {
-		return rateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(next)))
-	}
-
-	mux.Handle("POST /api/v1/packs", protected(handlers.pack.CreatePack))
-	mux.Handle("GET /api/v1/packs/{id}", protected(handlers.pack.GetPack))
-	mux.Handle("GET /api/v1/packs", protected(handlers.pack.ListPacks))
-	mux.Handle("PATCH /api/v1/packs/{id}", protected(handlers.pack.UpdatePack))
-	mux.Handle("DELETE /api/v1/packs/{id}", protected(handlers.pack.DeletePack))
-	mux.Handle("POST /api/v1/packs/{id}/move", protected(handlers.pack.MovePack))
-	mux.Handle("POST /api/v1/packs/{id}/publication", protected(handlers.pack.PublishPack))
-	mux.Handle("DELETE /api/v1/packs/{id}/publication", protected(handlers.pack.UnpublishPack))
-
-	mux.Handle("POST /api/v1/folders", protected(handlers.folder.Create))
-	mux.Handle("GET /api/v1/folders", protected(handlers.folder.List))
-	mux.Handle("GET /api/v1/folders/{id}/contents", protected(handlers.folder.Contents))
-	mux.Handle("PATCH /api/v1/folders/{id}", protected(handlers.folder.Rename))
-	mux.Handle("POST /api/v1/folders/{id}/move", protected(handlers.folder.Move))
-	mux.Handle("DELETE /api/v1/folders/{id}", protected(handlers.folder.Delete))
-
-	mux.Handle("POST /api/v1/students", protected(handlers.student.Create))
-	mux.Handle("GET /api/v1/students", protected(handlers.student.List))
-	mux.Handle("PATCH /api/v1/students/{id}", protected(handlers.student.Update))
-	mux.Handle("DELETE /api/v1/students/{id}", protected(handlers.student.Delete))
 }
 
 type infra struct {
