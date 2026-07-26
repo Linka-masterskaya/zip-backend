@@ -258,6 +258,44 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	require.NoError(t, repo.Delete(context.Background(), ownerID, created.ID))
 }
 
+func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "assignment org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+	created, err := repo.Create(context.Background(), ownerID, CreateInput{
+		Title: "Assigned", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+	studentIDs := []uuid.UUID{uuid.New(), uuid.New()}
+	for index, studentID := range studentIDs {
+		_, err = pool.Exec(context.Background(), `
+			INSERT INTO students
+				(id, defectologist_id, email_encrypted, name, status)
+			VALUES ($1, $2, '\x00', $3, 'active')`,
+			studentID, ownerID, "Student "+string(rune('A'+index)))
+		require.NoError(t, err)
+	}
+
+	assigned, err := repo.Assign(context.Background(), ownerID, created.ID, studentIDs)
+	require.NoError(t, err)
+	require.Len(t, assigned, 2)
+	assert.JSONEq(t, string(config), string(assigned[0].Config))
+
+	var adaptationCount int
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM pack_adaptations WHERE pack_id = $1`, created.ID,
+	).Scan(&adaptationCount))
+	assert.Equal(t, 2, adaptationCount)
+
+	require.NoError(t, repo.Unassign(context.Background(), ownerID, created.ID, studentIDs[0]))
+	require.NoError(t, repo.Delete(context.Background(), ownerID, created.ID))
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM pack_adaptations WHERE pack_id = $1`, created.ID,
+	).Scan(&adaptationCount))
+	assert.Zero(t, adaptationCount)
+}
+
 func newPackTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool, cleanup := testutil.NewPostgres(t)

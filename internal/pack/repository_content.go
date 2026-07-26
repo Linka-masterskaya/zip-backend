@@ -88,3 +88,87 @@ func (r *Repository) ArchiveData(
 	}
 	return packData, files, nil
 }
+
+func (r *Repository) Assign(
+	ctx context.Context,
+	userID, packID uuid.UUID,
+	studentIDs []uuid.UUID,
+) ([]Adaptation, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("pack assignment begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	var orgID uuid.UUID
+	var config json.RawMessage
+	err = tx.QueryRow(ctx, lockPackConfigQuery, userID, packID).Scan(&orgID, &config)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrPackNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pack assignment lock: %w", err)
+	}
+	var count int
+	if err = tx.QueryRow(ctx, countOwnedStudentsQuery, userID, studentIDs).Scan(&count); err != nil {
+		return nil, fmt.Errorf("pack assignment validate students: %w", err)
+	}
+	if count != len(studentIDs) {
+		return nil, ErrStudentNotAllowed
+	}
+	result := make([]Adaptation, 0, len(studentIDs))
+	for _, studentID := range studentIDs {
+		item, upsertErr := scanAdaptation(
+			tx.QueryRow(ctx, upsertAdaptationQuery, packID, studentID, config, userID),
+		)
+		if upsertErr != nil {
+			return nil, fmt.Errorf("pack assignment upsert: %w", upsertErr)
+		}
+		if _, upsertErr = tx.Exec(ctx, replaceAdaptationUsagesQuery, packID, item.ID); upsertErr != nil {
+			return nil, fmt.Errorf("pack assignment media usages: %w", upsertErr)
+		}
+		result = append(result, *item)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("pack assignment commit: %w", err)
+	}
+	return result, nil
+}
+
+func (r *Repository) Unassign(
+	ctx context.Context,
+	userID, packID, studentID uuid.UUID,
+) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("pack unassign begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+	var adaptationID uuid.UUID
+	err = tx.QueryRow(ctx, lockAdaptationQuery, userID, packID, studentID).Scan(&adaptationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrPackNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("pack unassign lock: %w", err)
+	}
+	if _, err = tx.Exec(ctx, deleteAdaptationUsagesQuery, adaptationID); err != nil {
+		return fmt.Errorf("pack unassign media usages: %w", err)
+	}
+	if _, err = tx.Exec(ctx, deleteAdaptationQuery, adaptationID); err != nil {
+		return fmt.Errorf("pack unassign delete: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pack unassign commit: %w", err)
+	}
+	return nil
+}
+
+func scanAdaptation(row rowScanner) (*Adaptation, error) {
+	var result Adaptation
+	err := row.Scan(
+		&result.ID, &result.PackID, &result.StudentID, &result.Config,
+		&result.CreatedBy, &result.CreatedAt, &result.UpdatedAt,
+	)
+	return &result, err
+}

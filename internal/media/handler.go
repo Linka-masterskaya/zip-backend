@@ -19,6 +19,7 @@ const multipartOverhead = int64(64 * 1024)
 type mediaService interface {
 	Upload(context.Context, []byte) (*Response, error)
 	Get(context.Context, uuid.UUID) (*Response, error)
+	Delete(context.Context, uuid.UUID) error
 }
 
 type Handler struct {
@@ -72,6 +73,18 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || id == uuid.Nil {
+		return apperr.ErrBadRequest.WithMessage("media id must be a valid UUID")
+	}
+	if err = h.service.Delete(r.Context(), id); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) error {

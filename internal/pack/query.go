@@ -69,21 +69,17 @@ const updatePackQuery = `
 	RETURNING ` + qualifiedPackColumns
 
 const deletePackQuery = `
-	DELETE FROM packs p
-	USING users u
+	DELETE FROM packs WHERE id = $2 AND owner_id = $1`
+
+const lockPackForDeleteQuery = `
+	SELECT p.published_at IS NOT NULL
+	FROM packs p
+	JOIN users u ON u.id = $1
 	WHERE p.id = $2
-	  AND u.id = $1
 	  AND p.owner_id = u.id
 	  AND p.org_id = u.org_id
-	  AND p.published_at IS NULL
 	  AND u.deleted_at IS NULL
-	RETURNING p.id`
-
-const packPublishedQuery = `
-	SELECT EXISTS (
-		SELECT 1 FROM packs
-		WHERE id = $2 AND owner_id = $1 AND published_at IS NOT NULL
-	)`
+	FOR UPDATE OF p, u`
 
 const movePackQuery = `
 	UPDATE packs p
@@ -166,6 +162,62 @@ const archiveMediaQuery = `
 	JOIN media_files m ON m.id = mu.media_id
 	WHERE mu.source_type = 'pack' AND mu.source_id = $1
 	ORDER BY m.id`
+
+const lockPackConfigQuery = `
+	SELECT p.org_id, p.config
+	FROM packs p
+	JOIN users u ON u.id = $1
+	WHERE p.id = $2
+	  AND p.owner_id = u.id
+	  AND p.org_id = u.org_id
+	  AND u.deleted_at IS NULL
+	FOR UPDATE OF p, u`
+
+const countOwnedStudentsQuery = `
+	SELECT count(*) FROM students
+	WHERE defectologist_id = $1
+	  AND id = ANY($2::uuid[])
+	  AND deleted_at IS NULL`
+
+const upsertAdaptationQuery = `
+	INSERT INTO pack_adaptations (pack_id, student_id, config, created_by)
+	VALUES ($1, $2, $3, $4)
+	ON CONFLICT (pack_id, student_id) DO UPDATE
+	SET config = EXCLUDED.config, updated_at = now()
+	RETURNING id, pack_id, student_id, config, created_by, created_at, updated_at`
+
+const replaceAdaptationUsagesQuery = `
+	WITH cleared AS (
+		DELETE FROM media_usages
+		WHERE source_type = 'pack_adaptation' AND source_id = $2
+	)
+	INSERT INTO media_usages (media_id, source_type, source_id)
+	SELECT media_id, 'pack_adaptation', $2
+	FROM media_usages
+	WHERE source_type = 'pack' AND source_id = $1`
+
+const lockAdaptationQuery = `
+	SELECT pa.id
+	FROM pack_adaptations pa
+	JOIN packs p ON p.id = pa.pack_id
+	JOIN students s ON s.id = pa.student_id
+	WHERE pa.pack_id = $2 AND pa.student_id = $3
+	  AND p.owner_id = $1 AND s.defectologist_id = $1
+	FOR UPDATE OF pa`
+
+const deleteAdaptationUsagesQuery = `
+	DELETE FROM media_usages
+	WHERE source_type = 'pack_adaptation' AND source_id = $1`
+
+const deleteAdaptationQuery = `
+	DELETE FROM pack_adaptations WHERE id = $1`
+
+const adaptationIDsForPackQuery = `
+	SELECT id FROM pack_adaptations WHERE pack_id = $1`
+
+const deleteAdaptationUsagesForIDsQuery = `
+	DELETE FROM media_usages
+	WHERE source_type = 'pack_adaptation' AND source_id = ANY($1::uuid[])`
 
 const packColumns = `
 	id, org_id, owner_id, folder_id, library_folder_id, published_at,

@@ -25,6 +25,7 @@ const (
 
 var (
 	ErrNotFound      = errors.New("media not found")
+	ErrInUse         = errors.New("media is in use")
 	ErrQuotaExceeded = errors.New("organization storage quota exceeded")
 )
 
@@ -48,6 +49,7 @@ type repository interface {
 	UserOrg(context.Context, uuid.UUID) (uuid.UUID, error)
 	Upsert(context.Context, File) (*File, error)
 	GetAccessible(context.Context, uuid.UUID, uuid.UUID) (*File, error)
+	Delete(context.Context, uuid.UUID, uuid.UUID) (*File, error)
 }
 
 type objectStorage interface {
@@ -117,6 +119,21 @@ func (s *Service) Get(ctx context.Context, mediaID uuid.UUID) (*Response, error)
 	return s.response(ctx, file)
 }
 
+func (s *Service) Delete(ctx context.Context, mediaID uuid.UUID) error {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return err
+	}
+	file, err := s.repo.Delete(ctx, userID, mediaID)
+	if err != nil {
+		return mediaError(err)
+	}
+	if err = s.storage.RemoveObject(ctx, file.MinIOKey); err != nil {
+		return fmt.Errorf("remove media object: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) response(ctx context.Context, file *File) (*Response, error) {
 	url, err := s.storage.PresignedURL(ctx, file.MinIOKey, readURLTTL)
 	if err != nil {
@@ -142,6 +159,9 @@ func mediaError(err error) error {
 	}
 	if errors.Is(err, ErrQuotaExceeded) {
 		return apperr.ErrPayloadTooLarge.WithMessage("organization storage quota exceeded")
+	}
+	if errors.Is(err, ErrInUse) {
+		return apperr.ErrConflict.WithMessage("media is still used by a pack")
 	}
 	return err
 }

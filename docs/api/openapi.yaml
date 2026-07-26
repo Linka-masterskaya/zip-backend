@@ -169,6 +169,18 @@ components:
         created_at:  { type: string, format: date-time }
         url:         { type: string, format: uri, description: Временная presigned MinIO URL }
 
+    PackAdaptation:
+      type: object
+      required: [id, pack_id, student_id, config, created_by, created_at, updated_at]
+      properties:
+        id:         { type: string, format: uuid }
+        pack_id:    { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        config:     { type: object, additionalProperties: true }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
     Student:
       type: object
       required: [id, email, email_verified, name, status, created_at, updated_at]
@@ -557,6 +569,16 @@ paths:
       responses:
         '200': { description: Media доступно, content: { application/json: { schema: { $ref: '#/components/schemas/Media' } } } }
         '404': { description: Media не найдено или недоступно }
+    delete:
+      tags: [media]
+      summary: Удалить своё media, если оно больше не используется
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Метаданные, объект MinIO и занятая квота удалены }
+        '404': { description: Media не найдено или принадлежит другому пользователю }
+        '409': { description: Media ещё используется набором или адаптацией }
 
   /packs/{id}/config:
     put:
@@ -591,6 +613,48 @@ paths:
               schema: { type: string, format: binary }
         '404': { description: Набор не найден }
         '413': { description: Архив превышает 50 MiB }
+
+  /packs/{id}/students:
+    post:
+      tags: [packs]
+      summary: Назначить текущий снимок набора одному или нескольким ученикам
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [student_ids]
+              properties:
+                student_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Идемпотентно созданные или обновлённые адаптации
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/PackAdaptation' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { description: Один из учеников недоступен }
+        '404': { description: Набор не найден }
+
+  /packs/{id}/students/{student_id}:
+    delete:
+      tags: [packs]
+      summary: Снять назначение набора с ученика
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: student_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Назначение снято }
+        '404': { description: Назначение не найдено }
 
   /packs/import:
     post:

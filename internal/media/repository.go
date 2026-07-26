@@ -108,3 +108,43 @@ func (r *Repository) GetAccessible(ctx context.Context, userID, mediaID uuid.UUI
 	}
 	return &result, nil
 }
+
+func (r *Repository) Delete(
+	ctx context.Context,
+	userID, mediaID uuid.UUID,
+) (*File, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("media repository delete begin: %w", err)
+	}
+	defer rollbackMediaTx(ctx, tx)
+
+	var result File
+	err = tx.QueryRow(ctx, lockOwnedMediaQuery, userID, mediaID).Scan(
+		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
+		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("media repository delete lock: %w", err)
+	}
+	var inUse bool
+	if err = tx.QueryRow(ctx, mediaInUseQuery, mediaID).Scan(&inUse); err != nil {
+		return nil, fmt.Errorf("media repository delete usage: %w", err)
+	}
+	if inUse {
+		return nil, ErrInUse
+	}
+	if _, err = tx.Exec(ctx, deleteMediaQuery, mediaID); err != nil {
+		return nil, fmt.Errorf("media repository delete row: %w", err)
+	}
+	if _, err = tx.Exec(ctx, releaseMediaQuotaQuery, result.OrgID, result.SizeBytes); err != nil {
+		return nil, fmt.Errorf("media repository release quota: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("media repository delete commit: %w", err)
+	}
+	return &result, nil
+}

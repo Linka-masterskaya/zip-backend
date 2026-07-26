@@ -360,6 +360,19 @@ func (r *Repository) Contents(
 		packFolderColumn = "p.library_folder_id"
 		packScope = "AND p.published_at IS NOT NULL"
 	}
+	studentAssignments := ""
+	if section == SectionStudents {
+		studentAssignments = `
+			UNION ALL
+			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
+			       false, p.updated_at
+			FROM folders student_folder
+			JOIN pack_adaptations pa ON pa.student_id = student_folder.student_id
+			JOIN packs p ON p.id = pa.pack_id
+			WHERE student_folder.id = $1
+			  AND student_folder.owner_id = $2
+			  AND p.folder_id <> $1`
+	}
 	query := `
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
@@ -372,7 +385,7 @@ func (r *Repository) Contents(
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       p.published_at IS NOT NULL, p.updated_at
 			FROM packs p
-			WHERE ` + packFolderColumn + ` = $1 ` + packScope + `
+			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at
 		FROM items

@@ -268,6 +268,186 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	}
 }
 
+func TestE2E_RealPackLifecycle(t *testing.T) {
+	pool := e2eDatabase(t)
+	ownerID := e2eUser(t, pool, "lifecycle-owner")
+	server := e2eServer(t, pool)
+	token := e2eToken(t, ownerID, "defectologist")
+
+	myFolder := e2eCreateFolder(t, server, token, map[string]any{
+		"section": "my", "kind": "folder", "name": "Рабочие материалы",
+	})
+	libraryFolder := e2eCreateFolder(t, server, token, map[string]any{
+		"section": "library", "kind": "folder", "name": "Общий каталог",
+	})
+	createdPack := e2eJSON[pack.Pack](
+		t,
+		e2eRequest(t, server, token, http.MethodPost, "/api/v1/packs", map[string]any{
+			"title": "Реальный набор", "folder_id": myFolder.ID,
+		}),
+		http.StatusCreated,
+	)
+
+	first := e2eUploadMedia(t, server, token, testPNG(1))
+	second := e2eUploadMedia(t, server, token, testPNG(2))
+	third := e2eUploadMedia(t, server, token, testPNG(3))
+	e2eJSON[pack.Pack](
+		t,
+		e2eRequest(t, server, token, http.MethodPut,
+			"/api/v1/packs/"+createdPack.ID.String()+"/config",
+			packMediaConfig(first.ID, second.ID, third.ID)),
+		http.StatusOK,
+	)
+
+	response := e2eRequest(
+		t, server, token, http.MethodDelete, "/api/v1/media/"+second.ID.String(), nil,
+	)
+	assert.Equal(t, http.StatusConflict, response.StatusCode, "used media must be protected")
+	e2eClose(t, response)
+
+	e2eJSON[pack.Pack](
+		t,
+		e2eRequest(t, server, token, http.MethodPut,
+			"/api/v1/packs/"+createdPack.ID.String()+"/config",
+			packMediaConfig(first.ID)),
+		http.StatusOK,
+	)
+	for _, mediaID := range []uuid.UUID{second.ID, third.ID} {
+		response = e2eRequest(
+			t, server, token, http.MethodDelete, "/api/v1/media/"+mediaID.String(), nil,
+		)
+		assert.Equal(t, http.StatusNoContent, response.StatusCode)
+		e2eClose(t, response)
+	}
+
+	replacement := e2eUploadMedia(t, server, token, testPNG(4))
+	e2eJSON[pack.Pack](
+		t,
+		e2eRequest(t, server, token, http.MethodPut,
+			"/api/v1/packs/"+createdPack.ID.String()+"/config",
+			packMediaConfig(first.ID, replacement.ID)),
+		http.StatusOK,
+	)
+	exported := e2eRequest(
+		t, server, token, http.MethodGet,
+		"/api/v1/packs/"+createdPack.ID.String()+"/export", nil,
+	)
+	exportBytes := e2eBody(t, exported, http.StatusOK)
+	assert.NotEmpty(t, exportBytes)
+	importedPack := e2eImportPack(t, server, token, myFolder.ID, exportBytes)
+	assert.Contains(t, string(importedPack.Config), first.ID.String())
+	assert.Contains(t, string(importedPack.Config), replacement.ID.String())
+	response = e2eRequest(
+		t, server, token, http.MethodDelete, "/api/v1/packs/"+createdPack.ID.String(), nil,
+	)
+	assert.Equal(t, http.StatusNoContent, response.StatusCode)
+	e2eClose(t, response)
+	createdPack = importedPack
+
+	firstStudent := e2eCreateStudent(t, server, token, "one@example.com", "Первый ребёнок")
+	secondStudent := e2eCreateStudent(t, server, token, "two@example.com", "Второй ребёнок")
+	firstShelf := e2eCreateFolder(t, server, token, map[string]any{
+		"section": "students", "kind": "student",
+		"student_id": firstStudent.ID, "name": firstStudent.Name,
+	})
+	secondShelf := e2eCreateFolder(t, server, token, map[string]any{
+		"section": "students", "kind": "student",
+		"student_id": secondStudent.ID, "name": secondStudent.Name,
+	})
+
+	assignments := e2eJSON[[]pack.Adaptation](
+		t,
+		e2eRequest(t, server, token, http.MethodPost,
+			"/api/v1/packs/"+createdPack.ID.String()+"/students",
+			map[string]any{"student_ids": []uuid.UUID{firstStudent.ID, secondStudent.ID}}),
+		http.StatusOK,
+	)
+	require.Len(t, assignments, 2)
+	for _, shelfID := range []uuid.UUID{firstShelf.ID, secondShelf.ID} {
+		contents := e2eFolderContents(t, server, token, shelfID)
+		require.Len(t, contents.Items, 1)
+		assert.Equal(t, createdPack.ID, contents.Items[0].ID)
+		assert.Equal(t, "Импортированный набор", contents.Items[0].Name)
+	}
+
+	e2eJSON[pack.Pack](
+		t,
+		e2eRequest(t, server, token, http.MethodPost,
+			"/api/v1/packs/"+createdPack.ID.String()+"/publication",
+			map[string]any{"library_folder_id": libraryFolder.ID}),
+		http.StatusOK,
+	)
+	libraryContents := e2eFolderContents(t, server, token, libraryFolder.ID)
+	require.Len(t, libraryContents.Items, 1)
+	assert.Equal(t, createdPack.ID, libraryContents.Items[0].ID)
+	assert.True(t, libraryContents.Items[0].Published)
+
+	response = e2eRequest(
+		t, server, token, http.MethodDelete, "/api/v1/packs/"+createdPack.ID.String(), nil,
+	)
+	assert.Equal(t, http.StatusConflict, response.StatusCode)
+	e2eClose(t, response)
+	response = e2eRequest(
+		t, server, token, http.MethodDelete,
+		"/api/v1/packs/"+createdPack.ID.String()+"/publication", nil,
+	)
+	assert.Equal(t, http.StatusNoContent, response.StatusCode)
+	e2eClose(t, response)
+	response = e2eRequest(
+		t, server, token, http.MethodDelete, "/api/v1/packs/"+createdPack.ID.String(), nil,
+	)
+	assert.Equal(t, http.StatusNoContent, response.StatusCode)
+	e2eClose(t, response)
+
+	for _, shelfID := range []uuid.UUID{firstShelf.ID, secondShelf.ID} {
+		assert.Empty(t, e2eFolderContents(t, server, token, shelfID).Items)
+	}
+	assert.Empty(t, e2eFolderContents(t, server, token, libraryFolder.ID).Items)
+	for _, mediaID := range []uuid.UUID{first.ID, replacement.ID} {
+		response = e2eRequest(
+			t, server, token, http.MethodDelete, "/api/v1/media/"+mediaID.String(), nil,
+		)
+		assert.Equal(t, http.StatusNoContent, response.StatusCode)
+		e2eClose(t, response)
+		response = e2eRequest(
+			t, server, token, http.MethodGet, "/api/v1/media/"+mediaID.String(), nil,
+		)
+		assert.Equal(t, http.StatusNotFound, response.StatusCode)
+		e2eClose(t, response)
+	}
+	var storageUsed int64
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT o.storage_used_bytes
+		FROM organizations o JOIN users u ON u.org_id = o.id
+		WHERE u.id = $1`, ownerID).Scan(&storageUsed))
+	assert.Zero(t, storageUsed)
+	var packsCount, adaptationsCount, usagesCount, mediaCount int
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT
+			(SELECT count(*) FROM packs),
+			(SELECT count(*) FROM pack_adaptations),
+			(SELECT count(*) FROM media_usages),
+			(SELECT count(*) FROM media_files)`,
+	).Scan(&packsCount, &adaptationsCount, &usagesCount, &mediaCount))
+	assert.Zero(t, packsCount)
+	assert.Zero(t, adaptationsCount)
+	assert.Zero(t, usagesCount)
+	assert.Zero(t, mediaCount)
+
+	for _, path := range []string{
+		"/api/v1/folders/" + firstShelf.ID.String(),
+		"/api/v1/folders/" + secondShelf.ID.String(),
+		"/api/v1/students/" + firstStudent.ID.String(),
+		"/api/v1/students/" + secondStudent.ID.String(),
+		"/api/v1/folders/" + myFolder.ID.String(),
+		"/api/v1/folders/" + libraryFolder.ID.String(),
+	} {
+		response = e2eRequest(t, server, token, http.MethodDelete, path, nil)
+		assert.Equal(t, http.StatusNoContent, response.StatusCode, path)
+		e2eClose(t, response)
+	}
+}
+
 func e2eDatabase(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool, cleanup := testutil.NewPostgres(t)
@@ -384,16 +564,28 @@ func tinyPNG() []byte {
 }
 
 func packImageConfig(mediaID uuid.UUID) map[string]any {
+	return packMediaConfig(mediaID)
+}
+
+func packMediaConfig(mediaIDs ...uuid.UUID) map[string]any {
+	elements := make([]any, 0, len(mediaIDs))
+	for index, mediaID := range mediaIDs {
+		elements = append(elements, map[string]any{
+			"id": fmt.Sprintf("image-%d", index+1), "kind": "image", "media_id": mediaID,
+		})
+	}
 	return map[string]any{
 		"metadata": map[string]any{"version": "2.0"},
 		"settings": map[string]any{"columns": 1, "rows": 1},
 		"blocks": []any{map[string]any{
-			"id": "block-1", "type": "grid",
-			"elements": []any{map[string]any{
-				"id": "image-1", "kind": "image", "media_id": mediaID,
-			}},
+			"id": "block-1", "type": "grid", "elements": elements,
 		}},
 	}
+}
+
+func testPNG(marker byte) []byte {
+	data := append([]byte(nil), tinyPNG()...)
+	return append(data, marker)
 }
 
 func e2eBody(t *testing.T, response *http.Response, expectedStatus int) []byte {
@@ -458,6 +650,36 @@ func e2eCreateFolder(
 		t,
 		e2eRequest(t, server, token, http.MethodPost, "/api/v1/folders", body),
 		http.StatusCreated,
+	)
+}
+
+func e2eCreateStudent(
+	t *testing.T,
+	server *httptest.Server,
+	token, email, name string,
+) student.Student {
+	t.Helper()
+	return e2eJSON[student.Student](
+		t,
+		e2eRequest(t, server, token, http.MethodPost, "/api/v1/students", map[string]any{
+			"email": email, "name": name,
+		}),
+		http.StatusCreated,
+	)
+}
+
+func e2eFolderContents(
+	t *testing.T,
+	server *httptest.Server,
+	token string,
+	folderID uuid.UUID,
+) folder.ContentsPage {
+	t.Helper()
+	return e2eJSON[folder.ContentsPage](
+		t,
+		e2eRequest(t, server, token, http.MethodGet,
+			"/api/v1/folders/"+folderID.String()+"/contents", nil),
+		http.StatusOK,
 	)
 }
 

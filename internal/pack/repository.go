@@ -15,6 +15,7 @@ var (
 	ErrPackNotFound        = errors.New("pack not found")
 	ErrFolderNotAllowed    = errors.New("folder is not accessible")
 	ErrMediaNotAllowed     = errors.New("media is not accessible")
+	ErrStudentNotAllowed   = errors.New("student is not accessible")
 	ErrInvalidPackMetadata = errors.New("invalid pack metadata")
 	ErrPackPublished       = errors.New("pack is published")
 	ErrAlreadyPublished    = errors.New("pack is published in another folder")
@@ -150,24 +151,45 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 		return fmt.Errorf("pack repository delete begin: %w", err)
 	}
 	defer rollbackPackTx(ctx, tx)
-	var deletedID uuid.UUID
-	err = tx.QueryRow(ctx, deletePackQuery, userID, packID).Scan(&deletedID)
+	var published bool
+	err = tx.QueryRow(ctx, lockPackForDeleteQuery, userID, packID).Scan(&published)
 	if errors.Is(err, pgx.ErrNoRows) {
-		var published bool
-		err = tx.QueryRow(ctx, packPublishedQuery, userID, packID).Scan(&published)
-		if err != nil {
-			return fmt.Errorf("pack repository delete state: %w", err)
-		}
-		if published {
-			return ErrPackPublished
-		}
 		return ErrPackNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("pack repository delete: %w", err)
+		return fmt.Errorf("pack repository delete lock: %w", err)
 	}
-	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, deletedID); err != nil {
+	if published {
+		return ErrPackPublished
+	}
+	adaptationIDs := make([]uuid.UUID, 0)
+	rows, queryErr := tx.Query(ctx, adaptationIDsForPackQuery, packID)
+	if queryErr != nil {
+		return fmt.Errorf("pack repository delete adaptations: %w", queryErr)
+	}
+	for rows.Next() {
+		var adaptationID uuid.UUID
+		if queryErr = rows.Scan(&adaptationID); queryErr != nil {
+			rows.Close()
+			return fmt.Errorf("pack repository delete adaptation scan: %w", queryErr)
+		}
+		adaptationIDs = append(adaptationIDs, adaptationID)
+	}
+	queryErr = rows.Err()
+	rows.Close()
+	if queryErr != nil {
+		return fmt.Errorf("pack repository delete adaptation rows: %w", queryErr)
+	}
+	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, packID); err != nil {
 		return fmt.Errorf("pack repository delete media usages: %w", err)
+	}
+	if len(adaptationIDs) > 0 {
+		if _, err = tx.Exec(ctx, deleteAdaptationUsagesForIDsQuery, adaptationIDs); err != nil {
+			return fmt.Errorf("pack repository delete adaptation usages: %w", err)
+		}
+	}
+	if _, err = tx.Exec(ctx, deletePackQuery, userID, packID); err != nil {
+		return fmt.Errorf("pack repository delete: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pack repository delete commit: %w", err)

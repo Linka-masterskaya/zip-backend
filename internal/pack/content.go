@@ -18,6 +18,8 @@ import (
 type contentRepository interface {
 	SaveConfig(context.Context, uuid.UUID, uuid.UUID, json.RawMessage, []uuid.UUID) (*Pack, error)
 	ArchiveData(context.Context, uuid.UUID, uuid.UUID) (*Pack, []*media.File, error)
+	Assign(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) ([]Adaptation, error)
+	Unassign(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
 }
 
 type mediaUploader interface {
@@ -55,6 +57,34 @@ func (s *ContentService) SaveConfig(
 	}
 	result, err := s.repo.SaveConfig(ctx, userID, packID, config, mediaIDs)
 	return result, contentError(err)
+}
+
+func (s *ContentService) Assign(
+	ctx context.Context,
+	packID uuid.UUID,
+	studentIDs []uuid.UUID,
+) ([]Adaptation, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	studentIDs, err = uniqueIDs(studentIDs)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.repo.Assign(ctx, userID, packID, studentIDs)
+	return result, contentError(err)
+}
+
+func (s *ContentService) Unassign(
+	ctx context.Context,
+	packID, studentID uuid.UUID,
+) error {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return err
+	}
+	return contentError(s.repo.Unassign(ctx, userID, packID, studentID))
 }
 
 func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) ([]byte, string, error) {
@@ -188,6 +218,25 @@ func safeArchiveName(title string) string {
 	return title + ".linka"
 }
 
+func uniqueIDs(ids []uuid.UUID) ([]uuid.UUID, error) {
+	if len(ids) == 0 || len(ids) > 100 {
+		return nil, apperr.ErrBadRequest.WithMessage("student_ids must contain between 1 and 100 items")
+	}
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	result := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			return nil, apperr.ErrBadRequest.WithMessage("student_ids must contain valid UUIDs")
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result, nil
+}
+
 func contentError(err error) error {
 	switch {
 	case err == nil:
@@ -198,6 +247,8 @@ func contentError(err error) error {
 		return apperr.ErrForbidden.WithMessage("folder is not accessible")
 	case errors.Is(err, ErrMediaNotAllowed):
 		return apperr.ErrForbidden.WithMessage("media is not accessible")
+	case errors.Is(err, ErrStudentNotAllowed):
+		return apperr.ErrForbidden.WithMessage("student is not accessible")
 	case errors.Is(err, ErrInvalidArchive):
 		return apperr.ErrBadRequest.WithMessage(err.Error())
 	case errors.Is(err, ErrArchiveTooLarge):

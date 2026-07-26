@@ -28,6 +28,17 @@ type Pack struct {
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
+// Adaptation is a snapshot of a pack assigned to one student.
+type Adaptation struct {
+	ID        uuid.UUID       `json:"id"`
+	PackID    uuid.UUID       `json:"pack_id"`
+	StudentID uuid.UUID       `json:"student_id"`
+	Config    json.RawMessage `json:"config"`
+	CreatedBy uuid.UUID       `json:"created_by"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
 // CreateInput contains fields accepted when a pack is created.
 type CreateInput struct {
 	Title    string
