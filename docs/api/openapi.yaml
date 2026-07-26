@@ -181,6 +181,35 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    PackVersion:
+      type: object
+      required: [id, pack_id, version, config, created_by, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        pack_id:    { type: string, format: uuid }
+        version:    { type: integer, minimum: 1 }
+        config:     { type: object, additionalProperties: true }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+
+    PackVersionSummary:
+      type: object
+      required: [id, pack_id, version, created_by, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        pack_id:    { type: string, format: uuid }
+        version:    { type: integer, minimum: 1 }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+
+    PackVersionRestore:
+      type: object
+      required: [pack, restored_from_version, backup_version]
+      properties:
+        pack:                  { $ref: '#/components/schemas/Pack' }
+        restored_from_version: { type: integer, minimum: 1 }
+        backup_version:        { $ref: '#/components/schemas/PackVersion' }
+
     Student:
       type: object
       required: [id, email, email_verified, name, status, created_at, updated_at]
@@ -655,6 +684,74 @@ paths:
       responses:
         '204': { description: Назначение снято }
         '404': { description: Назначение не найдено }
+
+  /packs/{id}/versions:
+    post:
+      tags: [packs]
+      summary: Создать неизменяемый снимок текущей конфигурации набора
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201':
+          description: Версия создана; используемые ею media защищены от удаления
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackVersion' }
+        '404': { description: Набор не найден }
+    get:
+      tags: [packs]
+      summary: Получить историю версий набора, начиная с новых
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: История версий
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PackVersionSummary' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: Набор не найден }
+
+  /packs/{id}/versions/{version}:
+    get:
+      tags: [packs]
+      summary: Получить полный снимок конкретной версии
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Полный снимок
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackVersion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: Набор или версия не найдены }
+
+  /packs/{id}/versions/{version}/restore:
+    post:
+      tags: [packs]
+      summary: Атомарно восстановить конфигурацию из версии
+      description: Перед восстановлением текущая конфигурация автоматически сохраняется новой версией.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Версия восстановлена, предыдущая текущая конфигурация сохранена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackVersionRestore' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: Набор или версия не найдены }
 
   /packs/import:
     post:

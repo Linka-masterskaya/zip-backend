@@ -219,6 +219,58 @@ const deleteAdaptationUsagesForIDsQuery = `
 	DELETE FROM media_usages
 	WHERE source_type = 'pack_adaptation' AND source_id = ANY($1::uuid[])`
 
+const createVersionQuery = `
+	INSERT INTO pack_versions (pack_id, version, config, created_by)
+	SELECT $1, COALESCE(MAX(version), 0) + 1, $2, $3
+	FROM pack_versions
+	WHERE pack_id = $1
+	RETURNING id, pack_id, version, config, created_by, created_at`
+
+const insertVersionMediaUsagesQuery = `
+	INSERT INTO media_usages (media_id, source_type, source_id)
+	SELECT media_id, 'pack_version', $2
+	FROM media_usages
+	WHERE source_type = 'pack' AND source_id = $1`
+
+const listVersionsQuery = `
+	SELECT pv.id, pv.pack_id, pv.version, pv.created_by, pv.created_at
+	FROM pack_versions pv
+	JOIN packs p ON p.id = pv.pack_id
+	JOIN users u ON u.id = $1
+	WHERE pv.pack_id = $2
+	  AND p.owner_id = u.id
+	  AND p.org_id = u.org_id
+	  AND u.deleted_at IS NULL
+	ORDER BY pv.version DESC
+	LIMIT $3 OFFSET $4`
+
+const getVersionQuery = `
+	SELECT pv.id, pv.pack_id, pv.version, pv.config, pv.created_by, pv.created_at
+	FROM pack_versions pv
+	WHERE pv.pack_id = $1 AND pv.version = $2`
+
+const getAccessibleVersionQuery = `
+	SELECT pv.id, pv.pack_id, pv.version, pv.config, pv.created_by, pv.created_at
+	FROM pack_versions pv
+	JOIN packs p ON p.id = pv.pack_id
+	JOIN users u ON u.id = $1
+	WHERE pv.pack_id = $2
+	  AND pv.version = $3
+	  AND p.owner_id = u.id
+	  AND p.org_id = u.org_id
+	  AND u.deleted_at IS NULL`
+
+const replacePackUsagesFromVersionQuery = `
+	INSERT INTO media_usages (media_id, source_type, source_id)
+	SELECT media_id, 'pack', $1
+	FROM media_usages
+	WHERE source_type = 'pack_version' AND source_id = $2`
+
+const deleteVersionMediaUsagesForPackQuery = `
+	DELETE FROM media_usages
+	WHERE source_type = 'pack_version'
+	  AND source_id IN (SELECT id FROM pack_versions WHERE pack_id = $1)`
+
 const packColumns = `
 	id, org_id, owner_id, folder_id, library_folder_id, published_at,
 	title, status, age_min, age_max,
