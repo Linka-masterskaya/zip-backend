@@ -10,20 +10,22 @@ import (
 
 // Pack describes a persisted Linka pack.
 type Pack struct {
-	ID         uuid.UUID       `json:"id"`
-	OrgID      uuid.UUID       `json:"org_id"`
-	OwnerID    uuid.UUID       `json:"owner_id"`
-	FolderID   uuid.UUID       `json:"folder_id"`
-	Title      string          `json:"title"`
-	Status     string          `json:"status"`
-	AgeMin     *int            `json:"age_min,omitempty"`
-	AgeMax     *int            `json:"age_max,omitempty"`
-	Difficulty *string         `json:"difficulty,omitempty"`
-	Goals      []string        `json:"goals"`
-	Notes      string          `json:"notes"`
-	Config     json.RawMessage `json:"config"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	ID              uuid.UUID       `json:"id"`
+	OrgID           uuid.UUID       `json:"org_id"`
+	OwnerID         uuid.UUID       `json:"owner_id"`
+	FolderID        uuid.UUID       `json:"folder_id"`
+	LibraryFolderID *uuid.UUID      `json:"library_folder_id,omitempty"`
+	PublishedAt     *time.Time      `json:"published_at,omitempty"`
+	Title           string          `json:"title"`
+	Status          string          `json:"status"`
+	AgeMin          *int            `json:"age_min,omitempty"`
+	AgeMax          *int            `json:"age_max,omitempty"`
+	Difficulty      *string         `json:"difficulty,omitempty"`
+	Goals           []string        `json:"goals"`
+	Notes           string          `json:"notes"`
+	Config          json.RawMessage `json:"config"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 // CreateInput contains fields accepted when a pack is created.

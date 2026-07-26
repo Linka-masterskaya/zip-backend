@@ -15,6 +15,8 @@ var (
 	ErrPackNotFound        = errors.New("pack not found")
 	ErrFolderNotAllowed    = errors.New("folder is not accessible")
 	ErrInvalidPackMetadata = errors.New("invalid pack metadata")
+	ErrPackPublished       = errors.New("pack is published")
+	ErrAlreadyPublished    = errors.New("pack is published in another folder")
 )
 
 type dbtx interface {
@@ -39,7 +41,10 @@ func (r *Repository) Create(ctx context.Context, userID uuid.UUID, input CreateI
 		INSERT INTO packs (org_id, owner_id, folder_id, title, config)
 		SELECT u.org_id, u.id, f.id, $3, $4
 		FROM users u
-		JOIN folders f ON f.id = $2 AND f.owner_id = u.id
+		JOIN folders f ON f.id = $2
+			AND f.owner_id = u.id
+			AND f.org_id = u.org_id
+			AND f.section IN ('my', 'students')
 		WHERE u.id = $1
 		  AND u.org_id IS NOT NULL
 		  AND u.deleted_at IS NULL
@@ -62,8 +67,10 @@ func (r *Repository) Get(ctx context.Context, userID, packID uuid.UUID) (*Pack, 
 		FROM packs p
 		JOIN users u ON u.id = $1
 		WHERE p.id = $2
-		  AND p.owner_id = u.id
-		  AND p.org_id = u.org_id
+		  AND (
+			(p.owner_id = u.id AND p.org_id = u.org_id)
+			OR p.published_at IS NOT NULL
+		  )
 		  AND u.deleted_at IS NULL`
 
 	result, err := scanPack(r.db.QueryRow(ctx, query, userID, packID))
@@ -146,7 +153,10 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 		    notes = CASE WHEN $12::boolean THEN COALESCE($13::text, '') ELSE p.notes END,
 		    updated_at = now()
 		FROM users u
-		LEFT JOIN folders f ON f.id = $4::uuid AND f.owner_id = u.id
+		LEFT JOIN folders f ON f.id = $4::uuid
+			AND f.owner_id = u.id
+			AND f.org_id = u.org_id
+			AND f.section IN ('my', 'students')
 		WHERE p.id = $2
 		  AND u.id = $1
 		  AND ($4::uuid IS NULL OR f.id IS NOT NULL)
@@ -183,6 +193,7 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 		  AND u.id = $1
 		  AND p.owner_id = u.id
 		  AND p.org_id = u.org_id
+		  AND p.published_at IS NULL
 		  AND u.deleted_at IS NULL`
 
 	tag, err := r.db.Exec(ctx, query, userID, packID)
@@ -190,6 +201,18 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 		return fmt.Errorf("pack repository delete: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		var published bool
+		err = r.db.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM packs
+				WHERE id = $2 AND owner_id = $1 AND published_at IS NOT NULL
+			)`, userID, packID).Scan(&published)
+		if err != nil {
+			return fmt.Errorf("pack repository delete state: %w", err)
+		}
+		if published {
+			return ErrPackPublished
+		}
 		return ErrPackNotFound
 	}
 	return nil
@@ -213,6 +236,8 @@ func (r *Repository) Move(ctx context.Context, userID, packID, folderID uuid.UUI
 		  AND u.id = $1
 		  AND f.id = $3
 		  AND f.owner_id = u.id
+		  AND f.org_id = u.org_id
+		  AND f.section IN ('my', 'students')
 		  AND p.owner_id = u.id
 		  AND p.org_id = u.org_id
 		  AND u.deleted_at IS NULL
@@ -226,6 +251,70 @@ func (r *Repository) Move(ctx context.Context, userID, packID, folderID uuid.UUI
 		return nil, fmt.Errorf("pack repository move: %w", err)
 	}
 	return result, nil
+}
+
+func (r *Repository) Publish(
+	ctx context.Context,
+	userID, packID, folderID uuid.UUID,
+	admin bool,
+) (*Pack, error) {
+	query := `
+		UPDATE packs p
+		SET library_folder_id = f.id,
+		    published_at = COALESCE(p.published_at, now()),
+		    updated_at = now()
+		FROM users u, folders f
+		WHERE p.id = $2
+		  AND u.id = $1
+		  AND u.deleted_at IS NULL
+		  AND f.id = $3
+		  AND f.section = 'library'
+		  AND (f.owner_id = u.id OR $4)
+		  AND (p.owner_id = u.id OR $4)
+		  AND (p.library_folder_id IS NULL OR p.library_folder_id = f.id)
+		RETURNING ` + qualifiedPackColumns
+	result, err := scanPack(r.db.QueryRow(ctx, query, userID, packID, folderID, admin))
+	if err == nil {
+		return result, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("pack repository publish: %w", err)
+	}
+
+	var otherFolder bool
+	if stateErr := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM packs
+			WHERE id = $2
+			  AND (owner_id = $1 OR $3)
+			  AND library_folder_id IS NOT NULL
+			  AND library_folder_id <> $4
+		)`, userID, packID, admin, folderID).Scan(&otherFolder); stateErr != nil {
+		return nil, fmt.Errorf("pack repository publish state: %w", stateErr)
+	}
+	if otherFolder {
+		return nil, ErrAlreadyPublished
+	}
+	return nil, ErrFolderNotAllowed
+}
+
+func (r *Repository) Unpublish(
+	ctx context.Context,
+	userID, packID uuid.UUID,
+	admin bool,
+) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE packs
+		SET library_folder_id = NULL, published_at = NULL, updated_at = now()
+		WHERE id = $2 AND (owner_id = $1 OR $3)`,
+		userID, packID, admin)
+	if err != nil {
+		return fmt.Errorf("pack repository unpublish: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrPackNotFound
+	}
+	return nil
 }
 
 func repositoryListBounds(input ListInput) (int, int) {
@@ -251,6 +340,8 @@ func (r *Repository) folderAllowed(ctx context.Context, userID, folderID uuid.UU
 			JOIN folders f ON f.owner_id = u.id
 			WHERE u.id = $1
 			  AND f.id = $2
+			  AND f.org_id = u.org_id
+			  AND f.section IN ('my', 'students')
 			  AND u.org_id IS NOT NULL
 			  AND u.deleted_at IS NULL
 		)`
@@ -304,6 +395,7 @@ func scanPack(row rowScanner) (*Pack, error) {
 	var result Pack
 	err := row.Scan(
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
+		&result.LibraryFolderID, &result.PublishedAt,
 		&result.Title, &result.Status, &result.AgeMin, &result.AgeMax,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.CreatedAt, &result.UpdatedAt,
@@ -315,10 +407,12 @@ func scanPack(row rowScanner) (*Pack, error) {
 }
 
 const packColumns = `
-	id, org_id, owner_id, folder_id, title, status, age_min, age_max,
+	id, org_id, owner_id, folder_id, library_folder_id, published_at,
+	title, status, age_min, age_max,
 	difficulty, goals, notes, config, created_at, updated_at`
 
 const qualifiedPackColumns = `
-	p.id, p.org_id, p.owner_id, p.folder_id, p.title, p.status,
+	p.id, p.org_id, p.owner_id, p.folder_id, p.library_folder_id,
+	p.published_at, p.title, p.status,
 	p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
 	p.created_at, p.updated_at`

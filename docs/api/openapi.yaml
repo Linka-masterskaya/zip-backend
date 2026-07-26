@@ -11,6 +11,9 @@ servers:
 tags:
   - name: auth
   - name: profile
+  - name: folders
+  - name: packs
+  - name: students
 
 components:
   securitySchemes:
@@ -115,6 +118,68 @@ components:
     AvatarResponse:
       type: object
       properties: { avatar_url: { type: string } }
+
+    Folder:
+      type: object
+      required: [id, org_id, owner_id, section, kind, name, depth, created_at, updated_at]
+      properties:
+        id:         { type: string, format: uuid }
+        org_id:     { type: string, format: uuid }
+        owner_id:   { type: string, format: uuid }
+        parent_id:  { type: string, format: uuid, nullable: true }
+        section:    { type: string, enum: [library, my, students] }
+        kind:       { type: string, enum: [folder, student] }
+        student_id: { type: string, format: uuid, nullable: true }
+        name:       { type: string }
+        depth:      { type: integer, minimum: 0, maximum: 4 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Pack:
+      type: object
+      required: [id, org_id, owner_id, folder_id, title, status, goals, notes, config, created_at, updated_at]
+      properties:
+        id:                { type: string, format: uuid }
+        org_id:            { type: string, format: uuid }
+        owner_id:          { type: string, format: uuid }
+        folder_id:         { type: string, format: uuid }
+        library_folder_id: { type: string, format: uuid, nullable: true }
+        published_at:      { type: string, format: date-time, nullable: true }
+        title:             { type: string }
+        status:            { type: string }
+        age_min:           { type: integer, minimum: 3, maximum: 18, nullable: true }
+        age_max:           { type: integer, minimum: 3, maximum: 18, nullable: true }
+        difficulty:        { type: string, enum: [easy, medium, hard], nullable: true }
+        goals:             { type: array, items: { type: string } }
+        notes:             { type: string }
+        config:            { type: object, additionalProperties: true }
+        created_at:        { type: string, format: date-time }
+        updated_at:        { type: string, format: date-time }
+
+    Student:
+      type: object
+      required: [id, email, email_verified, name, status, created_at, updated_at]
+      properties:
+        id:             { type: string, format: uuid }
+        email:          { type: string, format: email }
+        email_verified: { type: boolean }
+        name:           { type: string }
+        age:            { type: integer, minimum: 0, maximum: 100, nullable: true }
+        status:         { type: string, enum: [active, paused, archived, one_time] }
+        created_at:     { type: string, format: date-time }
+        updated_at:     { type: string, format: date-time }
+
+    ContentItem:
+      type: object
+      required: [type, id, name, updated_at]
+      properties:
+        type:       { type: string, enum: [folder, pack] }
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        kind:       { type: string, enum: [folder, student], nullable: true }
+        student_id: { type: string, format: uuid, nullable: true }
+        published:  { type: boolean }
+        updated_at: { type: string, format: date-time }
 
   responses:
     BadRequest:   { description: Невалидный ввод, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -334,3 +399,211 @@ paths:
       responses:
         '204': { description: Email обновлён; verify отправлен на новый адрес }
         '400': { $ref: '#/components/responses/BadRequest' }
+
+  /folders:
+    post:
+      tags: [folders]
+      summary: Создать папку или папку ученика
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [section, kind, name]
+              properties:
+                parent_id:  { type: string, format: uuid, nullable: true }
+                section:    { type: string, enum: [library, my, students] }
+                kind:       { type: string, enum: [folder, student] }
+                student_id: { type: string, format: uuid, nullable: true }
+                name:       { type: string }
+      responses:
+        '201': { description: Создана, content: { application/json: { schema: { $ref: '#/components/schemas/Folder' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [folders]
+      summary: Список папок раздела или родителя
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: section, in: query, required: true, schema: { type: string, enum: [library, my, students] } }
+        - { name: parent_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Список
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Folder' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: Родитель не найден }
+
+  /folders/{id}:
+    patch:
+      tags: [folders]
+      summary: Переименовать папку
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string } }
+      responses:
+        '200': { description: Обновлена, content: { application/json: { schema: { $ref: '#/components/schemas/Folder' } } } }
+        '404': { description: Не найдена }
+    delete:
+      tags: [folders]
+      summary: Удалить пустую папку
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Удалена }
+        '404': { description: Не найдена }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /folders/{id}/move:
+    post:
+      tags: [folders]
+      summary: Переместить папку; null parent_id означает корень текущего section
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parent_id]
+              properties: { parent_id: { type: string, format: uuid, nullable: true } }
+      responses:
+        '200': { description: Перемещена, content: { application/json: { schema: { $ref: '#/components/schemas/Folder' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /folders/{id}/contents:
+    get:
+      tags: [folders]
+      summary: Смешанный список дочерних папок и наборов
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, updated_at], default: name } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Страница содержимого
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, limit, offset]
+                properties:
+                  items:  { type: array, items: { $ref: '#/components/schemas/ContentItem' } }
+                  limit:  { type: integer }
+                  offset: { type: integer }
+        '404': { description: Папка не найдена }
+
+  /packs/{id}/publication:
+    post:
+      tags: [packs]
+      summary: Опубликовать набор ссылкой в папку библиотеки
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [library_folder_id]
+              properties: { library_folder_id: { type: string, format: uuid } }
+      responses:
+        '200': { description: Опубликован, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [packs]
+      summary: Снять публикацию, не удаляя исходный набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Публикация снята или уже отсутствовала }
+        '404': { description: Набор не найден }
+
+  /students:
+    post:
+      tags: [students]
+      summary: Создать ученика
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, name]
+              properties:
+                email:  { type: string, format: email }
+                name:   { type: string }
+                age:    { type: integer, minimum: 0, maximum: 100, nullable: true }
+                status: { type: string, enum: [active, paused, archived, one_time], default: active }
+      responses:
+        '201': { description: Создан, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    get:
+      tags: [students]
+      summary: Ученики текущего дефектолога
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Список
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Student' } }
+
+  /students/{id}:
+    patch:
+      tags: [students]
+      summary: Обновить ученика
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:  { type: string, format: email }
+                name:   { type: string }
+                age:    { type: integer, minimum: 0, maximum: 100 }
+                status: { type: string, enum: [active, paused, archived, one_time] }
+      responses:
+        '200': { description: Обновлён, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: Ученик не найден }
+    delete:
+      tags: [students]
+      summary: Архивировать ученика; запрещено при наличии student folder
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Soft-delete выполнен }
+        '404': { description: Ученик не найден }
+        '409': { $ref: '#/components/responses/Conflict' }

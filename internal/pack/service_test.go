@@ -247,3 +247,17 @@ func (f *fakePackRepository) Move(ctx context.Context, userID, packID, folderID 
 	}
 	return &Pack{}, nil
 }
+
+func (f *fakePackRepository) Publish(
+	context.Context,
+	uuid.UUID,
+	uuid.UUID,
+	uuid.UUID,
+	bool,
+) (*Pack, error) {
+	return &Pack{}, nil
+}
+
+func (f *fakePackRepository) Unpublish(context.Context, uuid.UUID, uuid.UUID, bool) error {
+	return nil
+}

@@ -256,3 +256,11 @@ func (f *fakePackService) Move(ctx context.Context, packID, folderID uuid.UUID) 
 	}
 	return &Pack{}, nil
 }
+
+func (f *fakePackService) Publish(context.Context, uuid.UUID, uuid.UUID) (*Pack, error) {
+	return &Pack{}, nil
+}
+
+func (f *fakePackService) Unpublish(context.Context, uuid.UUID) error {
+	return nil
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 )
 
@@ -20,6 +21,8 @@ type packRepository interface {
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
+	Publish(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, bool) (*Pack, error)
+	Unpublish(context.Context, uuid.UUID, uuid.UUID, bool) error
 }
 
 // Service contains pack business logic.
@@ -107,6 +110,40 @@ func (s *Service) Move(ctx context.Context, packID, folderID uuid.UUID) (*Pack, 
 	return result, packError(err)
 }
 
+func (s *Service) Publish(ctx context.Context, packID, folderID uuid.UUID) (*Pack, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	role, err := authctx.RoleFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if role != "defectologist" && role != "head_defectologist" && role != "admin" {
+		return nil, apperr.ErrForbidden
+	}
+	result, err := s.repo.Publish(
+		ctx, userID, packID, folderID,
+		role == "head_defectologist" || role == "admin",
+	)
+	return result, packError(err)
+}
+
+func (s *Service) Unpublish(ctx context.Context, packID uuid.UUID) error {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return err
+	}
+	role, err := authctx.RoleFromCtx(ctx)
+	if err != nil {
+		return err
+	}
+	return packError(s.repo.Unpublish(
+		ctx, userID, packID,
+		role == "head_defectologist" || role == "admin",
+	))
+}
+
 func emptyLinkaConfig(ctx context.Context) (json.RawMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -130,6 +167,9 @@ func emptyLinkaConfig(ctx context.Context) (json.RawMessage, error) {
 	data, err := json.Marshal(config)
 	if err != nil {
 		return nil, fmt.Errorf("marshal empty Linka config: %w", err)
+	}
+	if err = linka.ValidateConfig(ctx, data); err != nil {
+		return nil, fmt.Errorf("validate empty Linka config: %w", err)
 	}
 	return data, nil
 }
@@ -206,6 +246,9 @@ func packError(err error) error {
 	}
 	if errors.Is(err, ErrInvalidPackMetadata) {
 		return apperr.ErrBadRequest.WithMessage("invalid pack metadata")
+	}
+	if errors.Is(err, ErrPackPublished) || errors.Is(err, ErrAlreadyPublished) {
+		return apperr.ErrConflict
 	}
 	return err
 }

@@ -290,3 +290,41 @@ func TestMigrationsDownUpCycle(t *testing.T) {
 	err = goose.Up(migrationsDB, "../../migrations")
 	require.NoError(t, err, "goose up should succeed again after full rollback")
 }
+
+func TestMigrationsUpgradeFromMainBackfillsPackFolders(t *testing.T) {
+	upgradePool, cleanup := NewPostgres(t)
+	t.Cleanup(cleanup)
+	upgradeDB, err := sql.Open("pgx", upgradePool.Config().ConnString())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, upgradeDB.Close()) })
+
+	const mainVersion int64 = 20260701174923
+	require.NoError(t, goose.UpTo(upgradeDB, "../../migrations", mainVersion))
+
+	orgID, userID, packID := uuid.New(), uuid.New(), uuid.New()
+	_, err = upgradePool.Exec(ctx,
+		`INSERT INTO organizations (id, name) VALUES ($1, 'upgrade-org')`, orgID)
+	require.NoError(t, err)
+	_, err = upgradePool.Exec(ctx,
+		`INSERT INTO users (id, org_id) VALUES ($1, $2)`, userID, orgID)
+	require.NoError(t, err)
+	_, err = upgradePool.Exec(ctx, `
+		INSERT INTO packs (id, org_id, owner_id, title)
+		VALUES ($1, $2, $3, 'Legacy pack')`, packID, orgID, userID)
+	require.NoError(t, err)
+
+	require.NoError(t, goose.Up(upgradeDB, "../../migrations"))
+
+	var folderID uuid.UUID
+	var section, name string
+	var depth int
+	err = upgradePool.QueryRow(ctx, `
+		SELECT f.id, f.section, f.name, f.depth
+		FROM packs p JOIN folders f ON f.id = p.folder_id
+		WHERE p.id = $1`, packID).Scan(&folderID, &section, &name, &depth)
+	require.NoError(t, err)
+	assert.NotEqual(t, uuid.Nil, folderID)
+	assert.Equal(t, "my", section)
+	assert.Equal(t, "Мои наборы", name)
+	assert.Zero(t, depth)
+}

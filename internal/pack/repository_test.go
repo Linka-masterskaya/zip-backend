@@ -188,6 +188,49 @@ func TestRepositoryMapsMetadataConstraintViolation(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidPackMetadata)
 }
 
+func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "owner org")
+	_, readerID, _ := seedPackOwner(t, pool, "reader org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	otherLibraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+	created, err := repo.Create(context.Background(), ownerID, CreateInput{
+		Title: "Published", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+
+	published, err := repo.Publish(
+		context.Background(), ownerID, created.ID, libraryFolderID, false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, published.LibraryFolderID)
+	assert.Equal(t, libraryFolderID, *published.LibraryFolderID)
+	require.NotNil(t, published.PublishedAt)
+
+	again, err := repo.Publish(
+		context.Background(), ownerID, created.ID, libraryFolderID, false,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, published.PublishedAt, again.PublishedAt)
+	_, err = repo.Publish(
+		context.Background(), ownerID, created.ID, otherLibraryFolderID, false,
+	)
+	assert.ErrorIs(t, err, ErrAlreadyPublished)
+	assert.ErrorIs(t, repo.Delete(context.Background(), ownerID, created.ID), ErrPackPublished)
+
+	readable, err := repo.Get(context.Background(), readerID, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, readable.ID)
+
+	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
+	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
+	_, err = repo.Get(context.Background(), readerID, created.ID)
+	assert.ErrorIs(t, err, ErrPackNotFound)
+	require.NoError(t, repo.Delete(context.Background(), ownerID, created.ID))
+}
+
 func newPackTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool, cleanup := testutil.NewPostgres(t)
@@ -231,6 +274,17 @@ func seedPackFolder(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) uuid.UU
 	_, err := pool.Exec(context.Background(), `
 		INSERT INTO folders (id, org_id, owner_id, section, kind, name, depth)
 		SELECT $1, org_id, id, 'my', 'folder', 'Folder', 0
+		FROM users WHERE id = $2`, folderID, ownerID)
+	require.NoError(t, err)
+	return folderID
+}
+
+func seedPackLibraryFolder(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) uuid.UUID {
+	t.Helper()
+	folderID := uuid.New()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO folders (id, org_id, owner_id, section, kind, name, depth)
+		SELECT $1, org_id, id, 'library', 'folder', 'Library', 0
 		FROM users WHERE id = $2`, folderID, ownerID)
 	require.NoError(t, err)
 	return folderID

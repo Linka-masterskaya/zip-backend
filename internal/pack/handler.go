@@ -19,6 +19,8 @@ type packService interface {
 	Update(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
+	Publish(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
+	Unpublish(context.Context, uuid.UUID) error
 }
 
 // Handler contains pack HTTP handlers.
@@ -72,6 +74,10 @@ type updatePackRequest struct {
 
 type movePackRequest struct {
 	FolderID uuid.UUID `json:"folder_id"`
+}
+
+type publicationRequest struct {
+	LibraryFolderID uuid.UUID `json:"library_folder_id"`
 }
 
 // CreatePack handles POST /api/v1/packs.
@@ -163,6 +169,34 @@ func (h *Handler) MovePack(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) PublishPack(w http.ResponseWriter, r *http.Request) error {
+	packID, err := pathUUID(r)
+	if err != nil {
+		return err
+	}
+	var req publicationRequest
+	if err = decodeJSON(r, &req); err != nil || req.LibraryFolderID == uuid.Nil {
+		return apperr.ErrBadRequest
+	}
+	result, err := h.service.Publish(r.Context(), packID, req.LibraryFolderID)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) UnpublishPack(w http.ResponseWriter, r *http.Request) error {
+	packID, err := pathUUID(r)
+	if err != nil {
+		return err
+	}
+	if err = h.service.Unpublish(r.Context(), packID); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (r updatePackRequest) updateInput() UpdateInput {

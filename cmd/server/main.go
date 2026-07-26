@@ -28,6 +28,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/db"
+	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
@@ -36,6 +37,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/profile"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
+	"github.com/Linka-masterskaya/zip-backend/internal/student"
 	"github.com/Linka-masterskaya/zip-backend/migrations"
 )
 
@@ -66,6 +68,14 @@ func run() error {
 	packRepo := pack.NewRepository(deps.db)
 	packService := pack.NewService(packRepo, deps.pub)
 	packHandler := pack.NewHandler(packService)
+
+	folderRepo := folder.NewRepository(deps.db)
+	folderService := folder.NewService(folderRepo)
+	folderHandler := folder.NewHandler(folderService)
+
+	studentRepo := student.NewRepository(deps.db)
+	studentService := student.NewService(studentRepo, deps.crypto)
+	studentHandler := student.NewHandler(studentService)
 
 	authRepo := auth.NewAuthRepo(deps.db)
 
@@ -109,6 +119,18 @@ func run() error {
 	mainMux.Handle("PATCH /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.UpdatePack))))
 	mainMux.Handle("DELETE /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.DeletePack))))
 	mainMux.Handle("POST /api/v1/packs/{id}/move", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.MovePack))))
+	mainMux.Handle("POST /api/v1/packs/{id}/publication", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.PublishPack))))
+	mainMux.Handle("DELETE /api/v1/packs/{id}/publication", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.UnpublishPack))))
+	mainMux.Handle("POST /api/v1/folders", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Create))))
+	mainMux.Handle("GET /api/v1/folders", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.List))))
+	mainMux.Handle("GET /api/v1/folders/{id}/contents", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Contents))))
+	mainMux.Handle("PATCH /api/v1/folders/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Rename))))
+	mainMux.Handle("POST /api/v1/folders/{id}/move", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Move))))
+	mainMux.Handle("DELETE /api/v1/folders/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Delete))))
+	mainMux.Handle("POST /api/v1/students", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(studentHandler.Create))))
+	mainMux.Handle("GET /api/v1/students", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(studentHandler.List))))
+	mainMux.Handle("PATCH /api/v1/students/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(studentHandler.Update))))
+	mainMux.Handle("DELETE /api/v1/students/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(studentHandler.Delete))))
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 

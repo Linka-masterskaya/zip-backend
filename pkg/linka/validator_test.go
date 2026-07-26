@@ -19,6 +19,7 @@ func TestValidateConfig(t *testing.T) {
 		errMsg      string
 	}{
 		{"Valid Grid", "valid_grid.json", false, ""},
+		{"Valid Empty Pack", "valid_empty_pack.json", false, ""},
 		{"Valid Single Choice", "valid_single_choice.json", false, ""},
 		{"Valid Sequence", "valid_sequence.json", false, ""},
 		{"Valid Matching", "valid_matching.json", false, ""},
