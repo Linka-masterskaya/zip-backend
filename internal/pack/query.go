@@ -35,27 +35,37 @@ const listPacksQuery = `
 	ORDER BY p.updated_at DESC, p.id
 	LIMIT $3 OFFSET $4`
 
+const lockPackForUpdateQuery = `
+	SELECT p.org_id
+	FROM packs p
+	JOIN users u ON u.id = $1
+	WHERE p.id = $2
+	  AND p.owner_id = u.id
+	  AND p.org_id = u.org_id
+	  AND u.deleted_at IS NULL
+	FOR UPDATE OF p, u`
+
+const lockUpdateFolderQuery = `
+	SELECT id
+	FROM folders
+	WHERE id = $2
+	  AND owner_id = $1
+	  AND org_id = $3
+	  AND section IN ('my', 'students')
+	FOR UPDATE`
+
 const updatePackQuery = `
 	UPDATE packs p
 	SET title = COALESCE($3::text, p.title),
-	    folder_id = CASE WHEN $4::uuid IS NULL THEN p.folder_id ELSE f.id END,
+	    folder_id = COALESCE($4::uuid, p.folder_id),
 	    age_min = CASE WHEN $5::boolean THEN $6::int ELSE p.age_min END,
 	    age_max = CASE WHEN $7::boolean THEN $8::int ELSE p.age_max END,
 	    difficulty = CASE WHEN $9::boolean THEN $10::text ELSE p.difficulty END,
 	    goals = COALESCE($11::text[], p.goals),
 	    notes = CASE WHEN $12::boolean THEN COALESCE($13::text, '') ELSE p.notes END,
 	    updated_at = now()
-	FROM users u
-	LEFT JOIN folders f ON f.id = $4::uuid
-		AND f.owner_id = u.id
-		AND f.org_id = u.org_id
-		AND f.section IN ('my', 'students')
 	WHERE p.id = $2
-	  AND u.id = $1
-	  AND ($4::uuid IS NULL OR f.id IS NOT NULL)
-	  AND p.owner_id = u.id
-	  AND p.org_id = u.org_id
-	  AND u.deleted_at IS NULL
+	  AND p.owner_id = $1
 	RETURNING ` + qualifiedPackColumns
 
 const deletePackQuery = `

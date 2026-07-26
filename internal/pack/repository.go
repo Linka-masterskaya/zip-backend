@@ -19,25 +19,19 @@ var (
 	ErrAlreadyPublished    = errors.New("pack is published in another folder")
 )
 
-type dbtx interface {
-	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-	Query(context.Context, string, ...any) (pgx.Rows, error)
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
 // Repository persists packs in PostgreSQL.
 type Repository struct {
-	db dbtx
+	pool *pgxpool.Pool
 }
 
 // NewRepository creates a PostgreSQL pack repository.
 func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{db: pool}
+	return &Repository{pool: pool}
 }
 
 // Create inserts a pack for an authenticated user and an owned folder.
 func (r *Repository) Create(ctx context.Context, userID uuid.UUID, input CreateInput) (*Pack, error) {
-	result, err := scanPack(r.db.QueryRow(
+	result, err := scanPack(r.pool.QueryRow(
 		ctx, createPackQuery, userID, input.FolderID, input.Title, input.Config,
 	))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -51,7 +45,7 @@ func (r *Repository) Create(ctx context.Context, userID uuid.UUID, input CreateI
 
 // Get returns a pack owned by the authenticated user in the same organization.
 func (r *Repository) Get(ctx context.Context, userID, packID uuid.UUID) (*Pack, error) {
-	result, err := scanPack(r.db.QueryRow(ctx, getPackQuery, userID, packID))
+	result, err := scanPack(r.pool.QueryRow(ctx, getPackQuery, userID, packID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrPackNotFound
 	}
@@ -76,7 +70,7 @@ func (r *Repository) List(
 	}
 
 	limit, offset := repositoryListBounds(input)
-	rows, err := r.db.Query(ctx, listPacksQuery, userID, folderID, limit, offset)
+	rows, err := r.pool.Query(ctx, listPacksQuery, userID, folderID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("pack repository list: %w", err)
 	}
@@ -98,18 +92,35 @@ func (r *Repository) List(
 
 // Update changes editable pack metadata without touching config.
 func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input UpdateInput) (*Pack, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("pack repository update begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	var orgID uuid.UUID
+	err = tx.QueryRow(ctx, lockPackForUpdateQuery, userID, packID).Scan(&orgID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrPackNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pack repository update lock pack: %w", err)
+	}
 	if input.FolderID != nil {
-		allowed, err := r.folderAllowed(ctx, userID, *input.FolderID)
-		if err != nil {
-			return nil, err
-		}
-		if !allowed {
+		var folderID uuid.UUID
+		err = tx.QueryRow(
+			ctx, lockUpdateFolderQuery, userID, *input.FolderID, orgID,
+		).Scan(&folderID)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrFolderNotAllowed
+		}
+		if err != nil {
+			return nil, fmt.Errorf("pack repository update lock folder: %w", err)
 		}
 	}
 
 	metadata := filterPatch(input.FilterMetadata)
-	result, err := scanPack(r.db.QueryRow(ctx, updatePackQuery,
+	result, err := scanPack(tx.QueryRow(ctx, updatePackQuery,
 		userID, packID, input.Title, input.FolderID,
 		metadata.ageMin.Set, metadata.ageMin.Value,
 		metadata.ageMax.Set, metadata.ageMax.Value,
@@ -125,18 +136,21 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 	if err != nil {
 		return nil, fmt.Errorf("pack repository update: %w", err)
 	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("pack repository update commit: %w", err)
+	}
 	return result, nil
 }
 
 // Delete removes an owned pack from the authenticated user's organization.
 func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error {
-	tag, err := r.db.Exec(ctx, deletePackQuery, userID, packID)
+	tag, err := r.pool.Exec(ctx, deletePackQuery, userID, packID)
 	if err != nil {
 		return fmt.Errorf("pack repository delete: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		var published bool
-		err = r.db.QueryRow(ctx, packPublishedQuery, userID, packID).Scan(&published)
+		err = r.pool.QueryRow(ctx, packPublishedQuery, userID, packID).Scan(&published)
 		if err != nil {
 			return fmt.Errorf("pack repository delete state: %w", err)
 		}
@@ -158,7 +172,7 @@ func (r *Repository) Move(ctx context.Context, userID, packID, folderID uuid.UUI
 		return nil, ErrFolderNotAllowed
 	}
 
-	result, err := scanPack(r.db.QueryRow(ctx, movePackQuery, userID, packID, folderID))
+	result, err := scanPack(r.pool.QueryRow(ctx, movePackQuery, userID, packID, folderID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrPackNotFound
 	}
@@ -174,7 +188,7 @@ func (r *Repository) Publish(
 	admin bool,
 ) (*Pack, error) {
 	result, err := scanPack(
-		r.db.QueryRow(ctx, publishPackQuery, userID, packID, folderID, admin),
+		r.pool.QueryRow(ctx, publishPackQuery, userID, packID, folderID, admin),
 	)
 	if err == nil {
 		return result, nil
@@ -184,7 +198,7 @@ func (r *Repository) Publish(
 	}
 
 	var otherFolder bool
-	if stateErr := r.db.QueryRow(
+	if stateErr := r.pool.QueryRow(
 		ctx, packPublishedInOtherFolderQuery, userID, packID, admin, folderID,
 	).Scan(&otherFolder); stateErr != nil {
 		return nil, fmt.Errorf("pack repository publish state: %w", stateErr)
@@ -200,7 +214,7 @@ func (r *Repository) Unpublish(
 	userID, packID uuid.UUID,
 	admin bool,
 ) error {
-	tag, err := r.db.Exec(ctx, unpublishPackQuery, userID, packID, admin)
+	tag, err := r.pool.Exec(ctx, unpublishPackQuery, userID, packID, admin)
 	if err != nil {
 		return fmt.Errorf("pack repository unpublish: %w", err)
 	}
@@ -227,10 +241,17 @@ func repositoryListBounds(input ListInput) (int, int) {
 
 func (r *Repository) folderAllowed(ctx context.Context, userID, folderID uuid.UUID) (bool, error) {
 	var allowed bool
-	if err := r.db.QueryRow(ctx, folderAllowedQuery, userID, folderID).Scan(&allowed); err != nil {
+	if err := r.pool.QueryRow(ctx, folderAllowedQuery, userID, folderID).Scan(&allowed); err != nil {
 		return false, fmt.Errorf("pack repository folder access: %w", err)
 	}
 	return allowed, nil
+}
+
+func rollbackPackTx(ctx context.Context, tx pgx.Tx) {
+	err := tx.Rollback(ctx)
+	if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		return
+	}
 }
 
 type patchValues struct {

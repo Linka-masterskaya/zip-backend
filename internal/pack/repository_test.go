@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -151,16 +151,43 @@ func TestRepositoryUpdateChecksFolderOwnershipAtomically(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	raceDB := &folderOwnershipRaceDB{
-		pool: pool, folderID: destinationFolderID, newOwnerID: foreignOwnerID,
-	}
-	repo := &Repository{db: raceDB}
-	_, err = repo.Update(context.Background(), ownerID, created.ID, UpdateInput{
-		FolderID: &destinationFolderID,
-	})
+	lockTx, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lockTx.Rollback(t.Context()) })
+	var lockedID uuid.UUID
+	require.NoError(t, lockTx.QueryRow(
+		t.Context(),
+		`SELECT id FROM folders WHERE id = $1 FOR UPDATE`,
+		destinationFolderID,
+	).Scan(&lockedID))
 
-	assert.ErrorIs(t, err, ErrPackNotFound)
-	require.NoError(t, raceDB.err)
+	updateResult := make(chan error, 1)
+	go func() {
+		_, updateErr := baseRepo.Update(
+			context.Background(),
+			ownerID,
+			created.ID,
+			UpdateInput{FolderID: &destinationFolderID},
+		)
+		updateResult <- updateErr
+	}()
+
+	select {
+	case updateErr := <-updateResult:
+		t.Fatalf("update returned before destination folder lock was released: %v", updateErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	_, err = lockTx.Exec(
+		t.Context(),
+		`UPDATE folders SET owner_id = $2 WHERE id = $1`,
+		destinationFolderID,
+		foreignOwnerID,
+	)
+	require.NoError(t, err)
+	require.NoError(t, lockTx.Commit(t.Context()))
+	assert.ErrorIs(t, <-updateResult, ErrFolderNotAllowed)
+
 	fetched, err := baseRepo.Get(context.Background(), ownerID, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, currentFolderID, fetched.FolderID)
@@ -288,38 +315,6 @@ func seedPackLibraryFolder(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) 
 		FROM users WHERE id = $2`, folderID, ownerID)
 	require.NoError(t, err)
 	return folderID
-}
-
-type folderOwnershipRaceDB struct {
-	pool       *pgxpool.Pool
-	folderID   uuid.UUID
-	newOwnerID uuid.UUID
-	queryRows  int
-	err        error
-}
-
-func (d *folderOwnershipRaceDB) Exec(
-	ctx context.Context,
-	query string,
-	args ...any,
-) (pgconn.CommandTag, error) {
-	return d.pool.Exec(ctx, query, args...)
-}
-
-func (d *folderOwnershipRaceDB) Query(
-	ctx context.Context,
-	query string,
-	args ...any,
-) (pgx.Rows, error) {
-	return d.pool.Query(ctx, query, args...)
-}
-
-func (d *folderOwnershipRaceDB) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
-	d.queryRows++
-	if d.queryRows == 2 {
-		_, d.err = d.pool.Exec(ctx, `UPDATE folders SET owner_id = $2 WHERE id = $1`, d.folderID, d.newOwnerID)
-	}
-	return d.pool.QueryRow(ctx, query, args...)
 }
 
 func stringPtr(value string) *string {
