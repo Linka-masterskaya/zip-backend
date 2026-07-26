@@ -67,8 +67,12 @@ func (f *fakeCrypto) Hash(_ []byte) []byte {
 	return f.hash
 }
 
+func (f *fakeCrypto) Encrypt(_ []byte) ([]byte, error) {
+	return []byte("encrypted_data"), nil
+}
+
 func (f *fakeCrypto) Decrypt(_ []byte) ([]byte, error) {
-	return nil, nil
+	return []byte("test@example.com"), nil
 }
 
 func (f *fakeCrypto) Encrypt(data []byte) ([]byte, error) {
