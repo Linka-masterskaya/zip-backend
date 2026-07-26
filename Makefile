@@ -1,4 +1,4 @@
-.PHONY: build run test lint mock dev-up dev-down dev-reset migrate migrate-down
+.PHONY: build run test test-e2e lint mock dev-up dev-down dev-reset migrate migrate-down
 
 # ── Environment ──────────────────────────────────────────────────────────────
 # Load variables from .env file (if exists) and export them for subprocesses
@@ -19,6 +19,9 @@ run:
 # ── Test ─────────────────────────────────────────────────────────────────────
 test:
 	go test ./... -race -count=1
+
+test-e2e:
+	go test -tags=e2e ./cmd/server -run '^TestE2E_' -race -count=1 -v
 
 test-cover:
 	go test ./... -race -count=1 -coverprofile=coverage.out

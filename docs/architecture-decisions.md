@@ -174,7 +174,8 @@ make dev-reset   # down -v + up (сброс данных)
 make migrate     # goose up
 make migrate-down
 make lint        # golangci-lint run
-make test        # go test ./...
+make test        # все обычные тесты с -race
+make test-e2e    # отдельный HTTP E2E-профиль: Testcontainers + миграции
 ```
 
 `.env.example`:

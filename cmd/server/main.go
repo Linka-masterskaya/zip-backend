@@ -113,24 +113,9 @@ func run() error {
 
 	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 	mainMux := http.NewServeMux()
-	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.CreatePack))))
-	mainMux.Handle("GET /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.GetPack))))
-	mainMux.Handle("GET /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.ListPacks))))
-	mainMux.Handle("PATCH /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.UpdatePack))))
-	mainMux.Handle("DELETE /api/v1/packs/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.DeletePack))))
-	mainMux.Handle("POST /api/v1/packs/{id}/move", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.MovePack))))
-	mainMux.Handle("POST /api/v1/packs/{id}/publication", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.PublishPack))))
-	mainMux.Handle("DELETE /api/v1/packs/{id}/publication", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(packHandler.UnpublishPack))))
-	mainMux.Handle("POST /api/v1/folders", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Create))))
-	mainMux.Handle("GET /api/v1/folders", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.List))))
-	mainMux.Handle("GET /api/v1/folders/{id}/contents", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Contents))))
-	mainMux.Handle("PATCH /api/v1/folders/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Rename))))
-	mainMux.Handle("POST /api/v1/folders/{id}/move", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Move))))
-	mainMux.Handle("DELETE /api/v1/folders/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(folderHandler.Delete))))
-	mainMux.Handle("POST /api/v1/students", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(studentHandler.Create))))
-	mainMux.Handle("GET /api/v1/students", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(studentHandler.List))))
-	mainMux.Handle("PATCH /api/v1/students/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(studentHandler.Update))))
-	mainMux.Handle("DELETE /api/v1/students/{id}", packRateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(studentHandler.Delete))))
+	registerP1Routes(mainMux, authMW, packRateLimit, p1Handlers{
+		pack: packHandler, folder: folderHandler, student: studentHandler,
+	})
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
@@ -264,6 +249,44 @@ func run() error {
 	}
 
 	return nil
+}
+
+type p1Handlers struct {
+	pack    *pack.Handler
+	folder  *folder.Handler
+	student *student.Handler
+}
+
+func registerP1Routes(
+	mux *http.ServeMux,
+	authMW *middleware.AuthMW,
+	rateLimit func(http.Handler) http.Handler,
+	handlers p1Handlers,
+) {
+	protected := func(next middleware.AppHandler) http.Handler {
+		return rateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(next)))
+	}
+
+	mux.Handle("POST /api/v1/packs", protected(handlers.pack.CreatePack))
+	mux.Handle("GET /api/v1/packs/{id}", protected(handlers.pack.GetPack))
+	mux.Handle("GET /api/v1/packs", protected(handlers.pack.ListPacks))
+	mux.Handle("PATCH /api/v1/packs/{id}", protected(handlers.pack.UpdatePack))
+	mux.Handle("DELETE /api/v1/packs/{id}", protected(handlers.pack.DeletePack))
+	mux.Handle("POST /api/v1/packs/{id}/move", protected(handlers.pack.MovePack))
+	mux.Handle("POST /api/v1/packs/{id}/publication", protected(handlers.pack.PublishPack))
+	mux.Handle("DELETE /api/v1/packs/{id}/publication", protected(handlers.pack.UnpublishPack))
+
+	mux.Handle("POST /api/v1/folders", protected(handlers.folder.Create))
+	mux.Handle("GET /api/v1/folders", protected(handlers.folder.List))
+	mux.Handle("GET /api/v1/folders/{id}/contents", protected(handlers.folder.Contents))
+	mux.Handle("PATCH /api/v1/folders/{id}", protected(handlers.folder.Rename))
+	mux.Handle("POST /api/v1/folders/{id}/move", protected(handlers.folder.Move))
+	mux.Handle("DELETE /api/v1/folders/{id}", protected(handlers.folder.Delete))
+
+	mux.Handle("POST /api/v1/students", protected(handlers.student.Create))
+	mux.Handle("GET /api/v1/students", protected(handlers.student.List))
+	mux.Handle("PATCH /api/v1/students/{id}", protected(handlers.student.Update))
+	mux.Handle("DELETE /api/v1/students/{id}", protected(handlers.student.Delete))
 }
 
 type infra struct {
