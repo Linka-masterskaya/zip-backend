@@ -61,8 +61,6 @@ func pictureBankError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, ErrPictureNotFound):
-		return apperr.ErrNotFound.WithMessage("picture not found")
 	case errors.Is(err, ErrRateLimited):
 		return apperr.ErrServiceUnavailable.
 			WithMessage("Pictures Bank request budget is temporarily exhausted").

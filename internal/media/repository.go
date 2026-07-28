@@ -50,7 +50,7 @@ func (r *Repository) Upsert(ctx context.Context, input File) (*File, error) {
 	err = tx.QueryRow(ctx, findByDigestQuery,
 		input.OrgID, input.SHA256,
 	).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
 		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
 	if err == nil {
@@ -73,10 +73,9 @@ func (r *Repository) Upsert(ctx context.Context, input File) (*File, error) {
 	}
 
 	err = tx.QueryRow(ctx, insertMediaQuery,
-		input.OrgID, input.UploaderID, input.Name, input.SHA256,
-		input.MIMEType, input.SizeBytes, input.MinIOKey,
+		input.OrgID, input.UploaderID, input.SHA256, input.MIMEType, input.SizeBytes, input.MinIOKey,
 	).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
 		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
 	if err != nil {
@@ -98,7 +97,7 @@ func rollbackMediaTx(ctx context.Context, tx pgx.Tx) {
 func (r *Repository) GetAccessible(ctx context.Context, userID, mediaID uuid.UUID) (*File, error) {
 	var result File
 	err := r.pool.QueryRow(ctx, getAccessibleMediaQuery, userID, mediaID).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
 		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -106,52 +105,6 @@ func (r *Repository) GetAccessible(ctx context.Context, userID, mediaID uuid.UUI
 	}
 	if err != nil {
 		return nil, fmt.Errorf("media repository get: %w", err)
-	}
-	return &result, nil
-}
-
-func (r *Repository) ListAccessible(
-	ctx context.Context,
-	userID uuid.UUID,
-	mediaType, query string,
-	limit, offset int,
-) ([]*File, error) {
-	rows, err := r.pool.Query(ctx, listAccessibleMediaQuery, userID, mediaType, query, limit, offset)
-	if err != nil {
-		return nil, fmt.Errorf("media repository list: %w", err)
-	}
-	defer rows.Close()
-	result := make([]*File, 0)
-	for rows.Next() {
-		var file File
-		if err = rows.Scan(
-			&file.ID, &file.OrgID, &file.UploaderID, &file.Name, &file.SHA256,
-			&file.MIMEType, &file.SizeBytes, &file.MinIOKey, &file.CreatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("media repository scan list: %w", err)
-		}
-		result = append(result, &file)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("media repository list rows: %w", err)
-	}
-	return result, nil
-}
-
-func (r *Repository) GetOrganizationMedia(
-	ctx context.Context,
-	userID, mediaID uuid.UUID,
-) (*File, error) {
-	var result File
-	err := r.pool.QueryRow(ctx, getOrganizationMediaQuery, userID, mediaID).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
-		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("media repository get organization media: %w", err)
 	}
 	return &result, nil
 }
@@ -168,7 +121,7 @@ func (r *Repository) Delete(
 
 	var result File
 	err = tx.QueryRow(ctx, lockOwnedMediaQuery, userID, mediaID).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
 		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

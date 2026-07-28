@@ -89,18 +89,11 @@ func run() error {
 		deps.cfg.FeatureFlags.LocalBank,
 		deps.cfg.PicturesBank,
 		deps.redis,
-		mediaRepo,
-		deps.storage,
 	)
 	if err != nil {
 		return fmt.Errorf("pictures bank source: %w", err)
 	}
 	picturesHandler := picturebank.NewHandler(picturebank.NewService(picturesSource, mediaService))
-	picturesSourceName := "external"
-	if deps.cfg.FeatureFlags.LocalBank {
-		picturesSourceName = "local_minio"
-	}
-	slog.Info("pictures bank source selected", "source", picturesSourceName)
 
 	authRepo := auth.NewAuthRepo(deps.db)
 

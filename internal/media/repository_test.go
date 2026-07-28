@@ -29,7 +29,7 @@ func TestRepositoryDeduplicatesQuotaAndProtectsUsages(t *testing.T) {
 
 	repo := NewRepository(pool)
 	input := File{
-		OrgID: orgID, UploaderID: userID, Name: "Кот.png", SHA256: "digest",
+		OrgID: orgID, UploaderID: userID, SHA256: "digest",
 		MIMEType: "image/png", SizeBytes: 123, MinIOKey: "media/key",
 	}
 	first, err := repo.Upsert(t.Context(), input)
@@ -37,18 +37,6 @@ func TestRepositoryDeduplicatesQuotaAndProtectsUsages(t *testing.T) {
 	second, err := repo.Upsert(t.Context(), input)
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, second.ID)
-	assert.Equal(t, "Кот.png", first.Name)
-
-	listed, err := repo.ListAccessible(t.Context(), userID, "image", "кот", 100, 0)
-	require.NoError(t, err)
-	require.Len(t, listed, 1)
-	assert.Equal(t, first.ID, listed[0].ID)
-	listed, err = repo.ListAccessible(t.Context(), userID, "audio", "", 100, 0)
-	require.NoError(t, err)
-	assert.Empty(t, listed)
-	listed, err = repo.ListAccessible(t.Context(), userID, "image", "собака", 100, 0)
-	require.NoError(t, err)
-	assert.Empty(t, listed)
 	var storageUsed int64
 	require.NoError(t, pool.QueryRow(t.Context(), `
 		SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID,

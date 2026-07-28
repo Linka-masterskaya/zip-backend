@@ -29,7 +29,6 @@ var (
 	ErrRateLimited      = errors.New("pictures bank outbound limit reached")
 	ErrResponseTooLarge = errors.New("pictures bank response is too large")
 	ErrInvalidResponse  = errors.New("pictures bank returned invalid data")
-	ErrPictureNotFound  = errors.New("picture not found")
 )
 
 type distributedLimiter interface {
