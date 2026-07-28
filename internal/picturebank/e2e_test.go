@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -78,6 +79,7 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	}
 	client := newClient(picturesConfig, upstreamURL, upstream.Client(), redisCache)
 	mediaService := media.NewService(media.NewRepository(pool), objectStorage)
+	mediaHandler := media.NewHandler(mediaService)
 	handler := NewHandler(NewService(client, mediaService))
 	packRepo := pack.NewRepository(pool)
 	packService := pack.NewService(packRepo, nil)
@@ -85,7 +87,9 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	contentHandler := pack.NewContentHandler(
 		pack.NewContentService(packRepo, objectStorage, mediaService, packService),
 	)
-	server := picturesE2EServer(t, redisCache, handler, packHandler, contentHandler)
+	server := picturesE2EServer(
+		t, redisCache, handler, mediaHandler, packHandler, contentHandler,
+	)
 	token := picturesE2EToken(t, userID)
 
 	for range 2 {
@@ -170,6 +174,130 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	assert.Contains(t, string(exportedConfig), "media/"+firstImport.ID.String()+".png")
 }
 
+func TestE2E_LocalPicturesBankUsesOrganizationMinIO(t *testing.T) {
+	pool := picturesE2EDatabase(t)
+	userID, _ := picturesE2EUserAndFolder(t, pool)
+	foreignUserID, _ := picturesE2EUserAndFolder(t, pool)
+	objectStorage, cleanupStorage := testutil.NewMinIO(t)
+	t.Cleanup(cleanupStorage)
+	redisClient, cleanupRedis := testutil.NewRedis(t)
+	t.Cleanup(cleanupRedis)
+	redisCache, err := cache.NewClient(cache.Config{
+		URL:        "redis://" + redisClient.Options().Addr,
+		ClientName: "local-pictures-e2e", PoolSize: 5,
+	})
+	require.NoError(t, err)
+
+	mediaRepo := media.NewRepository(pool)
+	mediaService := media.NewService(mediaRepo, objectStorage)
+	localClient, err := NewLocalClient(mediaRepo, objectStorage, 10*1024*1024)
+	require.NoError(t, err)
+	pictureHandler := NewHandler(NewService(localClient, mediaService))
+	mediaHandler := media.NewHandler(mediaService)
+	packRepo := pack.NewRepository(pool)
+	packService := pack.NewService(packRepo, nil)
+	server := picturesE2EServer(
+		t,
+		redisCache,
+		pictureHandler,
+		mediaHandler,
+		pack.NewHandler(packService),
+		pack.NewContentHandler(
+			pack.NewContentService(packRepo, objectStorage, mediaService, packService),
+		),
+	)
+	token := picturesE2EToken(t, userID)
+	foreignToken := picturesE2EToken(t, foreignUserID)
+	imageData := picturesE2EPNG()
+
+	uploaded := picturesE2EUploadMedia(t, server, token, "Кот.png", imageData)
+	foreign := picturesE2EUploadMedia(t, server, foreignToken, "Чужой кот.png", imageData)
+	listed := picturesE2EJSON[[]media.Response](
+		t,
+		picturesE2ERequest(
+			t, server, token, http.MethodGet, "/api/v1/media?type=image&query=кот", nil,
+		),
+		http.StatusOK,
+	)
+	require.Len(t, listed, 1, "media catalog must not leak another organization")
+	assert.Equal(t, uploaded.ID, listed[0].ID)
+	assert.Equal(t, "Кот.png", listed[0].Name)
+	assert.NotEmpty(t, listed[0].URL)
+
+	byURL := picturesE2EJSON[media.Response](
+		t,
+		picturesE2ERequest(
+			t, server, token, http.MethodGet,
+			"/api/v1/media/"+uploaded.ID.String()+"/url", nil,
+		),
+		http.StatusOK,
+	)
+	assert.Equal(t, uploaded.ID, byURL.ID)
+
+	categories := picturesE2EJSON[[]Category](
+		t,
+		picturesE2ERequest(
+			t, server, token, http.MethodGet, "/api/v1/pictures/categories", nil,
+		),
+		http.StatusOK,
+	)
+	require.Len(t, categories, 1)
+	assert.Equal(t, "local", categories[0].ID)
+	pictures := picturesE2EJSON[[]Picture](
+		t,
+		picturesE2ERequest(
+			t, server, token, http.MethodGet, "/api/v1/pictures/search?query=кот", nil,
+		),
+		http.StatusOK,
+	)
+	require.Len(t, pictures, 1)
+	assert.Equal(t, uploaded.ID.String(), pictures[0].ID)
+	assert.Equal(t, "Кот.png", pictures[0].Name)
+	foreignContent := picturesE2ERequest(
+		t, server, token, http.MethodGet,
+		"/api/v1/pictures/"+foreign.ID.String()+"/content", nil,
+	)
+	picturesE2EBody(t, foreignContent, http.StatusNotFound)
+
+	content := picturesE2ERequest(
+		t, server, token, http.MethodGet,
+		"/api/v1/pictures/"+uploaded.ID.String()+"/content", nil,
+	)
+	assert.Equal(t, imageData, picturesE2EBody(t, content, http.StatusOK))
+	imported := picturesE2EJSON[media.Response](
+		t,
+		picturesE2ERequest(
+			t, server, token, http.MethodPost,
+			"/api/v1/pictures/"+uploaded.ID.String()+"/import", nil,
+		),
+		http.StatusCreated,
+	)
+	assert.Equal(t, uploaded.ID, imported.ID, "local import must reuse the existing object")
+
+	var mediaCount int
+	var storageUsed int64
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM media_files WHERE org_id = (SELECT org_id FROM users WHERE id = $1)`,
+		userID,
+	).Scan(&mediaCount))
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT storage_used_bytes FROM organizations
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, userID,
+	).Scan(&storageUsed))
+	assert.Equal(t, 1, mediaCount)
+	assert.EqualValues(t, len(imageData), storageUsed)
+
+	deleted := picturesE2ERequest(
+		t, server, token, http.MethodDelete, "/api/v1/media/"+uploaded.ID.String(), nil,
+	)
+	picturesE2EBody(t, deleted, http.StatusNoContent)
+	missing := picturesE2ERequest(
+		t, server, token, http.MethodGet,
+		"/api/v1/pictures/"+uploaded.ID.String()+"/content", nil,
+	)
+	picturesE2EBody(t, missing, http.StatusNotFound)
+}
+
 func picturesE2EDatabase(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool, cleanup := testutil.NewPostgres(t)
@@ -202,6 +330,7 @@ func picturesE2EServer(
 	t *testing.T,
 	redisCache *cache.Client,
 	pictureHandler *Handler,
+	mediaHandler *media.Handler,
 	packHandler *pack.Handler,
 	contentHandler *pack.ContentHandler,
 ) *httptest.Server {
@@ -216,6 +345,11 @@ func picturesE2EServer(
 	mux.Handle("GET /api/v1/pictures/search", protected(pictureHandler.Search))
 	mux.Handle("GET /api/v1/pictures/{id}/content", protected(pictureHandler.Image))
 	mux.Handle("POST /api/v1/pictures/{id}/import", protected(pictureHandler.Import))
+	mux.Handle("POST /api/v1/media", protected(mediaHandler.Upload))
+	mux.Handle("GET /api/v1/media", protected(mediaHandler.List))
+	mux.Handle("GET /api/v1/media/{id}", protected(mediaHandler.Get))
+	mux.Handle("GET /api/v1/media/{id}/url", protected(mediaHandler.Get))
+	mux.Handle("DELETE /api/v1/media/{id}", protected(mediaHandler.Delete))
 	mux.Handle("POST /api/v1/packs", protected(packHandler.CreatePack))
 	mux.Handle("PUT /api/v1/packs/{id}/config", protected(contentHandler.SaveConfig))
 	mux.Handle("GET /api/v1/packs/{id}/export", protected(contentHandler.Export))
@@ -224,6 +358,31 @@ func picturesE2EServer(
 	))
 	t.Cleanup(server.Close)
 	return server
+}
+
+func picturesE2EUploadMedia(
+	t *testing.T,
+	server *httptest.Server,
+	token, name string,
+	data []byte,
+) media.Response {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", name)
+	require.NoError(t, err)
+	_, err = part.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	request, err := http.NewRequestWithContext(
+		t.Context(), http.MethodPost, server.URL+"/api/v1/media", &body,
+	)
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := server.Client().Do(request)
+	require.NoError(t, err)
+	return picturesE2EJSON[media.Response](t, response, http.StatusCreated)
 }
 
 func picturesE2EToken(t *testing.T, userID uuid.UUID) string {

@@ -25,6 +25,7 @@ type Config struct {
 	CORS         CORSConfig         `mapstructure:"cors"`
 	OpenAI       OpenAIConfig       `mapstructure:"openai"`
 	PicturesBank PicturesBankConfig `mapstructure:"pictures_bank"`
+	FeatureFlags FeatureFlagsConfig `mapstructure:"feature_flags"`
 	Crypto       CryptoConfig       `mapstructure:"crypto"`
 	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
 }
@@ -169,6 +170,11 @@ type PicturesBankConfig struct {
 	MaxImageBytes     int64         `mapstructure:"max_image_bytes"`
 }
 
+// FeatureFlagsConfig controls optional runtime behavior.
+type FeatureFlagsConfig struct {
+	LocalBank bool `mapstructure:"local_bank"`
+}
+
 // SMTPConfig contains Email settings.
 type SMTPConfig struct {
 	Host     string        `mapstructure:"host"`
@@ -228,6 +234,9 @@ func Load(path string) (*Config, error) {
 
 	// Environment variables override YAML keys, for example APP_PORT overrides app.port.
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	if err := v.BindEnv("feature_flags.local_bank", "FEATURE_LOCAL_BANK"); err != nil {
+		return nil, fmt.Errorf("bind FEATURE_LOCAL_BANK: %w", err)
+	}
 	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
@@ -323,6 +332,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pictures_bank.cache_ttl", "5m")
 	v.SetDefault("pictures_bank.max_metadata_bytes", 2097152)
 	v.SetDefault("pictures_bank.max_image_bytes", 10485760)
+
+	// Feature flags default to the current production behavior.
+	v.SetDefault("feature_flags.local_bank", false)
 
 	// SMTP defaults
 	v.SetDefault("smtp.host", "smtp.yandex.ru")

@@ -10,14 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
-type client interface {
-	Categories(context.Context) ([]Category, error)
-	Search(context.Context, string) ([]Picture, error)
-	Image(context.Context, string) (*Image, error)
-}
-
 type Service struct {
-	client   client
+	client   Source
 	uploader mediaUploader
 }
 
@@ -25,7 +19,7 @@ type mediaUploader interface {
 	Upload(context.Context, []byte) (*media.Response, error)
 }
 
-func NewService(client client, uploader mediaUploader) *Service {
+func NewService(client Source, uploader mediaUploader) *Service {
 	return &Service{client: client, uploader: uploader}
 }
 
@@ -67,6 +61,8 @@ func pictureBankError(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, ErrPictureNotFound):
+		return apperr.ErrNotFound.WithMessage("picture not found")
 	case errors.Is(err, ErrRateLimited):
 		return apperr.ErrServiceUnavailable.
 			WithMessage("Pictures Bank request budget is temporarily exhausted").

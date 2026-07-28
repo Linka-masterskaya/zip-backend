@@ -160,10 +160,11 @@ components:
 
     Media:
       type: object
-      required: [id, uploader_id, sha256, mime_type, size_bytes, created_at, url]
+      required: [id, uploader_id, name, sha256, mime_type, size_bytes, created_at, url]
       properties:
         id:          { type: string, format: uuid }
         uploader_id: { type: string, format: uuid }
+        name:        { type: string, description: Исходное имя файла для поиска в локальном каталоге }
         sha256:      { type: string, pattern: '^[a-f0-9]{64}$' }
         mime_type:   { type: string }
         size_bytes:  { type: integer, format: int64 }
@@ -174,7 +175,7 @@ components:
       type: object
       required: [id, name]
       properties:
-        id:   { type: string, format: uuid }
+        id:   { type: string }
         name: { type: string }
 
     Picture:
@@ -589,6 +590,24 @@ paths:
         '404': { description: Папка не найдена }
 
   /media:
+    get:
+      tags: [media]
+      summary: Найти media текущей организации в локальном MinIO-каталоге
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: type, in: query, schema: { type: string, enum: [image, audio] } }
+        - { name: query, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Media только из организации текущего пользователя
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Media' }
+        '400': { $ref: '#/components/responses/BadRequest' }
     post:
       tags: [media]
       summary: Загрузить изображение или аудио в приватное объектное хранилище
@@ -628,11 +647,22 @@ paths:
         '404': { description: Media не найдено или принадлежит другому пользователю }
         '409': { description: Media ещё используется набором или адаптацией }
 
+  /media/{id}/url:
+    get:
+      tags: [media]
+      summary: Получить метаданные и временную MinIO-ссылку на media
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Media доступно, content: { application/json: { schema: { $ref: '#/components/schemas/Media' } } } }
+        '404': { description: Media не найдено или недоступно }
+
   /pictures/categories:
     get:
       tags: [pictures]
-      summary: Получить категории LINKa Pictures Bank через защищённый proxy
-      description: Ответ кэшируется; исходящие запросы глобально ограничены через Redis.
+      summary: Получить категории активного банка изображений
+      description: При FEATURE_LOCAL_BANK=true используется tenant-scoped каталог PostgreSQL + MinIO; иначе LINKa Pictures Bank.
       security: [{ bearerAuth: [] }]
       responses:
         '200':
@@ -648,8 +678,8 @@ paths:
   /pictures/search:
     get:
       tags: [pictures]
-      summary: Найти изображения в LINKa Pictures Bank
-      description: Одинаковые одновременные запросы объединяются, результаты кэшируются.
+      summary: Найти изображения в активном банке
+      description: В локальном режиме поиск идёт по исходному имени файла только внутри организации; во внешнем результаты кэшируются.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: query, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 100 } }
@@ -668,7 +698,7 @@ paths:
   /pictures/{id}/content:
     get:
       tags: [pictures]
-      summary: Получить изображение Pictures Bank через ограниченный proxy
+      summary: Получить изображение активного банка
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -681,14 +711,15 @@ paths:
             image/webp: { schema: { type: string, format: binary } }
             image/gif:  { schema: { type: string, format: binary } }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: Изображение не найдено в активном банке или чужой организации }
         '429': { $ref: '#/components/responses/TooMany' }
         '503': { description: Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME }
 
   /pictures/{id}/import:
     post:
       tags: [pictures]
-      summary: Импортировать изображение Pictures Bank в приватное хранилище организации
-      description: Использует тот же исходящий лимит, SHA-256 дедупликацию и квоту, что обычный media upload.
+      summary: Импортировать изображение активного банка в приватное хранилище организации
+      description: Использует SHA-256 дедупликацию и квоту обычного media upload; в локальном режиме уже существующий объект переиспользуется.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }

@@ -85,11 +85,22 @@ func run() error {
 	studentService := student.NewService(studentRepo, deps.crypto)
 	studentHandler := student.NewHandler(studentService)
 
-	picturesClient, err := picturebank.NewClient(deps.cfg.PicturesBank, deps.redis)
+	picturesSource, err := picturebank.NewSource(
+		deps.cfg.FeatureFlags.LocalBank,
+		deps.cfg.PicturesBank,
+		deps.redis,
+		mediaRepo,
+		deps.storage,
+	)
 	if err != nil {
-		return fmt.Errorf("pictures bank client: %w", err)
+		return fmt.Errorf("pictures bank source: %w", err)
 	}
-	picturesHandler := picturebank.NewHandler(picturebank.NewService(picturesClient, mediaService))
+	picturesHandler := picturebank.NewHandler(picturebank.NewService(picturesSource, mediaService))
+	picturesSourceName := "external"
+	if deps.cfg.FeatureFlags.LocalBank {
+		picturesSourceName = "local_minio"
+	}
+	slog.Info("pictures bank source selected", "source", picturesSourceName)
 
 	authRepo := auth.NewAuthRepo(deps.db)
 

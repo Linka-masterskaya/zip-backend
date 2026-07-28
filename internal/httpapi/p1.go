@@ -49,7 +49,9 @@ func RegisterP1Routes(
 	mux.Handle("GET /api/v1/packs/{id}/versions/{version}", protected(handlers.Content.GetVersion))
 	mux.Handle("POST /api/v1/packs/{id}/versions/{version}/restore", protected(handlers.Content.RestoreVersion))
 	mux.Handle("POST /api/v1/media", protected(handlers.Media.Upload))
+	mux.Handle("GET /api/v1/media", protected(handlers.Media.List))
 	mux.Handle("GET /api/v1/media/{id}", protected(handlers.Media.Get))
+	mux.Handle("GET /api/v1/media/{id}/url", protected(handlers.Media.Get))
 	mux.Handle("DELETE /api/v1/media/{id}", protected(handlers.Media.Delete))
 
 	mux.Handle("POST /api/v1/folders", protected(handlers.Folder.Create))

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
@@ -33,6 +34,7 @@ type File struct {
 	ID         uuid.UUID `json:"id"`
 	OrgID      uuid.UUID `json:"-"`
 	UploaderID uuid.UUID `json:"uploader_id"`
+	Name       string    `json:"name"`
 	SHA256     string    `json:"sha256"`
 	MIMEType   string    `json:"mime_type"`
 	SizeBytes  int64     `json:"size_bytes"`
@@ -49,6 +51,7 @@ type repository interface {
 	UserOrg(context.Context, uuid.UUID) (uuid.UUID, error)
 	Upsert(context.Context, File) (*File, error)
 	GetAccessible(context.Context, uuid.UUID, uuid.UUID) (*File, error)
+	ListAccessible(context.Context, uuid.UUID, string, string, int, int) ([]*File, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) (*File, error)
 }
 
@@ -68,6 +71,10 @@ func NewService(repo repository, storage objectStorage) *Service {
 }
 
 func (s *Service) Upload(ctx context.Context, data []byte) (*Response, error) {
+	return s.UploadNamed(ctx, "", data)
+}
+
+func (s *Service) UploadNamed(ctx context.Context, name string, data []byte) (*Response, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -93,7 +100,7 @@ func (s *Service) Upload(ctx context.Context, data []byte) (*Response, error) {
 		return nil, fmt.Errorf("upload media object: %w", err)
 	}
 	file, err := s.repo.Upsert(ctx, File{
-		OrgID: orgID, UploaderID: userID, SHA256: digest,
+		OrgID: orgID, UploaderID: userID, Name: cleanName(name), SHA256: digest,
 		MIMEType: mimeType, SizeBytes: int64(len(data)), MinIOKey: key,
 	})
 	if err != nil {
@@ -104,6 +111,7 @@ func (s *Service) Upload(ctx context.Context, data []byte) (*Response, error) {
 		}
 		return nil, mediaError(err)
 	}
+	// TODO(AB-49): publish a ClamAV scan job once the scanner consumer is deployed.
 	return s.response(ctx, file)
 }
 
@@ -117,6 +125,50 @@ func (s *Service) Get(ctx context.Context, mediaID uuid.UUID) (*Response, error)
 		return nil, mediaError(err)
 	}
 	return s.response(ctx, file)
+}
+
+func (s *Service) List(
+	ctx context.Context,
+	mediaType, query string,
+	limit, offset int,
+) ([]*Response, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mediaType = strings.TrimSpace(strings.ToLower(mediaType))
+	if mediaType != "" && mediaType != "image" && mediaType != "audio" {
+		return nil, apperr.ErrBadRequest.WithMessage("type must be image or audio")
+	}
+	query = strings.TrimSpace(query)
+	if len([]rune(query)) > 100 {
+		return nil, apperr.ErrBadRequest.WithMessage("query must not exceed 100 characters")
+	}
+	if limit < 0 {
+		return nil, apperr.ErrBadRequest.WithMessage("limit must be positive")
+	}
+	if limit == 0 {
+		limit = 100
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		return nil, apperr.ErrBadRequest.WithMessage("offset must not be negative")
+	}
+	files, err := s.repo.ListAccessible(ctx, userID, mediaType, query, limit, offset)
+	if err != nil {
+		return nil, mediaError(err)
+	}
+	result := make([]*Response, 0, len(files))
+	for _, file := range files {
+		response, responseErr := s.response(ctx, file)
+		if responseErr != nil {
+			return nil, responseErr
+		}
+		result = append(result, response)
+	}
+	return result, nil
 }
 
 func (s *Service) Delete(ctx context.Context, mediaID uuid.UUID) error {
@@ -151,6 +203,20 @@ func detectMIME(data []byte) string {
 	default:
 		return ""
 	}
+}
+
+func cleanName(name string) string {
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = strings.TrimSpace(path.Base(name))
+	if name == "." || name == "/" {
+		return ""
+	}
+	const maxNameRunes = 255
+	runes := []rune(name)
+	if len(runes) > maxNameRunes {
+		name = string(runes[:maxNameRunes])
+	}
+	return name
 }
 
 func mediaError(err error) error {
