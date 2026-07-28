@@ -18,6 +18,8 @@ import (
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
 	Refresh(ctx context.Context, refreshToken string) (*LoginResult, error)
+	ForgotPassword(ctx context.Context, email string) error
+	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
 	resendEmail(ctx context.Context) error
 }
@@ -50,6 +52,17 @@ type LoginResponse struct {
 	AccessToken string `json:"access_token"`
 }
 
+// ForgotPasswordRequest описывает тело запроса на восстановление пароля.
+type ForgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+// ResetPasswordRequest описывает тело запроса на установку нового пароля по токену.
+type ResetPasswordRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
 func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -66,6 +79,15 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
+	}
+
+	body, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("marshal login response: %w", err)
+	}
+
 	//nolint:gosec // Secure is configured separately for local and production environments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
@@ -79,13 +101,9 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	resp := LoginResponse{
-		AccessToken: result.AccessToken,
-	}
-
 	//nolint:gosec // The access token is intentionally returned in the response.
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		return fmt.Errorf("encode login response: %w", err)
+	if _, err := w.Write(body); err != nil {
+		return fmt.Errorf("write login response: %w", err)
 	}
 
 	return nil
@@ -124,36 +142,32 @@ func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error
 	return nil
 }
 
-func (h *authHandlers) ForgotPassword(w http.ResponseWriter, _ *http.Request) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
+func (h *authHandlers) ForgotPassword(w http.ResponseWriter, r *http.Request) error {
+	var req ForgotPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
+	}
 
-	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
-	return err
+	if err := h.svc.ForgotPassword(r.Context(), req.Email); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *authHandlers) ResetPassword(w http.ResponseWriter, _ *http.Request) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
+func (h *authHandlers) ResetPassword(w http.ResponseWriter, r *http.Request) error {
+	var req ResetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
+	}
 
-	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
-	return err
-}
+	if err := h.svc.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
+		return err
+	}
 
-func (h *authHandlers) VerifyResend(w http.ResponseWriter, _ *http.Request) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-
-	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
-	return err
-}
-
-func (h *authHandlers) EmailConfirm(w http.ResponseWriter, _ *http.Request) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-
-	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
-	return err
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (h *authHandlers) RegisterRoutes(
@@ -185,14 +199,14 @@ func (h *authHandlers) RegisterRoutes(
 	}
 
 	mux.Handle(
-		"POST /api/v1/auth/email-confirm",
+		"POST /api/v1/auth/verify-email",
 		verifyEmailIPLimit(
 			middleware.ErrorMiddleware(h.VerifyEmail),
 		),
 	)
 
 	mux.Handle(
-		"POST /api/v1/auth/verify-resend",
+		"POST /api/v1/auth/verify-email/resend",
 		verifyResendIPLimit(
 			middleware.ErrorMiddleware(
 				authMW.AuthMiddleware(
@@ -219,6 +233,15 @@ func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
+	}
+
+	body, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("marshal refresh response: %w", err)
+	}
+
 	//nolint:gosec // Secure is configured separately for local and production environments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
@@ -232,13 +255,9 @@ func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	resp := LoginResponse{
-		AccessToken: result.AccessToken,
-	}
-
 	//nolint:gosec // Returning the access token is the expected API behavior.
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		return fmt.Errorf("encode refresh response: %w", err)
+	if _, err := w.Write(body); err != nil {
+		return fmt.Errorf("write refresh response: %w", err)
 	}
 
 	return nil

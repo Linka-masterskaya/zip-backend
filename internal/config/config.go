@@ -21,6 +21,7 @@ type Config struct {
 	Yandex       YandexConfig       `mapstructure:"yandex"`
 	SMTP         SMTPConfig         `mapstructure:"smtp"`
 	Auth         AuthConfig         `mapstructure:"auth"`
+	Profile      ProfileConfig      `mapstructure:"profile"`
 	CORS         CORSConfig         `mapstructure:"cors"`
 	OpenAI       OpenAIConfig       `mapstructure:"openai"`
 	PicturesBank PicturesBankConfig `mapstructure:"pictures_bank"`
@@ -183,11 +184,20 @@ type AuthConfig struct {
 	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
 	CookieSecure             bool          `mapstructure:"cookie_secure"`
 	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
+	RefreshRateLimit         int           `mapstructure:"refresh_rate_limit"`
 	PackRateLimit            int           `mapstructure:"pack_rate_limit"`
 	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit"`
 	ResetRateLimit           int           `mapstructure:"reset_rate_limit"`
 	VerifyResendRateLimit    int           `mapstructure:"verify_resend_rate_limit"`
 	EmailConfirmRateLimit    int           `mapstructure:"email_confirm_rate_limit"`
+}
+
+// ProfileConfig contains Profile settings.
+type ProfileConfig struct {
+	EmailVerifyTTL        time.Duration `mapstructure:"verify_email_token_ttl"`
+	EmailChangeTTL        time.Duration `mapstructure:"email_change_token_ttl"`
+	EmailChangeRateLimit  int           `mapstructure:"email_change_rate_limit"`
+	EmailConfirmRateLimit int           `mapstructure:"email_confirm_rate_limit"`
 }
 
 // CORSConfig contains CORS settings.
@@ -315,8 +325,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("crypto.hmac_key", "")
 
 	// Auth defaults
+	v.SetDefault("auth.reset_password_token_ttl", "1h")
 	v.SetDefault("auth.bcrypt_cost", 12)
 	v.SetDefault("auth.login_rate_limit", 5)
+	v.SetDefault("auth.refresh_rate_limit", 10)
 	v.SetDefault("auth.require_email_verification", false)
 	v.SetDefault("auth.cookie_secure", false)
 	v.SetDefault("auth.pack_rate_limit", 60)
@@ -324,6 +336,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.reset_rate_limit", 3)
 	v.SetDefault("auth.verify_resend_rate_limit", 3)
 	v.SetDefault("auth.email_confirm_rate_limit", 10)
+
+	// Profile defaults
+	v.SetDefault("profile.verify_email_token_ttl", "24h")
+	v.SetDefault("profile.email_change_token_ttl", "24h")
+	v.SetDefault("profile.email_change_rate_limit", 3)
+	v.SetDefault("profile.email_confirm_rate_limit", 10)
 
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})

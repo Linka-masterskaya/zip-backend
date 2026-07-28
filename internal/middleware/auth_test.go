@@ -39,6 +39,7 @@ func (tj *testJWT) helperJWT() (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "access"
 	tokenString, err := token.SignedString([]byte(tj.sign))
 	if err != nil {
 		return "", fmt.Errorf("generate access token: %w", err)
@@ -147,6 +148,7 @@ func TestAuthMiddleware_NoExpiration(t *testing.T) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "access"
 	signed, err := token.SignedString([]byte(testSecret))
 	assert.NoError(t, err)
 
@@ -173,6 +175,7 @@ func TestAuthMiddleware_WrongIssuer(t *testing.T) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "access"
 	signed, err := token.SignedString([]byte(testSecret))
 	assert.NoError(t, err)
 
@@ -224,6 +227,7 @@ func TestAuthMiddleware_WrongSignature(t *testing.T) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "access"
 	signed, err := token.SignedString([]byte("completely-different-wrong-secret-key"))
 	assert.NoError(t, err)
 
@@ -250,10 +254,75 @@ func TestAuthMiddleware_MissingSubject(t *testing.T) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "access"
 	signed, err := token.SignedString([]byte(testSecret))
 	assert.NoError(t, err)
 
 	req := newTestRequest(t, "GET", "/test")
+	req.Header.Set("Authorization", "Bearer "+signed)
+	rec := httptest.NewRecorder()
+
+	handler, _, _ := captureCtxHandler()
+	au := NewAuthMW([]byte(testSecret))
+	h := ErrorMiddleware(au.AuthMiddleware(handler))
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestAuthMiddleware_MissingTokenType(t *testing.T) {
+	now := time.Now()
+
+	claims := AccessClaims{
+		Role: "defectologist",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    JWTIssuer,
+			Audience:  jwt.ClaimStrings{JWTAudience},
+			Subject:   uuid.NewString(),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(now),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	delete(token.Header, "typ")
+
+	signed, err := token.SignedString([]byte(testSecret))
+	assert.NoError(t, err)
+
+	req := newTestRequest(t, http.MethodGet, "/test")
+	req.Header.Set("Authorization", "Bearer "+signed)
+	rec := httptest.NewRecorder()
+
+	handler, _, _ := captureCtxHandler()
+	au := NewAuthMW([]byte(testSecret))
+	h := ErrorMiddleware(au.AuthMiddleware(handler))
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestAuthMiddleware_RefreshTokenRejected(t *testing.T) {
+	now := time.Now()
+
+	claims := AccessClaims{
+		Role: "defectologist",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    JWTIssuer,
+			Audience:  jwt.ClaimStrings{JWTAudience},
+			Subject:   uuid.NewString(),
+			ExpiresAt: jwt.NewNumericDate(now.Add(30 * 24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(now),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "refresh"
+
+	signed, err := token.SignedString([]byte(testSecret))
+	assert.NoError(t, err)
+
+	req := newTestRequest(t, http.MethodGet, "/test")
 	req.Header.Set("Authorization", "Bearer "+signed)
 	rec := httptest.NewRecorder()
 
@@ -323,6 +392,7 @@ func TestAuthMiddleware_WrongAudience(t *testing.T) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "access"
 	signed, err := token.SignedString([]byte(testSecret))
 	assert.NoError(t, err)
 

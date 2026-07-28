@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
-	"github.com/Linka-masterskaya/zip-backend/internal/domain"
 
 	gomail "github.com/wneessen/go-mail"
 )
 
-var subjects = map[domain.Template]string{
-	domain.EmailVerify:   "Подтверждение email",
-	domain.PasswordReset: "Сброс пароля",
-	domain.EmailChange:   "Смена email",
+//nolint:gosec
+var subjects = map[Template]string{
+	EmailVerify:   "Подтверждение email",
+	PasswordReset: "Сброс пароля",
+	EmailChange:   "Смена email",
 }
 
 //go:embed templates/*.html
@@ -29,7 +29,7 @@ type SMTPSender struct {
 	client      *gomail.Client
 	from        string
 	frontendURL string
-	templates   map[domain.Template]*template.Template
+	templates   map[Template]*template.Template
 }
 
 func newClient(cfg config.SMTPConfig) (*gomail.Client, error) {
@@ -81,7 +81,7 @@ func NewSMTPSender(cfg config.SMTPConfig, frontendURL string) (*SMTPSender, erro
 		from:        cfg.From,
 		frontendURL: frontendURL,
 
-		templates: make(map[domain.Template]*template.Template),
+		templates: make(map[Template]*template.Template),
 	}
 
 	if err := s.loadTemplates(); err != nil {
@@ -104,7 +104,7 @@ func (s *SMTPSender) loadTemplates() error {
 
 		name := entry.Name()
 		tmplName := strings.TrimSuffix(name, ".html")
-		tmpl := domain.Template(tmplName)
+		tmpl := Template(tmplName)
 
 		t, err := template.New(name).ParseFS(templatesFS, "templates/"+name)
 		if err != nil {
@@ -121,8 +121,8 @@ func (s *SMTPSender) loadTemplates() error {
 func (s *SMTPSender) Send(
 	ctx context.Context,
 	to string,
-	tmpl domain.Template,
-	data domain.EmailData,
+	tmpl Template,
+	data EmailData,
 ) error {
 	if _, err := mail.ParseAddress(to); err != nil {
 		return fmt.Errorf("invalid recipient email: %w", err)
@@ -166,7 +166,7 @@ func (s *SMTPSender) Send(
 	return nil
 }
 
-func (s *SMTPSender) getSubject(tmpl domain.Template) string {
+func (s *SMTPSender) getSubject(tmpl Template) string {
 	subject, ok := subjects[tmpl]
 	if !ok {
 		return "Уведомление от Linka"

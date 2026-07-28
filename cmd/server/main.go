@@ -28,6 +28,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/db"
+	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
@@ -74,6 +75,8 @@ func run() error {
 		AccessTokenTTL:           deps.cfg.Auth.AccessTokenTTL,
 		RefreshTokenTTL:          deps.cfg.Auth.RefreshTokenTTL,
 		VerifyEmailTokenTTL:      deps.cfg.Auth.VerifyEmailTokenTTL,
+		ResetPasswordTokenTTL:    deps.cfg.Auth.ResetPasswordTokenTTL,
+		BcryptCost:               deps.cfg.Auth.BcryptCost,
 		RequireEmailVerification: deps.cfg.Auth.RequireEmailVerification,
 		CookieSecure:             deps.cfg.Auth.CookieSecure,
 	}
@@ -86,12 +89,18 @@ func run() error {
 		deps.crypto,
 	)
 
+	checker, err := health.NewChecker(deps.db, deps.redis, deps.nc, deps.storage)
+	if err != nil {
+		return fmt.Errorf("health checker init: %w", err)
+	}
+
 	packRateLimit := middleware.RateLimit(deps.redis, "packs_api", int64(deps.cfg.Auth.PackRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	refreshRateLimit := middleware.RateLimit(deps.redis, "refresh", int64(deps.cfg.Auth.RefreshRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	forgotRateLimit := middleware.RateLimit(deps.redis, "forgot", int64(deps.cfg.Auth.ForgotRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	resetRateLimit := middleware.RateLimit(deps.redis, "reset", int64(deps.cfg.Auth.ResetRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	verifyResendRateLimit := middleware.RateLimit(deps.redis, "verify-resend", int64(deps.cfg.Auth.VerifyResendRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	emailConfirmRateLimit := middleware.RateLimit(deps.redis, "email-confirm", int64(deps.cfg.Auth.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	profileEmailChangeRateLimit := middleware.RateLimit(deps.redis, "profile-email-change", int64(deps.cfg.Profile.EmailChangeRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	profileEmailConfirmRateLimit := middleware.RateLimit(deps.redis, "profile-email-confirm", int64(deps.cfg.Profile.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 
 	mainMux := http.NewServeMux()
 	mainMux.Handle("POST /api/v1/packs", packRateLimit(middleware.ErrorMiddleware(packHandler.CreatePack)))
@@ -100,52 +109,48 @@ func run() error {
 
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
+	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
+
 	mainMux.Handle(
-		"POST /auth/login",
+		"POST /api/v1/auth/login",
 		loginRateLimit(
 			middleware.ErrorMiddleware(authHandler.Login),
 		),
 	)
-
 	mainMux.Handle(
 		"POST /auth/refresh",
-		middleware.ErrorMiddleware(authHandler.Refresh),
-	)
-
-	mainMux.Handle(
-		"POST /auth/forgot",
-		forgotRateLimit(
-			middleware.ErrorMiddleware(authHandler.ForgotPassword),
+		refreshRateLimit(
+			middleware.ErrorMiddleware(authHandler.Refresh),
 		),
 	)
 
 	mainMux.Handle(
-		"POST /auth/reset",
+		"POST /api/v1/auth/password/forgot",
+		forgotRateLimit(
+			middleware.ErrorMiddleware(authHandler.ForgotPassword),
+		),
+	)
+	mainMux.Handle(
+		"POST /api/v1/auth/password/reset",
 		resetRateLimit(
 			middleware.ErrorMiddleware(authHandler.ResetPassword),
 		),
 	)
 
-	mainMux.Handle(
-		"POST /auth/verify-resend",
-		verifyResendRateLimit(
-			middleware.ErrorMiddleware(authHandler.VerifyResend),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /auth/email-confirm",
-		emailConfirmRateLimit(
-			middleware.ErrorMiddleware(authHandler.EmailConfirm),
-		),
-	)
-
-	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
+	// Verify/resend auth-маршруты подключаются в auth handler.
 	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
 
 	profileRepo := profile.NewRepository(deps.db)
-	profileService := profile.NewService(profileRepo, deps.storage)
+	profileService := profile.NewService(profileRepo, deps.storage, deps.mailer, deps.crypto, deps.redis,
+		profile.EmailConfig{
+			EmailChangeTTL: deps.cfg.Profile.EmailChangeTTL,
+			EmailVerifyTTL: deps.cfg.Profile.EmailVerifyTTL},
+	)
 	profileHandler := profile.NewHandler(profileService)
+	mainMux.Handle(
+		"GET /api/v1/profile/me",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.GetProfile)),
+	)
 	mainMux.Handle(
 		"PUT /api/v1/profile/me/avatar",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.UploadAvatar)),
@@ -153,6 +158,26 @@ func run() error {
 	mainMux.Handle(
 		"DELETE /api/v1/profile/me/avatar",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.DeleteAvatar)),
+	)
+	mainMux.Handle(
+		"POST /api/v1/profile/me/email",
+		profileEmailChangeRateLimit(
+			middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.RequestEmailChange)),
+		),
+	)
+	mainMux.Handle(
+		"POST /api/v1/profile/me/email/confirm",
+		profileEmailConfirmRateLimit(
+			middleware.ErrorMiddleware(profileHandler.ConfirmEmailChange),
+		),
+	)
+
+	changePasswordRepo := profile.NewChangePasswordRepo(deps.db)
+	changePasswordService := profile.NewChangePasswordService(changePasswordRepo, deps.redis)
+	changePasswordHandler := profile.NewChangePasswordHandler(changePasswordService)
+	mainMux.Handle(
+		"POST /api/v1/profile/me/password",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(changePasswordHandler.ChangePassword)),
 	)
 
 	wrappedHandler := middleware.Chain(
@@ -175,10 +200,10 @@ func run() error {
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("GET /metrics", metrics.NewHandler())
 	metricsMux.HandleFunc("GET /health", healthHandler(deps.cfg.App.Env))
-	metricsMux.HandleFunc("GET /readyz", readyzHandler(deps.redis))
+	setupHealthEndpoints(metricsMux, checker)
 
 	metricsSrv := &http.Server{
-		Addr:         ":9091",
+		Addr:         ":9090",
 		Handler:      metricsMux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
@@ -280,7 +305,7 @@ func initInfra() (*infra, error) {
 		return nil, fmt.Errorf("cryptox init: %w", err)
 	}
 
-	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.PublicURL)
+	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.FrontendURL)
 	if err != nil {
 		return nil, fmt.Errorf("smtp init: %w", err)
 	}
@@ -317,30 +342,8 @@ func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
 func healthHandler(env string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok", "env": env}); err != nil {
+		if err := json.NewEncoder(w).Encode(map[string]any{"status": health.StatusOK, "env": env}); err != nil {
 			slog.Error("health response encode failed", logger.Err(err))
-		}
-	}
-}
-
-func readyzHandler(redisClient *cache.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-
-		w.Header().Set("Content-Type", "application/json")
-
-		if err := redisClient.Ping(ctx); err != nil {
-			slog.Error("readyz: redis unavailable", logger.Err(err))
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if err := json.NewEncoder(w).Encode(map[string]string{"status": "redis unavailable"}); err != nil {
-				slog.Error("readyz response encode failed", logger.Err(err))
-			}
-			return
-		}
-
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ready"}); err != nil {
-			slog.Error("readyz response encode failed", logger.Err(err))
 		}
 	}
 }
@@ -371,4 +374,26 @@ func runMigrationsIfNeeded(cfg *config.Config) {
 	}
 	log.Println("Migrations completed. Exiting.")
 	os.Exit(0)
+}
+
+// setupHealthEndpoints регистрирует эндпоинты /livez и /readyz на health/metrics мультиплексоре.
+func setupHealthEndpoints(mux *http.ServeMux, checker *health.Checker) {
+	// /livez — всегда 200 OK, без проверок
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]health.Status{"status": health.StatusAlive}); err != nil {
+			slog.Error("failed to encode /livez response", "err", err)
+		}
+	})
+
+	// /readyz — проверяет все зависимости параллельно с таймаутом 2 сек.
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		status, body := checker.Run(r.Context())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			slog.Error("failed to encode /readyz response", "err", err)
+		}
+	})
 }

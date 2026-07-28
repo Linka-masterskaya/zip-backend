@@ -45,9 +45,15 @@ func (m *AuthMW) AuthMiddleware(next AppHandler) AppHandler {
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		token, err := jwt.ParseWithClaims(tokenString, &AccessClaims{}, func(t *jwt.Token) (any, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			if t.Method != jwt.SigningMethodHS256 {
 				return nil, fmt.Errorf("auth unexpected signing method: %v", t.Header["alg"])
 			}
+
+			typ, ok := t.Header["typ"].(string)
+			if !ok || typ != "access" {
+				return nil, fmt.Errorf("auth unexpected token type: %v", t.Header["typ"])
+			}
+
 			return m.jwtSecret, nil
 		},
 			jwt.WithExpirationRequired(),

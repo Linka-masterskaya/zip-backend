@@ -1,3 +1,4 @@
+// internal/testutil/containers.go
 package testutil
 
 import (
@@ -26,9 +27,6 @@ func NewPostgres(t *testing.T) (*pgxpool.Pool, func()) {
 		postgres.WithDatabase("postgres"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
-		// Wait until PostgreSQL reports readiness in logs.
-		// Without this, connection attempts may fail because the container
-		// can be running while PostgreSQL is still starting up.
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
@@ -50,12 +48,21 @@ func NewPostgres(t *testing.T) (*pgxpool.Pool, func()) {
 		t.Fatalf("failed to create PostgreSQL connection pool: %v", err)
 	}
 	// Verify that PostgreSQL is actually reachable before returning the pool.
-	if err := dbPool.Ping(ctx); err != nil {
+	// Retry a few times with backoff.
+	var pingErr error
+	for range 10 {
+		pingErr = dbPool.Ping(ctx)
+		if pingErr == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if pingErr != nil {
 		dbPool.Close()
 		if err := pgContainer.Terminate(ctx); err != nil {
 			t.Logf("failed to terminate PostgreSQL container after ping error: %v", err)
 		}
-		t.Fatalf("failed to ping PostgreSQL: %v", err)
+		t.Fatalf("failed to ping PostgreSQL: %v", pingErr)
 	}
 	// Cleanup closes all database connections and removes the container.
 	cleanup := func() {
@@ -144,12 +151,21 @@ func NewPostgresCtx(ctx context.Context) (*pgxpool.Pool, func(), error) {
 		return nil, nil, fmt.Errorf("create pool: %w", err)
 	}
 
-	if err := dbPool.Ping(ctx); err != nil {
+	// Retry ping a few times with backoff.
+	var pingErr error
+	for range 10 {
+		pingErr = dbPool.Ping(ctx)
+		if pingErr == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if pingErr != nil {
 		dbPool.Close()
 		if err := pgContainer.Terminate(ctx); err != nil {
 			slog.Error("failed to terminate postgres container", "err", err)
 		}
-		return nil, nil, fmt.Errorf("ping postgres: %w", err)
+		return nil, nil, fmt.Errorf("ping postgres: %w", pingErr)
 	}
 
 	cleanup := func() {

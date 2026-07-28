@@ -40,6 +40,20 @@ func (m *MockauthServiceIface) EXPECT() *MockauthServiceIfaceMockRecorder {
 	return m.recorder
 }
 
+// ForgotPassword mocks base method.
+func (m *MockauthServiceIface) ForgotPassword(ctx context.Context, email string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ForgotPassword", ctx, email)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ForgotPassword indicates an expected call of ForgotPassword.
+func (mr *MockauthServiceIfaceMockRecorder) ForgotPassword(ctx, email any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForgotPassword", reflect.TypeOf((*MockauthServiceIface)(nil).ForgotPassword), ctx, email)
+}
+
 // Login mocks base method.
 func (m *MockauthServiceIface) Login(ctx context.Context, email, password string) (*LoginResult, error) {
 	m.ctrl.T.Helper()
@@ -68,6 +82,20 @@ func (m *MockauthServiceIface) Refresh(ctx context.Context, refreshToken string)
 func (mr *MockauthServiceIfaceMockRecorder) Refresh(ctx, refreshToken any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refresh", reflect.TypeOf((*MockauthServiceIface)(nil).Refresh), ctx, refreshToken)
+}
+
+// ResetPassword mocks base method.
+func (m *MockauthServiceIface) ResetPassword(ctx context.Context, token, newPassword string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResetPassword", ctx, token, newPassword)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ResetPassword indicates an expected call of ResetPassword.
+func (mr *MockauthServiceIfaceMockRecorder) ResetPassword(ctx, token, newPassword any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetPassword", reflect.TypeOf((*MockauthServiceIface)(nil).ResetPassword), ctx, token, newPassword)
 }
 
 // resendEmail mocks base method.

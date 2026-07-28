@@ -11,17 +11,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
-	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 )
 
-var ErrInvalidCredentials = errors.New("invalid credentials")
-var ErrEmailNotVerified = errors.New("email not verified")
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrEmailNotVerified   = errors.New("email not verified")
+)
 
 var dummyPasswordHash = []byte("$2a$10$UlCQgLZoLjUzrtYRUUlkPeh/m5L2pl9aYzDTUaZAD3R4Pd8ONSof6")
 
@@ -36,6 +39,8 @@ func runDummyPasswordCompare(password string) {
 //go:generate mockgen -source=service.go -destination=mock_repo_test.go -package=auth
 type authRepoIface interface {
 	GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
+	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
+	ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (string, error)
 
 	beginTx(ctx context.Context) (pgx.Tx, error)
 	withTx(tx pgx.Tx) authRepoIface
@@ -60,23 +65,28 @@ type refreshStore interface {
 		rec cache.RefreshRecord,
 		ttl time.Duration,
 	) error
+
 	GetRefresh(
 		ctx context.Context,
 		jti string,
-	) (*cache.RefreshRecord,
-		error)
+	) (*cache.RefreshRecord, error)
+
 	RevokeFamily(
 		ctx context.Context,
 		fid string,
 	) error
+
 	IsFamilyRevoked(
 		ctx context.Context,
 		fid string,
 	) (bool, error)
+
 	RotateRefresh(
 		ctx context.Context,
 		req cache.RotateRefreshRequest,
 	) error
+
+	RevokeAllSessions(ctx context.Context, userID string) error
 }
 
 type cryptoService interface {
@@ -90,6 +100,8 @@ type Config struct {
 	AccessTokenTTL           time.Duration
 	RefreshTokenTTL          time.Duration
 	VerifyEmailTokenTTL      time.Duration
+	ResetPasswordTokenTTL    time.Duration
+	BcryptCost               int
 	RequireEmailVerification bool
 	CookieSecure             bool
 }
@@ -102,18 +114,12 @@ type LoginResult struct {
 type authService struct {
 	repo   authRepoIface
 	cache  refreshStore
-	mailer domain.EmailSender
+	mailer mailer.EmailSender
 	cfg    Config
 	crp    cryptoService
 }
 
-func NewAuthService(
-	repo authRepoIface,
-	cache refreshStore,
-	mailer domain.EmailSender,
-	cfg Config,
-	crp cryptoService,
-) *authService {
+func NewAuthService(repo authRepoIface, cache refreshStore, mailer mailer.EmailSender, cfg Config, crp cryptoService) *authService {
 	return &authService{
 		repo:   repo,
 		cache:  cache,
@@ -123,15 +129,12 @@ func NewAuthService(
 	}
 }
 
-func (au *authService) Login(
-	ctx context.Context,
-	email, password string,
-) (*LoginResult, error) {
+func (au *authService) Login(ctx context.Context, email, password string) (*LoginResult, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	emailHash := au.crp.Hash([]byte(email))
 
 	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
-	if errors.Is(err, ErrUserNotFound) {
+	if errors.Is(err, apperr.ErrUserNotFound) {
 		runDummyPasswordCompare(password)
 		return nil, ErrInvalidCredentials
 	}
@@ -171,6 +174,7 @@ func (au *authService) Login(
 	rec := cache.RefreshRecord{
 		FID:    fid,
 		Status: "active",
+		UserID: user.ID,
 	}
 
 	if err := au.cache.StoreRefresh(
@@ -188,10 +192,7 @@ func (au *authService) Login(
 	}, nil
 }
 
-func (au *authService) verifyEmail(
-	ctx context.Context,
-	verifyToken string,
-) error {
+func (au *authService) verifyEmail(ctx context.Context, verifyToken string) error {
 	raw, err := base64.RawURLEncoding.DecodeString(verifyToken)
 	if err != nil {
 		return apperr.ErrVerifyTokenInvalid
@@ -286,8 +287,8 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	err = au.mailer.Send(
 		ctx,
 		string(email),
-		domain.EmailVerify,
-		domain.EmailData{
+		mailer.EmailVerify,
+		mailer.EmailData{
 			Token: verifyURL,
 		},
 	)
@@ -298,10 +299,7 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	return nil
 }
 
-func (au *authService) Refresh(
-	ctx context.Context,
-	refreshToken string,
-) (*LoginResult, error) {
+func (au *authService) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
 	claims, err := au.parseRefreshToken(refreshToken)
 	if err != nil {
 		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
@@ -335,6 +333,9 @@ func (au *authService) Refresh(
 	}
 
 	user, err := au.repo.GetUserByID(ctx, userID)
+	if errors.Is(err, apperr.ErrUserNotFound) {
+		return nil, apperr.ErrUnauthorized
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get user by id: %w", err)
 	}
@@ -353,6 +354,7 @@ func (au *authService) Refresh(
 	newRec := cache.RefreshRecord{
 		FID:    rec.FID,
 		Status: "active",
+		UserID: rec.UserID,
 	}
 
 	req := cache.RotateRefreshRequest{
@@ -362,7 +364,18 @@ func (au *authService) Refresh(
 		TTL:       au.cfg.RefreshTokenTTL,
 	}
 
-	if err := au.cache.RotateRefresh(ctx, req); err != nil {
+	err = au.cache.RotateRefresh(ctx, req)
+	if errors.Is(err, cache.ErrRefreshNotActive) {
+		if revokeErr := au.cache.RevokeFamily(ctx, rec.FID); revokeErr != nil {
+			return nil, fmt.Errorf("revoke refresh family: %w", revokeErr)
+		}
+
+		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+	if errors.Is(err, cache.ErrNotFound) {
+		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("rotate refresh: %w", err)
 	}
 

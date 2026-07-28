@@ -44,6 +44,21 @@ func (m *MockauthRepoIface) EXPECT() *MockauthRepoIfaceMockRecorder {
 	return m.recorder
 }
 
+// CreatePasswordResetToken mocks base method.
+func (m *MockauthRepoIface) CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreatePasswordResetToken", ctx, userID, ttl)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreatePasswordResetToken indicates an expected call of CreatePasswordResetToken.
+func (mr *MockauthRepoIfaceMockRecorder) CreatePasswordResetToken(ctx, userID, ttl any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePasswordResetToken", reflect.TypeOf((*MockauthRepoIface)(nil).CreatePasswordResetToken), ctx, userID, ttl)
+}
+
 // GetUserByEmailHash mocks base method.
 func (m *MockauthRepoIface) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error) {
 	m.ctrl.T.Helper()
@@ -72,6 +87,21 @@ func (m *MockauthRepoIface) GetUserByID(ctx context.Context, userID uuid.UUID) (
 func (mr *MockauthRepoIfaceMockRecorder) GetUserByID(ctx, userID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByID", reflect.TypeOf((*MockauthRepoIface)(nil).GetUserByID), ctx, userID)
+}
+
+// ResetPasswordByToken mocks base method.
+func (m *MockauthRepoIface) ResetPasswordByToken(ctx context.Context, token, passwordHash string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResetPasswordByToken", ctx, token, passwordHash)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ResetPasswordByToken indicates an expected call of ResetPasswordByToken.
+func (mr *MockauthRepoIfaceMockRecorder) ResetPasswordByToken(ctx, token, passwordHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetPasswordByToken", reflect.TypeOf((*MockauthRepoIface)(nil).ResetPasswordByToken), ctx, token, passwordHash)
 }
 
 // beginTx mocks base method.
@@ -229,6 +259,20 @@ func (m *MockrefreshStore) IsFamilyRevoked(ctx context.Context, fid string) (boo
 func (mr *MockrefreshStoreMockRecorder) IsFamilyRevoked(ctx, fid any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsFamilyRevoked", reflect.TypeOf((*MockrefreshStore)(nil).IsFamilyRevoked), ctx, fid)
+}
+
+// RevokeAllSessions mocks base method.
+func (m *MockrefreshStore) RevokeAllSessions(ctx context.Context, userID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RevokeAllSessions", ctx, userID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RevokeAllSessions indicates an expected call of RevokeAllSessions.
+func (mr *MockrefreshStoreMockRecorder) RevokeAllSessions(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevokeAllSessions", reflect.TypeOf((*MockrefreshStore)(nil).RevokeAllSessions), ctx, userID)
 }
 
 // RevokeFamily mocks base method.

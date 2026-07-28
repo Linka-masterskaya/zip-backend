@@ -6,13 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrNotFound - sentinel error returned by Client lookups.
-var ErrNotFound = errors.New("redis: key not found")
+var (
+	// ErrNotFound is returned when a requested Redis record does not exist.
+	ErrNotFound = errors.New("redis: key not found")
+
+	// ErrRefreshNotActive is returned when a refresh token has already
+	// been used or revoked and therefore cannot be rotated again.
+	ErrRefreshNotActive = errors.New("redis: refresh token is not active")
+)
 
 type Config struct {
 	URL        string
@@ -85,6 +92,54 @@ end
 return count
 `)
 
+// rotateRefresh atomically checks and revokes the old refresh token,
+// stores the new token, and extends the refresh-family TTL.
+//
+// Return values:
+// 0 - old refresh record does not exist;
+// 1 - rotation completed successfully;
+// 2 - old refresh token is no longer active.
+var rotateRefresh = redis.NewScript(`
+-- KEYS[1]: old refresh key
+-- KEYS[2]: new refresh key
+-- KEYS[3]: refresh family key
+
+-- ARGV[1]: family ID
+-- ARGV[2]: user ID
+-- ARGV[3]: session version
+-- ARGV[4]: TTL in seconds
+
+local status = redis.call("HGET", KEYS[1], "status")
+
+if not status then
+	return 0
+end
+
+if status ~= "active" then
+	return 2
+end
+
+redis.call(
+	"HSET",
+	KEYS[1],
+	"status", "revoked"
+)
+
+redis.call(
+	"HSET",
+	KEYS[2],
+	"fid", ARGV[1],
+	"status", "active",
+	"user_id", ARGV[2],
+	"sess_ver", ARGV[3]
+)
+
+redis.call("EXPIRE", KEYS[2], ARGV[4])
+redis.call("EXPIRE", KEYS[3], ARGV[4])
+
+return 1
+`)
+
 // IncrCounter atomically increments key and sets ttl on first increment via Lua.
 func (c *Client) IncrCounter(ctx context.Context, key string, ttl time.Duration) (int64, error) {
 	count, err := incrWithTTL.Run(ctx, c.rdb, []string{key}, int(ttl.Seconds())).Int64()
@@ -120,8 +175,10 @@ func (c *Client) Allow(ctx context.Context, req RateLimitRequest) (bool, int64, 
 
 // RefreshRecord is a refresh token stored as a Redis hash under refresh:{jti}.
 type RefreshRecord struct {
-	FID    string `redis:"fid"`
-	Status string `redis:"status"`
+	FID            string `redis:"fid"`
+	Status         string `redis:"status"`
+	UserID         string `redis:"user_id"`
+	SessionVersion int64  `redis:"sess_ver"`
 }
 
 // RotateRefreshRequest carries data to rotate a refresh token atomically.
@@ -162,12 +219,56 @@ func (c *Client) RevokeFamily(ctx context.Context, fid string) error {
 	return nil
 }
 
+// GetUserSessionVersion returns the current session-version counter for a
+// user, or 0 if the user has never had their sessions bulk-revoked.
+func (c *Client) GetUserSessionVersion(ctx context.Context, userID string) (int64, error) {
+	val, err := c.getString(ctx, "user_session_version:"+userID)
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("redis.GetUserSessionVersion: %w", err)
+	}
+	version, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("redis.GetUserSessionVersion: parse: %w", err)
+	}
+	return version, nil
+}
+
+// The IsSessionRevoked function reports if the record is no longer valid: either its family
+// has been revoked individually (RevokeFamily), or it was released before the last
+// mass revocation of user sessions (RevokeAllSessions).
+func (c *Client) IsSessionRevoked(ctx context.Context, rec RefreshRecord) (bool, error) {
+	familyRevoked, err := c.IsFamilyRevoked(ctx, rec.FID)
+	if err != nil {
+		return false, fmt.Errorf("redis.IsSessionRevoked: %w", err)
+	}
+	if familyRevoked {
+		return true, nil
+	}
+
+	version, err := c.GetUserSessionVersion(ctx, rec.UserID)
+	if err != nil {
+		return false, fmt.Errorf("redis.IsSessionRevoked: %w", err)
+	}
+	return rec.SessionVersion < version, nil
+}
+
 // StoreRefresh saves a refresh token and marks its family active, with ttl.
+// The record is stamped with the user's current session version
+// (RevokeAllSessions) so it can later be recognized as stale in bulk.
 func (c *Client) StoreRefresh(ctx context.Context, jti string, rec RefreshRecord, ttl time.Duration) error {
+	version, err := c.GetUserSessionVersion(ctx, rec.UserID)
+	if err != nil {
+		return fmt.Errorf("redis.StoreRefresh: %w", err)
+	}
+	rec.SessionVersion = version
+
 	tokenKey := "refresh:" + jti
 	familyKey := "refresh_family:" + rec.FID
 
-	_, err := c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+	_, err = c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.HSet(ctx, tokenKey, rec)
 		pipe.Expire(ctx, tokenKey, ttl)
 		pipe.Set(ctx, familyKey, "active", ttl)
@@ -179,23 +280,57 @@ func (c *Client) StoreRefresh(ctx context.Context, jti string, rec RefreshRecord
 	return nil
 }
 
-// RotateRefresh atomically revokes the old token, stores the new one, and extends the family TTL.
+// RevokeAllSessions invalidates every refresh token issued so far for a user.
+func (c *Client) RevokeAllSessions(ctx context.Context, userID string) error {
+	if err := c.rdb.Incr(ctx, "user_session_version:"+userID).Err(); err != nil {
+		return fmt.Errorf("redis.RevokeAllSessions: %w", err)
+	}
+	return nil
+}
+
+// RotateRefresh atomically checks and revokes the old refresh token,
+// stores the new token, and extends the family TTL.
 func (c *Client) RotateRefresh(ctx context.Context, req RotateRefreshRequest) error {
+	version, err := c.GetUserSessionVersion(ctx, req.NewRecord.UserID)
+	if err != nil {
+		return fmt.Errorf("redis.RotateRefresh: %w", err)
+	}
+	req.NewRecord.SessionVersion = version
+
 	oldKey := "refresh:" + req.OldJTI
 	newKey := "refresh:" + req.NewJTI
 	familyKey := "refresh_family:" + req.NewRecord.FID
 
-	_, err := c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.HSet(ctx, oldKey, "status", "revoked")
-		pipe.HSet(ctx, newKey, req.NewRecord)
-		pipe.Expire(ctx, newKey, req.TTL)
-		pipe.Expire(ctx, familyKey, req.TTL)
-		return nil
-	})
+	result, err := rotateRefresh.Run(
+		ctx,
+		c.rdb,
+		[]string{
+			oldKey,
+			newKey,
+			familyKey,
+		},
+		req.NewRecord.FID,
+		req.NewRecord.UserID,
+		req.NewRecord.SessionVersion,
+		int64(req.TTL.Seconds()),
+	).Int()
 	if err != nil {
-		return fmt.Errorf("redis.RotateRefresh: %w", err)
+		return fmt.Errorf("redis.RotateRefresh: execute script: %w", err)
 	}
-	return nil
+
+	switch result {
+	case 0:
+		return ErrNotFound
+	case 1:
+		return nil
+	case 2:
+		return ErrRefreshNotActive
+	default:
+		return fmt.Errorf(
+			"redis.RotateRefresh: unexpected script result: %d",
+			result,
+		)
+	}
 }
 
 // getHash loads the hash at key into dest, or returns ErrNotFound.
