@@ -304,13 +304,45 @@ func (au *authService) Refresh(ctx context.Context, refreshToken string) (*Login
 	if err != nil {
 		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
 	}
-	rec, err := au.cache.GetRefresh(ctx, claims.ID)
+
+	rec, err := au.getActiveRefreshRecord(ctx, claims.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := au.getRefreshUser(ctx, claims.Subject)
+	if err != nil {
+		return nil, err
+	}
+
+	accessToken, err := au.generateAccessToken(user)
+	if err != nil {
+		return nil, fmt.Errorf("generate access token: %w", err)
+	}
+
+	newRefreshToken, err := au.rotateRefresh(ctx, claims.ID, rec, user)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LoginResult{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+	}, nil
+}
+
+func (au *authService) getActiveRefreshRecord(
+	ctx context.Context,
+	jti string,
+) (*cache.RefreshRecord, error) {
+	rec, err := au.cache.GetRefresh(ctx, jti)
 	if errors.Is(err, cache.ErrNotFound) {
 		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get refresh token: %w", err)
 	}
+
 	if rec.Status == "revoked" {
 		if err := au.cache.RevokeFamily(ctx, rec.FID); err != nil {
 			return nil, fmt.Errorf("revoke refresh family: %w", err)
@@ -318,16 +350,20 @@ func (au *authService) Refresh(ctx context.Context, refreshToken string) (*Login
 
 		return nil, apperr.ErrJWTTokenInvalid
 	}
+
 	revoked, err := au.cache.IsFamilyRevoked(ctx, rec.FID)
 	if err != nil {
 		return nil, fmt.Errorf("check refresh family: %w", err)
 	}
-
 	if revoked {
 		return nil, apperr.ErrJWTTokenInvalid
 	}
 
-	userID, err := uuid.Parse(claims.Subject)
+	return rec, nil
+}
+
+func (au *authService) getRefreshUser(ctx context.Context, subject string) (*User, error) {
+	userID, err := uuid.Parse(subject)
 	if err != nil {
 		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
 	}
@@ -339,48 +375,48 @@ func (au *authService) Refresh(ctx context.Context, refreshToken string) (*Login
 	if err != nil {
 		return nil, fmt.Errorf("get user by id: %w", err)
 	}
-	accessToken, err := au.generateAccessToken(user)
-	if err != nil {
-		return nil, fmt.Errorf("generate access token: %w", err)
-	}
 
+	return user, nil
+}
+
+func (au *authService) rotateRefresh(
+	ctx context.Context,
+	oldJTI string,
+	rec *cache.RefreshRecord,
+	user *User,
+) (string, error) {
 	newJTI := uuid.NewString()
 
 	newRefreshToken, err := au.generateRefreshToken(user, newJTI)
 	if err != nil {
-		return nil, fmt.Errorf("generate refresh token: %w", err)
-	}
-
-	newRec := cache.RefreshRecord{
-		FID:    rec.FID,
-		Status: "active",
-		UserID: rec.UserID,
+		return "", fmt.Errorf("generate refresh token: %w", err)
 	}
 
 	req := cache.RotateRefreshRequest{
-		OldJTI:    claims.ID,
-		NewJTI:    newJTI,
-		NewRecord: newRec,
-		TTL:       au.cfg.RefreshTokenTTL,
+		OldJTI: oldJTI,
+		NewJTI: newJTI,
+		NewRecord: cache.RefreshRecord{
+			FID:    rec.FID,
+			Status: "active",
+			UserID: rec.UserID,
+		},
+		TTL: au.cfg.RefreshTokenTTL,
 	}
 
 	err = au.cache.RotateRefresh(ctx, req)
 	if errors.Is(err, cache.ErrRefreshNotActive) {
 		if revokeErr := au.cache.RevokeFamily(ctx, rec.FID); revokeErr != nil {
-			return nil, fmt.Errorf("revoke refresh family: %w", revokeErr)
+			return "", fmt.Errorf("revoke refresh family: %w", revokeErr)
 		}
 
-		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+		return "", apperr.ErrJWTTokenInvalid.WithError(err)
 	}
 	if errors.Is(err, cache.ErrNotFound) {
-		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+		return "", apperr.ErrJWTTokenInvalid.WithError(err)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("rotate refresh: %w", err)
+		return "", fmt.Errorf("rotate refresh: %w", err)
 	}
 
-	return &LoginResult{
-		AccessToken:  accessToken,
-		RefreshToken: newRefreshToken,
-	}, nil
+	return newRefreshToken, nil
 }

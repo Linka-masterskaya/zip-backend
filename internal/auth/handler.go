@@ -83,6 +83,7 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 		AccessToken: result.AccessToken,
 	}
 
+	//nolint:gosec // The access token is intentionally serialized into the API response.
 	body, err := json.Marshal(resp)
 	if err != nil {
 		return fmt.Errorf("marshal login response: %w", err)
@@ -237,6 +238,7 @@ func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
 		AccessToken: result.AccessToken,
 	}
 
+	//nolint:gosec // The access token is intentionally serialized into the API response.
 	body, err := json.Marshal(resp)
 	if err != nil {
 		return fmt.Errorf("marshal refresh response: %w", err)
