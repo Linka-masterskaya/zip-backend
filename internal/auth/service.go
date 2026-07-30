@@ -2,198 +2,282 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
-var ErrUserNotFound = errors.New("user not found")
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrEmailNotVerified   = errors.New("email not verified")
+)
 
-type Service struct {
-	repo      RepositoryInterface
-	txRepo    TxRepository
-	crypto    CryptoInterface
-	jwtSecret string
+var dummyPasswordHash = []byte("$2a$10$UlCQgLZoLjUzrtYRUUlkPeh/m5L2pl9aYzDTUaZAD3R4Pd8ONSof6")
+
+// runDummyPasswordCompare performs a bcrypt comparison only to keep the
+// execution time similar for existing and non-existing users.
+//
+//nolint:errcheck // result is intentionally ignored for timing consistency.
+func runDummyPasswordCompare(password string) {
+	_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
 }
 
-type CryptoInterface interface {
+//go:generate mockgen -source=service.go -destination=mock_repo_test.go -package=auth
+type authRepoIface interface {
+	GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
+
+	beginTx(ctx context.Context) (pgx.Tx, error)
+	withTx(tx pgx.Tx) authRepoIface
+	useEmailVerifyToken(ctx context.Context, token []byte) (uuid.UUID, uuid.UUID, error)
+	verifyUser(ctx context.Context, userID uuid.UUID) error
+	verifyStudent(ctx context.Context, studentID uuid.UUID) error
+	getUserContactForResend(ctx context.Context, userID uuid.UUID) ([]byte, bool, error)
+	rotateEmailTokens(
+		ctx context.Context,
+		tokenID, userID uuid.UUID,
+		hash []byte,
+		expiresAt time.Time,
+	) error
+}
+
+type refreshStore interface {
+	StoreRefresh(
+		ctx context.Context,
+		jti string,
+		rec cache.RefreshRecord,
+		ttl time.Duration,
+	) error
+}
+
+type cryptoService interface {
 	Hash(data []byte) []byte
-	Encrypt(data []byte) ([]byte, error)
-	Decrypt(data []byte) ([]byte, error)
+	Decrypt(ciphertext []byte) ([]byte, error)
 }
 
-type User struct {
-	ID        uuid.UUID  `json:"id"`
-	Name      string     `json:"name"`
-	AvatarKey *string    `json:"avatar_key,omitempty"`
-	OrgID     *uuid.UUID `json:"org_id,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+type Config struct {
+	JWTSecret                string
+	FrontendURL              string
+	AccessTokenTTL           time.Duration
+	RefreshTokenTTL          time.Duration
+	VerifyEmailTokenTTL      time.Duration
+	RequireEmailVerification bool
+	CookieSecure             bool
 }
 
-type UserCred struct {
-	UserID         uuid.UUID `json:"user_id"`
-	EmailEncrypted []byte    `json:"-"`
-	EmailHash      []byte    `json:"-"`
-	PasswordHash   *string   `json:"-"`
-	Role           string    `json:"role"`
+type LoginResult struct {
+	AccessToken  string
+	RefreshToken string
 }
 
-type UserIdentity struct {
-	ID          uuid.UUID `json:"id"`
-	UserID      uuid.UUID `json:"user_id"`
-	Provider    string    `json:"provider"`
-	ProviderUID string    `json:"provider_uid"`
-	CreatedAt   time.Time `json:"created_at"`
+type authService struct {
+	repo   authRepoIface
+	cache  refreshStore
+	mailer mailer.EmailSender
+	cfg    Config
+	crp    cryptoService
 }
 
-func NewService(
-	repo RepositoryInterface,
-	txRepo TxRepository,
-	crypto CryptoInterface,
-	jwtSecret string,
-) *Service {
-	return &Service{
-		repo:      repo,
-		txRepo:    txRepo,
-		crypto:    crypto,
-		jwtSecret: jwtSecret,
+func NewAuthService(
+	repo authRepoIface,
+	cache refreshStore,
+	mailer mailer.EmailSender,
+	cfg Config,
+	crp cryptoService,
+) *authService {
+	return &authService{
+		repo:   repo,
+		cache:  cache,
+		mailer: mailer,
+		cfg:    cfg,
+		crp:    crp,
 	}
 }
 
-func (s *Service) UpsertUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
-	user, cred, err := s.handleExistingIdentity(ctx, name, yandexID)
+func (au *authService) Login(
+	ctx context.Context,
+	email, password string,
+) (*LoginResult, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	emailHash := au.crp.Hash([]byte(email))
+
+	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
+	if errors.Is(err, ErrUserNotFound) {
+		runDummyPasswordCompare(password)
+		return nil, ErrInvalidCredentials
+	}
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("get user by email hash: %w", err)
 	}
-	if user != nil {
-		return user, cred, nil
+
+	if user.PasswordHash == nil {
+		runDummyPasswordCompare(password)
+		return nil, ErrInvalidCredentials
 	}
-	user, cred, err = s.handleExistingEmail(ctx, email, name, yandexID)
+
+	if err := bcrypt.CompareHashAndPassword(
+		[]byte(*user.PasswordHash),
+		[]byte(password),
+	); err != nil {
+		return nil, ErrInvalidCredentials
+	}
+
+	if au.cfg.RequireEmailVerification && !user.EmailVerified {
+		return nil, ErrEmailNotVerified
+	}
+
+	accessToken, err := au.generateAccessToken(user)
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("generate access token: %w", err)
 	}
-	if user != nil {
-		return user, cred, nil
+
+	jti := uuid.NewString()
+	fid := uuid.NewString()
+
+	refreshToken, err := au.generateRefreshToken(user, jti)
+	if err != nil {
+		return nil, fmt.Errorf("generate refresh token: %w", err)
 	}
-	return s.createNewUser(ctx, email, name, yandexID)
+
+	rec := cache.RefreshRecord{
+		FID:    fid,
+		Status: "active",
+	}
+
+	if err := au.cache.StoreRefresh(
+		ctx,
+		jti,
+		rec,
+		au.cfg.RefreshTokenTTL,
+	); err != nil {
+		return nil, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	return &LoginResult{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+	}, nil
 }
 
-func (s *Service) handleExistingEmail(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
-	emailHash := s.crypto.Hash([]byte(email))
-	cred, err := s.repo.FindUserCredByEmailHash(ctx, emailHash)
+func (au *authService) verifyEmail(
+	ctx context.Context,
+	verifyToken string,
+) error {
+	raw, err := base64.RawURLEncoding.DecodeString(verifyToken)
 	if err != nil {
-		return nil, nil, fmt.Errorf("find userCred by email_hash: %w", err)
-	}
-	if cred == nil {
-		return nil, nil, nil
+		return apperr.ErrVerifyTokenInvalid
 	}
 
-	slog.Warn("attempt to takeover existing email via yandex oauth",
-		"name", name,
-		"yandex_id", yandexID,
-		"existing_user_id", cred.UserID,
-	)
+	tokenHash := sha256.Sum256(raw)
+	token := tokenHash[:]
 
-	return nil, nil, ErrEmailAlreadyRegistered
-}
-
-func (s *Service) handleExistingIdentity(ctx context.Context, name, yandexID string) (*User, *UserCred, error) {
-	identity, err := s.repo.FindIdentityByProviderUID(ctx, "yandex", yandexID)
+	tx, err := au.repo.beginTx(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("find identity by yandex_id: %w", err)
-	}
-	if identity == nil {
-		return nil, nil, nil
+		return fmt.Errorf("authService.verifyEmail: %w", err)
 	}
 
-	user, err := s.repo.FindUserByID(ctx, identity.UserID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("find user by id: %w", err)
-	}
-	if user == nil {
-		return nil, nil, fmt.Errorf("user not found for identity")
-	}
-
-	user.Name = name
-	if err := s.repo.UpdateUser(ctx, user); err != nil {
-		return nil, nil, fmt.Errorf("update user: %w", err)
-	}
-
-	cred, err := s.repo.FindUserCredByUserID(ctx, user.ID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("find userCred by user_id: %w", err)
-	}
-	if cred == nil {
-		return nil, nil, fmt.Errorf("userCred not found for user")
-	}
-	return user, cred, nil
-}
-
-func (s *Service) createNewUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
-	tx, err := s.txRepo.Begin(ctx) // ← используем txRepo
-	if err != nil {
-		return nil, nil, fmt.Errorf("begin tx: %w", err)
-	}
 	defer func() {
 		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			slog.Warn("failed to rollback transaction", "error", err)
+			slog.Error("tx rollback failed", "err", err)
 		}
 	}()
-	txRepo := s.txRepo.withTx(tx)
 
-	userID := uuid.New()
-	if err := txRepo.CreateUser(ctx, CreateUserParams{
-		ID:             userID,
-		OrganizationID: nil,
-		Name:           name,
-	}); err != nil {
-		return nil, nil, fmt.Errorf("create user: %w", err)
-	}
+	txRepo := au.repo.withTx(tx)
 
-	emailHash := s.crypto.Hash([]byte(email))
-	emailEncrypted, err := s.crypto.Encrypt([]byte(email))
+	userID, studentID, err := txRepo.useEmailVerifyToken(ctx, token)
 	if err != nil {
-		return nil, nil, fmt.Errorf("encrypt email: %w", err)
+		return err
 	}
 
-	if err := txRepo.CreateAuthCred(ctx, CreateAuthCredParams{
-		UserID:         userID,
-		EmailHash:      emailHash,
-		EmailEncrypted: emailEncrypted,
-		PasswordHash:   "",
-		Role:           "viewer",
-	}); err != nil {
-		return nil, nil, fmt.Errorf("create authCred: %w", err)
+	switch {
+	case userID != uuid.Nil:
+		err = txRepo.verifyUser(ctx, userID)
+	case studentID != uuid.Nil:
+		err = txRepo.verifyStudent(ctx, studentID)
+	default:
+		return fmt.Errorf("authService.verifyEmail: token has no owner")
 	}
-
-	if err := txRepo.CreateIdentity(ctx, &UserIdentity{
-		ID:          uuid.New(),
-		UserID:      userID,
-		Provider:    "yandex",
-		ProviderUID: yandexID,
-	}); err != nil {
-		return nil, nil, fmt.Errorf("create identity: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, nil, fmt.Errorf("commit tx: %w", err)
-	}
-
-	user, err := s.repo.FindUserByID(ctx, userID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("find created user: %w", err)
+		return err
 	}
 
-	cred, err := s.repo.FindUserCredByUserID(ctx, userID)
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("authService.verifyEmail: %w", err)
+	}
+
+	return nil
+}
+
+func (au *authService) resendEmail(ctx context.Context) error {
+	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("find created userCred: %w", err)
+		return err
 	}
 
-	return user, cred, nil
+	emailEncrypted, emailVerified, err := au.repo.getUserContactForResend(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if emailVerified {
+		return nil
+	}
+
+	email, err := au.crp.Decrypt(emailEncrypted)
+	if err != nil {
+		return fmt.Errorf("authService.resendEmail: %w", err)
+	}
+
+	tokenRaw := make([]byte, 32)
+	if _, err := rand.Read(tokenRaw); err != nil {
+		return fmt.Errorf("authService.resendEmail: %w", err)
+	}
+
+	hashToken := sha256.Sum256(tokenRaw)
+
+	tokenID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("authService.resendEmail: %w", err)
+	}
+
+	err = au.repo.rotateEmailTokens(
+		ctx,
+		tokenID,
+		userID,
+		hashToken[:],
+		time.Now().Add(au.cfg.VerifyEmailTokenTTL),
+	)
+	if err != nil {
+		return fmt.Errorf("authService.resendEmail: %w", err)
+	}
+
+	verifyURL := au.cfg.FrontendURL +
+		"/verify-email?token=" +
+		base64.RawURLEncoding.EncodeToString(tokenRaw)
+
+	err = au.mailer.Send(
+		ctx,
+		string(email),
+		mailer.EmailVerify,
+		mailer.EmailData{
+			Token: verifyURL,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("authService.resendEmail: %w", err)
+	}
+
+	return nil
 }
