@@ -27,3 +27,18 @@ type CreateVerifyTokenParams struct {
 	TokenHash []byte
 	ExpiresAt time.Time
 }
+
+type UserCred struct {
+	UserID         uuid.UUID `json:"user_id"`
+	EmailEncrypted []byte    `json:"-"`
+	EmailHash      []byte    `json:"-"`
+	PasswordHash   *string   `json:"-"`
+	Role           string    `json:"role"`
+}
+type UserIdentity struct {
+	ID          uuid.UUID `json:"id"`
+	UserID      uuid.UUID `json:"user_id"`
+	Provider    string    `json:"provider"`
+	ProviderUID string    `json:"provider_uid"`
+	CreatedAt   time.Time `json:"created_at"`
+}

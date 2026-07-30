@@ -256,18 +256,19 @@ func (r *authRepo) getUserContactForResend(
 	return emailEncrypted, emailVerified, nil
 }
 
+// GetUserByID retrieves user by ID
 func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
 	query := `
-        SELECT
-            u.id,
-            u.org_id,
-            ac.password_hash,
-            ac.role,
-            u.email_verified
-        FROM users u
-        JOIN auth_cred ac ON ac.user_id = u.id
-        WHERE u.id = $1 AND u.deleted_at IS NULL
-    `
+		SELECT
+			u.id,
+			u.org_id,
+			ac.password_hash,
+			ac.role,
+			u.email_verified
+		FROM users u
+		JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE u.id = $1 AND u.deleted_at IS NULL
+	`
 
 	var user User
 	var orgID *string
@@ -292,36 +293,129 @@ func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, er
 
 // GetAuthCredByUserID retrieves auth_cred by user ID
 func (r *authRepo) GetAuthCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error) {
-	// Используем структуру UserCred из model.go
-	return nil, nil // Заглушка
+	query := `
+		SELECT user_id, email_hash, email_encrypted, password_hash, role
+		FROM auth_cred
+		WHERE user_id = $1
+	`
+
+	var cred UserCred
+	err := r.db.QueryRow(ctx, query, userID).Scan(
+		&cred.UserID,
+		&cred.EmailHash,
+		&cred.EmailEncrypted,
+		&cred.PasswordHash,
+		&cred.Role,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authRepo.GetAuthCredByUserID: %w", err)
+	}
+
+	return &cred, nil
 }
 
 // FindIdentityByProviderUID finds identity by provider and provider_uid
 func (r *authRepo) FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error) {
-	// Используем структуру UserIdentity из model.go
-	return nil, nil // Заглушка
+	query := `
+		SELECT id, user_id, provider, provider_uid, created_at
+		FROM auth_identities
+		WHERE provider = $1 AND provider_uid = $2
+	`
+
+	var identity UserIdentity
+	err := r.db.QueryRow(ctx, query, provider, providerUID).Scan(
+		&identity.ID,
+		&identity.UserID,
+		&identity.Provider,
+		&identity.ProviderUID,
+		&identity.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authRepo.FindIdentityByProviderUID: %w", err)
+	}
+
+	return &identity, nil
 }
 
 // CreateOAuthUser creates user for OAuth (without password)
 func (r *authRepo) CreateOAuthUser(ctx context.Context, params CreateUserParams) error {
-	// Используем CreateUserParams из model.go
-	return nil // Заглушка
+	query := `
+		INSERT INTO users (id, org_id, display_name, email_verified)
+		VALUES ($1, $2, $3, $4)
+	`
+
+	var orgID any
+	if params.OrganizationID == nil {
+		orgID = nil
+	} else {
+		orgID = *params.OrganizationID
+	}
+
+	_, err := r.db.Exec(ctx, query, params.ID, orgID, params.Name, params.EmailVerified)
+	if err != nil {
+		return fmt.Errorf("authRepo.CreateOAuthUser: %w", err)
+	}
+
+	return nil
 }
 
 // UpdateUserName updates user's display name
 func (r *authRepo) UpdateUserName(ctx context.Context, userID uuid.UUID, name string) error {
-	// Реализация
-	return nil // Заглушка
+	query := `
+		UPDATE users
+		SET display_name = $1, updated_at = now()
+		WHERE id = $2 AND deleted_at IS NULL
+	`
+
+	_, err := r.db.Exec(ctx, query, name, userID)
+	if err != nil {
+		return fmt.Errorf("authRepo.UpdateUserName: %w", err)
+	}
+
+	return nil
 }
 
 // CreateIdentity creates new auth identity
 func (r *authRepo) CreateIdentity(ctx context.Context, identity *UserIdentity) error {
-	// Реализация
-	return nil // Заглушка
+	query := `
+        INSERT INTO auth_identities (id, user_id, provider, provider_uid)
+        VALUES ($1, $2, $3, $4)
+    `
+	_, err := r.db.Exec(ctx, query,
+		identity.ID,
+		identity.UserID,
+		identity.Provider,
+		identity.ProviderUID,
+	)
+	if err != nil {
+		return fmt.Errorf("authRepo.CreateIdentity: %w", err)
+	}
+	return nil
 }
 
 // CreateAuthCred creates auth_cred for user
 func (r *authRepo) CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error {
-	// Реализация
-	return nil // Заглушка
+	query := `
+		INSERT INTO auth_cred (user_id, email_hash, email_encrypted, password_hash, role)
+		VALUES ($1, $2, $3, $4, $5)
+	`
+
+	_, err := r.db.Exec(ctx, query,
+		params.UserID,
+		params.EmailHash,
+		params.EmailEncrypted,
+		params.PasswordHash,
+		params.Role,
+	)
+	if err != nil {
+		return fmt.Errorf("authRepo.CreateAuthCred: %w", err)
+	}
+
+	return nil
 }
