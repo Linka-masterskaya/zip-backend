@@ -3,12 +3,26 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrUserNotFound = errors.New("user not found")
+
+type User struct {
+	ID            string
+	OrgID         *string
+	PasswordHash  *string
+	Role          string
+	EmailVerified bool
+}
 
 type DBTX interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -16,168 +30,228 @@ type DBTX interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-type RepositoryInterface interface {
-	FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error)
-	FindUserByID(ctx context.Context, id uuid.UUID) (*User, error)
-	FindUserCredByEmailHash(ctx context.Context, emailHash []byte) (*UserCred, error)
-	FindUserCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error)
-	CreateUser(ctx context.Context, params CreateUserParams) error
-	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
-	CreateIdentity(ctx context.Context, identity *UserIdentity) error
-	UpdateUser(ctx context.Context, user *User) error
-}
-
-type TxRepository interface {
-	withTx(tx pgx.Tx) RepositoryInterface
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
-type Repository struct {
+type authRepo struct {
 	db   DBTX
 	pool *pgxpool.Pool
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{db: pool, pool: pool}
+func NewAuthRepo(pool *pgxpool.Pool) authRepoIface {
+	return &authRepo{
+		db:   pool,
+		pool: pool,
+	}
 }
 
-func (r *Repository) FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error) {
-	query := `
-	SELECT id, user_id, provider, provider_uid, created_at
-	FROM auth_identities
-	WHERE provider = $1 AND provider_uid = $2
-	`
-	var identity UserIdentity
-	err := r.db.QueryRow(ctx, query, provider, providerUID).Scan(
-		&identity.ID, &identity.UserID, &identity.Provider,
-		&identity.ProviderUID, &identity.CreatedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &identity, nil
-}
-
-func (r *Repository) FindUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
-	query := `
-	SELECT id, display_name, avatar_key, org_id, created_at, updated_at, deleted_at
-	FROM users
-	WHERE id = $1 AND deleted_at IS NULL
-	`
+func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error) {
 	var user User
-	err := r.db.QueryRow(ctx, query, id).Scan(
-		&user.ID, &user.Name, &user.AvatarKey, &user.OrgID,
-		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
+
+	query := `
+		SELECT
+			u.id,
+			u.org_id,
+			ac.password_hash,
+			ac.role,
+			u.email_verified
+		FROM users u
+		JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE ac.email_hash = $1
+	`
+
+	err := r.db.QueryRow(ctx, query, emailHash).Scan(
+		&user.ID,
+		&user.OrgID,
+		&user.PasswordHash,
+		&user.Role,
+		&user.EmailVerified,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, ErrUserNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authRepo.GetUserByEmailHash: %w", err)
 	}
+
 	return &user, nil
 }
 
-func (r *Repository) FindUserCredByEmailHash(ctx context.Context, emailHash []byte) (*UserCred, error) {
+func (r *authRepo) withTx(tx pgx.Tx) authRepoIface {
+	return &authRepo{
+		db:   tx,
+		pool: nil,
+	}
+}
+
+func (r *authRepo) beginTx(ctx context.Context) (pgx.Tx, error) {
+	if r.pool == nil {
+		return nil, fmt.Errorf("authRepo.beginTx: nested transaction attempted")
+	}
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("authRepo.beginTx: %w", err)
+	}
+
+	return tx, nil
+}
+
+func (r *authRepo) useEmailVerifyToken(
+	ctx context.Context,
+	token []byte,
+) (uuid.UUID, uuid.UUID, error) {
 	query := `
-	SELECT user_id, email_hash, email_encrypted, password_hash, role
-	FROM auth_cred
-	WHERE email_hash = $1
+		UPDATE verify_tokens
+		SET used_at = now()
+		WHERE token_hash = $1
+			AND purpose = 'email_verify'
+			AND used_at IS NULL
+			AND expires_at > now()
+		RETURNING user_id, student_id
 	`
-	var cred UserCred
-	err := r.db.QueryRow(ctx, query, emailHash).Scan(
-		&cred.UserID, &cred.EmailHash, &cred.EmailEncrypted,
-		&cred.PasswordHash, &cred.Role,
-	)
+
+	var userIDDB, studentIDDB pgtype.UUID
+	err := r.db.QueryRow(ctx, query, token).Scan(&userIDDB, &studentIDDB)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid
 	}
 	if err != nil {
-		return nil, err
+		return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken: %w", err)
 	}
-	return &cred, nil
+
+	var userID, studentID uuid.UUID
+	if userIDDB.Valid {
+		userID = uuid.UUID(userIDDB.Bytes)
+	}
+	if studentIDDB.Valid {
+		studentID = uuid.UUID(studentIDDB.Bytes)
+	}
+
+	return userID, studentID, nil
 }
 
-func (r *Repository) FindUserCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error) {
+func (r *authRepo) verifyUser(ctx context.Context, userID uuid.UUID) error {
 	query := `
-	SELECT user_id, email_hash, email_encrypted, password_hash, role
-	FROM auth_cred
-	WHERE user_id = $1
+		UPDATE users
+		SET email_verified = true
+		WHERE id = $1
+			AND email_verified = false
+			AND deleted_at IS NULL
 	`
-	var cred UserCred
-	err := r.db.QueryRow(ctx, query, userID).Scan(
-		&cred.UserID, &cred.EmailHash, &cred.EmailEncrypted,
-		&cred.PasswordHash, &cred.Role,
+
+	res, err := r.db.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("authRepo.verifyUser: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return apperr.ErrVerifyTokenInvalid
+	}
+
+	_, err = r.db.Exec(
+		ctx,
+		`UPDATE verify_tokens
+		 SET used_at = now()
+		 WHERE user_id = $1
+		   AND purpose = 'email_verify'
+		   AND used_at IS NULL`,
+		userID,
 	)
+	if err != nil {
+		return fmt.Errorf("authRepo.verifyUser burn tokens: %w", err)
+	}
+
+	return nil
+}
+
+func (r *authRepo) verifyStudent(ctx context.Context, studentID uuid.UUID) error {
+	query := `
+		UPDATE students
+		SET email_verified = true
+		WHERE id = $1
+			AND email_verified = false
+			AND deleted_at IS NULL
+	`
+
+	res, err := r.db.Exec(ctx, query, studentID)
+	if err != nil {
+		return fmt.Errorf("authRepo.verifyStudent: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return apperr.ErrVerifyTokenInvalid
+	}
+
+	_, err = r.db.Exec(
+		ctx,
+		`UPDATE verify_tokens
+		 SET used_at = now()
+		 WHERE student_id = $1
+		   AND purpose = 'email_verify'
+		   AND used_at IS NULL`,
+		studentID,
+	)
+	if err != nil {
+		return fmt.Errorf("authRepo.verifyStudent burn tokens: %w", err)
+	}
+
+	return nil
+}
+
+func (r *authRepo) rotateEmailTokens(
+	ctx context.Context,
+	tokenID, userID uuid.UUID,
+	tokenHash []byte,
+	expiresAt time.Time,
+) error {
+	query := `
+		WITH invalidated AS (
+			UPDATE verify_tokens
+			SET used_at = now()
+			WHERE user_id = $1
+				AND used_at IS NULL
+				AND purpose = 'email_verify'
+			RETURNING 1
+		)
+		INSERT INTO verify_tokens (
+			id,
+			user_id,
+			token_hash,
+			expires_at,
+			purpose
+		)
+		VALUES ($2, $1, $3, $4, 'email_verify')
+	`
+
+	_, err := r.db.Exec(ctx, query, userID, tokenID, tokenHash, expiresAt)
+	if err != nil {
+		return fmt.Errorf("authRepo.rotateEmailTokens: %w", err)
+	}
+
+	return nil
+}
+
+func (r *authRepo) getUserContactForResend(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]byte, bool, error) {
+	var (
+		emailEncrypted []byte
+		emailVerified  bool
+	)
+
+	err := r.db.QueryRow(
+		ctx,
+		`SELECT ac.email_encrypted, u.email_verified
+		 FROM users u
+		 JOIN auth_cred ac ON ac.user_id = u.id
+		 WHERE u.id = $1
+		   AND u.deleted_at IS NULL`,
+		userID,
+	).Scan(&emailEncrypted, &emailVerified)
+
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, false, apperr.ErrUserNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, fmt.Errorf("authRepo.getUserContactForResend: %w", err)
 	}
-	return &cred, nil
-}
 
-func (r *Repository) CreateUser(ctx context.Context, params CreateUserParams) error {
-	query := `INSERT INTO users(id, org_id, display_name) VALUES ($1, $2, $3)`
-	var orgID any
-	if params.OrganizationID == nil {
-		orgID = nil
-	} else {
-		orgID = *params.OrganizationID
-	}
-	_, err := r.db.Exec(ctx, query, params.ID, orgID, params.Name)
-	return err
-}
-
-func (r *Repository) CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error {
-	query := `
-INSERT INTO auth_cred (
-user_id, 
-email_hash,
-email_encrypted,
-password_hash, 
-role)
-VALUES (
-$1,
-$2,
-$3,
-$4,
-$5)`
-
-	_, err := r.db.Exec(ctx, query, params.UserID, params.EmailHash, params.EmailEncrypted, params.PasswordHash, params.Role)
-
-	return err
-}
-
-func (r *Repository) CreateIdentity(ctx context.Context, identity *UserIdentity) error {
-	query := `
-	INSERT INTO auth_identities (id, user_id, provider, provider_uid)
-	VALUES ($1, $2, $3, $4)
-	`
-	_, err := r.db.Exec(ctx, query,
-		identity.ID, identity.UserID, identity.Provider, identity.ProviderUID,
-	)
-	return err
-}
-
-func (r *Repository) UpdateUser(ctx context.Context, user *User) error {
-	query := `
-	UPDATE users
-	SET display_name = $1, updated_at = now()
-	WHERE id = $2
-	`
-	_, err := r.db.Exec(ctx, query, user.Name, user.ID)
-	return err
-}
-
-func (r *Repository) Begin(ctx context.Context) (pgx.Tx, error) {
-	return r.pool.Begin(ctx)
-}
-
-func (r *Repository) withTx(tx pgx.Tx) RepositoryInterface {
-	return &Repository{db: tx, pool: r.pool}
+	return emailEncrypted, emailVerified, nil
 }
