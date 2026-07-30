@@ -29,6 +29,8 @@ docker compose -f docker-compose.server.yaml run --rm zip-backend --migrate
 
 docker compose -f docker-compose.server.yaml up -d --remove-orphans
 
+docker compose -f docker-compose.server.yaml restart caddy
+
 for i in $(seq 1 30); do
   curl -sf http://localhost:9091/health && break
   sleep 2
