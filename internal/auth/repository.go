@@ -255,3 +255,73 @@ func (r *authRepo) getUserContactForResend(
 
 	return emailEncrypted, emailVerified, nil
 }
+
+func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
+	query := `
+        SELECT
+            u.id,
+            u.org_id,
+            ac.password_hash,
+            ac.role,
+            u.email_verified
+        FROM users u
+        JOIN auth_cred ac ON ac.user_id = u.id
+        WHERE u.id = $1 AND u.deleted_at IS NULL
+    `
+
+	var user User
+	var orgID *string
+
+	err := r.db.QueryRow(ctx, query, userID).Scan(
+		&user.ID,
+		&orgID,
+		&user.PasswordHash,
+		&user.Role,
+		&user.EmailVerified,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authRepo.GetUserByID: %w", err)
+	}
+
+	user.OrgID = orgID
+	return &user, nil
+}
+
+// GetAuthCredByUserID retrieves auth_cred by user ID
+func (r *authRepo) GetAuthCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error) {
+	// Используем структуру UserCred из model.go
+	return nil, nil // Заглушка
+}
+
+// FindIdentityByProviderUID finds identity by provider and provider_uid
+func (r *authRepo) FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error) {
+	// Используем структуру UserIdentity из model.go
+	return nil, nil // Заглушка
+}
+
+// CreateOAuthUser creates user for OAuth (without password)
+func (r *authRepo) CreateOAuthUser(ctx context.Context, params CreateUserParams) error {
+	// Используем CreateUserParams из model.go
+	return nil // Заглушка
+}
+
+// UpdateUserName updates user's display name
+func (r *authRepo) UpdateUserName(ctx context.Context, userID uuid.UUID, name string) error {
+	// Реализация
+	return nil // Заглушка
+}
+
+// CreateIdentity creates new auth identity
+func (r *authRepo) CreateIdentity(ctx context.Context, identity *UserIdentity) error {
+	// Реализация
+	return nil // Заглушка
+}
+
+// CreateAuthCred creates auth_cred for user
+func (r *authRepo) CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error {
+	// Реализация
+	return nil // Заглушка
+}
