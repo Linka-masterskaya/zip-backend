@@ -153,4 +153,4 @@ jobs:
           host: ${{ vars.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          script: curl -sf http://localhost:9091/livez || exit 1
+          script: curl -sf http://localhost:9091/readyz || exit 1
