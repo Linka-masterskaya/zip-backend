@@ -23,6 +23,7 @@ func RegisterProfileRoutes(mux Mux, authMW *middleware.AuthMW, rl RateLimits, h 
 	}
 
 	mux.Handle("GET /api/v1/profile/me", protected(h.Profile.GetProfile))
+	mux.Handle("PATCH /api/v1/profile/me", protected(h.Profile.UpdateProfile))
 	mux.Handle("PUT /api/v1/profile/me/avatar", protected(h.Profile.UploadAvatar))
 	mux.Handle("DELETE /api/v1/profile/me/avatar", protected(h.Profile.DeleteAvatar))
 	mux.Handle("POST /api/v1/profile/me/email", limited(rl.ProfileEmailChange, h.Profile.RequestEmailChange))
