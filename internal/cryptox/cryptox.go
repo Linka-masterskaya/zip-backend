@@ -6,7 +6,15 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+)
+
+var (
+	// ErrCiphertextTooShort means the payload is shorter than the GCM nonce.
+	ErrCiphertextTooShort = errors.New("crypto.Decrypt: ciphertext too short")
+	// ErrDecryptFailed means the ciphertext did not authenticate under this key.
+	ErrDecryptFailed = errors.New("crypto.Decrypt: authentication failed")
 )
 
 type Cryptox struct {
@@ -40,10 +48,14 @@ func (c *Cryptox) Encrypt(plaintext []byte) ([]byte, error) {
 func (c *Cryptox) Decrypt(ciphertext []byte) ([]byte, error) {
 	ns := c.gcm.NonceSize()
 	if len(ciphertext) < ns {
-		return nil, fmt.Errorf("crypto.Decrypt: ciphertext too short")
+		return nil, ErrCiphertextTooShort
 	}
 
-	return c.gcm.Open(nil, ciphertext[:ns], ciphertext[ns:], nil)
+	plaintext, err := c.gcm.Open(nil, ciphertext[:ns], ciphertext[ns:], nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDecryptFailed, err)
+	}
+	return plaintext, nil
 }
 
 func (c *Cryptox) Hash(data []byte) []byte {
