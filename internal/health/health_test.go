@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,23 +30,17 @@ func (f connectionCheckerFunc) IsConnected() bool {
 	return f()
 }
 
-type listerFunc func(context.Context) ([]minio.BucketInfo, error)
-
-func (f listerFunc) ListBuckets(ctx context.Context) ([]minio.BucketInfo, error) {
-	return f(ctx)
-}
-
 func TestNewCheckerRejectsNilDependencies(t *testing.T) {
 	validPinger := pingerFunc(func(context.Context) error { return nil })
 	validNATS := connectionCheckerFunc(func() bool { return true })
-	validMinIO := listerFunc(func(context.Context) ([]minio.BucketInfo, error) { return nil, nil })
+	validMinIO := pingerFunc(func(context.Context) error { return nil })
 
 	tests := []struct {
 		name        string
 		db          Pinger
 		redisClient Pinger
 		natsConn    ConnectionChecker
-		minioClient Lister
+		minioClient Pinger
 		wantErr     string
 	}{
 		{
@@ -83,7 +76,7 @@ func TestNewCheckerRejectsTypedNilDependency(t *testing.T) {
 	var db *pingerStub
 	validPinger := pingerFunc(func(context.Context) error { return nil })
 	validNATS := connectionCheckerFunc(func() bool { return true })
-	validMinIO := listerFunc(func(context.Context) ([]minio.BucketInfo, error) { return nil, nil })
+	validMinIO := pingerFunc(func(context.Context) error { return nil })
 
 	checker, err := NewChecker(db, validPinger, validNATS, validMinIO, PicturesBank{URL: "https://pictures.example"})
 
@@ -123,7 +116,7 @@ func TestCheckerRunDependencyError(t *testing.T) {
 }
 
 func TestCheckerRunRecoversCheckPanic(t *testing.T) {
-	checker := newTestChecker(nil, nil, func(context.Context) ([]minio.BucketInfo, error) {
+	checker := newTestChecker(nil, nil, func(context.Context) error {
 		panic("minio exploded")
 	})
 
@@ -145,9 +138,9 @@ func TestCheckerRunTimesOutChecksInParallel(t *testing.T) {
 		db:          pingerFunc(waitForContext),
 		redisClient: pingerFunc(waitForContext),
 		natsConn:    connectionCheckerFunc(func() bool { return true }),
-		minioClient: listerFunc(func(ctx context.Context) ([]minio.BucketInfo, error) {
+		minioClient: pingerFunc(func(ctx context.Context) error {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return ctx.Err()
 		}),
 	}
 
@@ -168,11 +161,11 @@ func TestCheckerRunTimesOutChecksInParallel(t *testing.T) {
 func newTestChecker(
 	redisErr error,
 	postgresErr error,
-	minioCheck listerFunc,
+	minioCheck pingerFunc,
 ) *Checker {
 	if minioCheck == nil {
-		minioCheck = func(context.Context) ([]minio.BucketInfo, error) {
-			return nil, nil
+		minioCheck = func(context.Context) error {
+			return nil
 		}
 	}
 
