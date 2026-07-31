@@ -209,13 +209,7 @@ func (c *Client) get(
 		return nil, "", fmt.Errorf("%w: request failed", ErrUnavailable)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		if closeErr := response.Body.Close(); closeErr != nil {
-			return nil, "", fmt.Errorf("%w: close error response", ErrUnavailable)
-		}
-		if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-			return nil, "", fmt.Errorf("%w: status %d", ErrPictureNotFound, response.StatusCode)
-		}
-		return nil, "", fmt.Errorf("%w: status %d", ErrUnavailable, response.StatusCode)
+		return nil, "", pictureBankResponseError(response)
 	}
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	closeErr := response.Body.Close()
@@ -233,6 +227,16 @@ func (c *Client) get(
 		contentType = http.DetectContentType(data)
 	}
 	return data, contentType, nil
+}
+
+func pictureBankResponseError(response *http.Response) error {
+	if err := response.Body.Close(); err != nil {
+		return fmt.Errorf("%w: close error response", ErrUnavailable)
+	}
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
+		return fmt.Errorf("%w: status %d", ErrPictureNotFound, response.StatusCode)
+	}
+	return fmt.Errorf("%w: status %d", ErrUnavailable, response.StatusCode)
 }
 
 func allowedImageType(contentType string) bool {

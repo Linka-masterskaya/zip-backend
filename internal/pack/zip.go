@@ -110,7 +110,7 @@ func archivePictures(
 				continue
 			}
 			if loader == nil {
-				return nil, nil, errors.New("Pictures Bank loader is required for export")
+				return nil, nil, errors.New("pictures bank loader is required for export")
 			}
 			data, mimeType, err := loader(ctx, pictureID)
 			if err != nil {
