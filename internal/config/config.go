@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -28,6 +29,14 @@ type Config struct {
 	Crypto       CryptoConfig       `mapstructure:"crypto"`
 	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
 	Server       ServerConfig       `mapstructure:"server"`
+}
+
+// MigrationConfig contains only the settings required by the migration binary.
+// Keeping it separate prevents migrations from depending on unrelated runtime
+// secrets such as JWT, MinIO and SMTP credentials.
+type MigrationConfig struct {
+	App AppConfig `mapstructure:"app"`
+	DB  DBConfig  `mapstructure:"db"`
 }
 
 // ServerConfig contains HTTP server ports and timeouts.
@@ -234,30 +243,64 @@ type CORSConfig struct {
 	MaxAge           int      `mapstructure:"max_age"`
 }
 
-// Load reads application settings from a configuration file.
+// Load reads application settings from a configuration file and applies
+// environment overrides. Feature flags are deliberately owned by the file.
 func Load(path string) (*Config, error) {
-	v := viper.New()
-
-	v.SetConfigFile(path)
-	v.SetConfigType("yaml")
-
-	// Set defaults
-	setDefaults(v)
-
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+	v, err := readConfig(path)
+	if err != nil {
+		return nil, err
 	}
+
+	// Capture file-owned flags before enabling environment overrides.
+	localBank := v.GetBool("feature_flags.local_bank")
+	enableEnvironment(v)
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	cfg.FeatureFlags.LocalBank = localBank
 
 	// Validate required fields
 	if err := validateConfig(&cfg); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return &cfg, nil
+}
+
+// LoadMigration reads only the settings needed to run database migrations.
+func LoadMigration(path string) (*MigrationConfig, error) {
+	v, err := readConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	enableEnvironment(v)
+
+	var cfg MigrationConfig
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal migration config: %w", err)
+	}
+	if cfg.DB.URL == "" {
+		return nil, fmt.Errorf("validate migration config: db.url is required")
+	}
+	return &cfg, nil
+}
+
+func readConfig(path string) (*viper.Viper, error) {
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+	setDefaults(v)
+
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	return v, nil
+}
+
+func enableEnvironment(v *viper.Viper) {
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 }
 
 // setDefaults sets default values for all configuration keys.

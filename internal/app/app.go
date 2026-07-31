@@ -104,21 +104,26 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) shutdown() error {
 	slog.Info("shutting down...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
-	defer cancel()
+	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
 
 	var firstErr error
-	if err := a.metricsSrv.Shutdown(ctx); err != nil {
+	if err := a.metricsSrv.Shutdown(httpCtx); err != nil {
 		slog.Error("metrics server shutdown", logger.Err(err))
 		firstErr = err
 	}
-	if err := a.apiSrv.Shutdown(ctx); err != nil {
+	if err := a.apiSrv.Shutdown(httpCtx); err != nil {
 		slog.Error("api server shutdown", logger.Err(err))
 		if firstErr == nil {
 			firstErr = err
 		}
 	}
-	if err := a.closer.Close(ctx); err != nil && firstErr == nil {
+	cancelHTTP()
+
+	// Infrastructure gets its own deadline: a slow HTTP drain must never skip
+	// closing database, Redis and NATS connections.
+	infraCtx, cancelInfra := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
+	defer cancelInfra()
+	if err := a.closer.Close(infraCtx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 

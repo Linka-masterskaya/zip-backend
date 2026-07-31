@@ -32,7 +32,7 @@ func run() error {
 		cfgPath = defaultConfigPath
 	}
 
-	cfg, err := config.Load(cfgPath)
+	cfg, err := config.LoadMigration(cfgPath)
 	if err != nil {
 		return fmt.Errorf("config load: %w", err)
 	}

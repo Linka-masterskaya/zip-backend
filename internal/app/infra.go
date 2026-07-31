@@ -87,6 +87,12 @@ func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("initNATS: %w", err)
 	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			nc.Close()
+		}
+	}()
 	slog.Info("nats connected", "url", cfg.Connection.URL)
 
 	js, err := jetstream.New(nc)
@@ -99,5 +105,6 @@ func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
 	}
 	slog.Info("jetstream stream ready", "stream", cfg.Stream.Name)
 
+	initialized = true
 	return nc, broker.NewPublisher(js), nil
 }

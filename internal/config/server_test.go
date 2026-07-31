@@ -33,3 +33,17 @@ func TestServerDefaults(t *testing.T) {
 		t.Errorf("MetricsPort = %q, want %q", cfg.Server.MetricsPort, "9090")
 	}
 }
+
+func TestProductionMetricsPortMatchesDeployment(t *testing.T) {
+	t.Setenv("JWT_SECRET", "environment-secret-that-is-at-least-32-bytes")
+	t.Setenv("CRYPTO_AES_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("CRYPTO_HMAC_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+
+	cfg, err := Load("../../config/config.prod.yml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Server.MetricsPort != "9091" {
+		t.Errorf("MetricsPort = %q, want %q", cfg.Server.MetricsPort, "9091")
+	}
+}
