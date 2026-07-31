@@ -214,6 +214,11 @@
           "name": "13. Проверить набор на полке ученика",
           "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/folders/{{studentFolderId}}/contents" },
           "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('student shelf contains shared pack', () => pm.expect(pm.response.json().items.map(i => i.id)).to.include(pm.environment.get('packId')));"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "14. Открыть набор с полки ученика",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/packs/{{packId}}" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "if (pm.response.code === 200) {", "  const pack = pm.response.json();", "  const elements = pack.config?.blocks?.flatMap(block => block.elements || []) || [];", "  const pictures = elements.filter(element => element.kind === 'image' && element.source_picture_id);", "  pm.test('pack config contains four external pictures', () => pm.expect(pictures).to.have.length(4));", "  pictures.forEach((picture, index) => pm.environment.set('assignedPicture' + (index + 1), picture.source_picture_id));", "}"], "type": "text/javascript" } }]
         }
       ]
     }
