@@ -49,7 +49,7 @@ rollback() {
   fi
 
   echo "Rollback to $PREV_VERSION"
-  compose stop caddy zip-backend
+  compose stop zip-backend
   RESTORE_FAILED=false
   if [ -n "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ]; then
     if ! compose exec -T postgres \
@@ -61,6 +61,12 @@ rollback() {
   fi
 
   export VERSION=$PREV_VERSION
+  # The backend reaches MinIO through the public HTTPS endpoint served by
+  # Caddy, so the proxy must be available before the application starts.
+  if ! compose up -d --no-deps caddy; then
+    echo "Rollback failed to start caddy"
+    return 1
+  fi
   if ! compose up -d zip-backend; then
     echo "Rollback failed to start $PREV_VERSION"
     return 1
@@ -82,7 +88,10 @@ rollback() {
 
 compose pull
 
-compose stop caddy zip-backend
+# Keep the public MinIO route available while the backend is replaced. Caddy
+# may briefly return 502 for API traffic until the new backend passes readiness.
+compose up -d --no-deps caddy
+compose stop zip-backend
 
 if [ -n "$(compose ps -q --status running postgres)" ]; then
   BACKUP_FILE="$PWD/backup_$(date +%Y%m%d_%H%M%S).sql"
