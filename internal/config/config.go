@@ -4,7 +4,6 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -223,7 +222,7 @@ type CORSConfig struct {
 	MaxAge           int      `mapstructure:"max_age"`
 }
 
-// Load reads configuration from a file and applies environment overrides.
+// Load reads application settings from a configuration file.
 func Load(path string) (*Config, error) {
 	v := viper.New()
 
@@ -232,13 +231,6 @@ func Load(path string) (*Config, error) {
 
 	// Set defaults
 	setDefaults(v)
-
-	// Environment variables override YAML keys, for example APP_PORT overrides app.port.
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	if err := v.BindEnv("feature_flags.local_bank", "FEATURE_LOCAL_BANK"); err != nil {
-		return nil, fmt.Errorf("bind FEATURE_LOCAL_BANK: %w", err)
-	}
-	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)

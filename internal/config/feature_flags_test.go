@@ -7,9 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFeatureLocalBankEnvironmentOverride(t *testing.T) {
+func TestFeatureLocalBankIsReadOnlyFromConfig(t *testing.T) {
 	t.Setenv("FEATURE_LOCAL_BANK", "true")
+	t.Setenv("FEATURE_FLAGS_LOCAL_BANK", "true")
 	cfg, err := Load("../../config/config.dev.yml")
 	require.NoError(t, err)
-	assert.True(t, cfg.FeatureFlags.LocalBank)
+	assert.False(t, cfg.FeatureFlags.LocalBank)
 }

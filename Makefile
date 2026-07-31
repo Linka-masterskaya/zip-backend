@@ -10,7 +10,6 @@ endif
 # ── Build ────────────────────────────────────────────────────────────────────
 build:
 	go build -o bin/server ./cmd/server
-	go build -o bin/ai-worker ./cmd/ai-worker
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 run:
@@ -19,8 +18,8 @@ run:
 # Full local stack: infra + migrations + server (blocks in foreground)
 run-local:
 	docker compose -f compose.dev.yaml up -d postgres minio nats redis
-	FEATURE_LOCAL_BANK=false $(MAKE) migrate-embed
-	FEATURE_LOCAL_BANK=false $(MAKE) run
+	$(MAKE) migrate-embed
+	$(MAKE) run
 
 # ── Test ─────────────────────────────────────────────────────────────────────
 test:
