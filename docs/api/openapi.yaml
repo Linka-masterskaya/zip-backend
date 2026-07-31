@@ -329,12 +329,15 @@ paths:
     post:
       tags: [auth]
       summary: Обновить access (ротация + reuse-detection)
-      description: "CSRF: SameSite=Strict + Origin==frontend_url"
+      description: "Refresh передаётся только в HttpOnly cookie с SameSite=Lax. Повторное использование старого refresh отзывает всю семью токенов."
       security: [{ refreshCookie: [] }]
       responses:
-        '200': { description: Новый access; refresh ротируется, content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } } }
+        '200':
+          description: Новый access; refresh ротируется
+          headers: { Set-Cookie: { schema: { type: string } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/logout:
     post:

@@ -197,6 +197,7 @@ type AuthConfig struct {
 	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
 	CookieSecure             bool          `mapstructure:"cookie_secure"`
 	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
+	RefreshRateLimit         int           `mapstructure:"refresh_rate_limit"`
 	PackRateLimit            int           `mapstructure:"pack_rate_limit"`
 	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit"`
 	ResetRateLimit           int           `mapstructure:"reset_rate_limit"`
@@ -353,6 +354,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.reset_password_token_ttl", "1h")
 	v.SetDefault("auth.bcrypt_cost", 12)
 	v.SetDefault("auth.login_rate_limit", 5)
+	v.SetDefault("auth.refresh_rate_limit", 10)
 	v.SetDefault("auth.require_email_verification", false)
 	v.SetDefault("auth.cookie_secure", false)
 	v.SetDefault("auth.pack_rate_limit", 60)

@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -204,17 +205,29 @@ func TestCache(t *testing.T) {
 
 	t.Run("RotateRefresh", func(t *testing.T) {
 		// Ротация: старый JTI → revoked, новый JTI → active, оба в Redis.
-		// Detect-reuse / атомарность (Lua) здесь не проверяется — tech debt.
 		ctx := subCtx(t)
 		flush(ctx, t, raw)
 
-		require.NoError(t, c.StoreRefresh(ctx, "old", cache.RefreshRecord{FID: "fam1", Status: "active"}, time.Minute))
+		require.NoError(t, c.StoreRefresh(
+			ctx,
+			"old",
+			cache.RefreshRecord{
+				FID:    "fam1",
+				Status: "active",
+				UserID: "user1",
+			},
+			time.Minute,
+		))
 
 		req := cache.RotateRefreshRequest{
-			OldJTI:    "old",
-			NewJTI:    "new",
-			NewRecord: cache.RefreshRecord{FID: "fam1", Status: "active"},
-			TTL:       time.Minute,
+			OldJTI: "old",
+			NewJTI: "new",
+			NewRecord: cache.RefreshRecord{
+				FID:    "fam1",
+				Status: "active",
+				UserID: "user1",
+			},
+			TTL: time.Minute,
 		}
 		require.NoError(t, c.RotateRefresh(ctx, req))
 
@@ -225,6 +238,116 @@ func TestCache(t *testing.T) {
 		newRec, err := c.GetRefresh(ctx, "new")
 		require.NoError(t, err)
 		require.Equal(t, "active", newRec.Status)
+	})
+
+	t.Run("RotateRefresh_ConcurrentOnlyOneSucceeds", func(t *testing.T) {
+		ctx := subCtx(t)
+		flush(ctx, t, raw)
+
+		const (
+			oldJTI = "old"
+			fid    = "fam1"
+			userID = "user1"
+		)
+
+		require.NoError(t, c.StoreRefresh(
+			ctx,
+			oldJTI,
+			cache.RefreshRecord{
+				FID:    fid,
+				Status: "active",
+				UserID: userID,
+			},
+			time.Minute,
+		))
+
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+
+		rotate := func(newJTI string) {
+			<-start
+			errs <- c.RotateRefresh(ctx, cache.RotateRefreshRequest{
+				OldJTI: oldJTI,
+				NewJTI: newJTI,
+				NewRecord: cache.RefreshRecord{
+					FID:    fid,
+					Status: "active",
+					UserID: userID,
+				},
+				TTL: time.Minute,
+			})
+		}
+
+		go rotate("new-1")
+		go rotate("new-2")
+		close(start)
+
+		var (
+			successCount   int
+			notActiveCount int
+		)
+
+		for range 2 {
+			err := <-errs
+			switch {
+			case err == nil:
+				successCount++
+			case errors.Is(err, cache.ErrRefreshNotActive):
+				notActiveCount++
+			default:
+				t.Fatalf("unexpected rotation error: %v", err)
+			}
+		}
+
+		require.Equal(t, 1, successCount)
+		require.Equal(t, 1, notActiveCount)
+
+		oldRec, err := c.GetRefresh(ctx, oldJTI)
+		require.NoError(t, err)
+		require.Equal(t, "revoked", oldRec.Status)
+
+		activeNewRecords := 0
+		for _, jti := range []string{"new-1", "new-2"} {
+			rec, err := c.GetRefresh(ctx, jti)
+			switch {
+			case err == nil:
+				require.Equal(t, "active", rec.Status)
+				require.Equal(t, fid, rec.FID)
+				require.Equal(t, userID, rec.UserID)
+				activeNewRecords++
+			case errors.Is(err, cache.ErrNotFound):
+			default:
+				t.Fatalf("get refresh %q: %v", jti, err)
+			}
+		}
+
+		require.Equal(t, 1, activeNewRecords)
+	})
+
+	t.Run("RotateRefresh_AfterRevokeAllSessions", func(t *testing.T) {
+		ctx := subCtx(t)
+		flush(ctx, t, raw)
+
+		require.NoError(t, c.StoreRefresh(ctx, "old", cache.RefreshRecord{
+			FID: "fam1", Status: "active", UserID: "user1",
+		}, time.Minute))
+		require.NoError(t, c.RevokeAllSessions(ctx, "user1"))
+
+		err := c.RotateRefresh(ctx, cache.RotateRefreshRequest{
+			OldJTI: "old",
+			NewJTI: "new",
+			NewRecord: cache.RefreshRecord{
+				FID: "fam1", Status: "active", UserID: "user1",
+			},
+			TTL: time.Minute,
+		})
+		require.ErrorIs(t, err, cache.ErrSessionRevoked)
+
+		oldRec, err := c.GetRefresh(ctx, "old")
+		require.NoError(t, err)
+		require.Equal(t, "active", oldRec.Status)
+		_, err = c.GetRefresh(ctx, "new")
+		require.ErrorIs(t, err, cache.ErrNotFound)
 	})
 
 	t.Run("Allow_RateLimit", func(t *testing.T) {

@@ -12,8 +12,18 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrNotFound - sentinel error returned by Client lookups.
-var ErrNotFound = errors.New("redis: key not found")
+var (
+	// ErrNotFound is returned when a requested Redis record does not exist.
+	ErrNotFound = errors.New("redis: key not found")
+
+	// ErrRefreshNotActive is returned when a refresh token has already
+	// been used or revoked and therefore cannot be rotated again.
+	ErrRefreshNotActive = errors.New("redis: refresh token is not active")
+
+	// ErrSessionRevoked is returned when a refresh token predates the
+	// user's latest bulk session revocation.
+	ErrSessionRevoked = errors.New("redis: refresh session is revoked")
+)
 
 type Config struct {
 	URL        string
@@ -84,6 +94,62 @@ if count == 1 then
     redis.call("EXPIRE", KEYS[1], ARGV[1])
 end
 return count
+`)
+
+// rotateRefresh atomically checks and revokes the old refresh token,
+// stores the new token, and extends the refresh-family TTL.
+//
+// Return values:
+// 0 - old refresh record does not exist;
+// 1 - rotation completed successfully;
+// 2 - old refresh token is no longer active;
+// 3 - old refresh token predates the latest bulk session revocation.
+var rotateRefresh = redis.NewScript(`
+-- KEYS[1]: old refresh key
+-- KEYS[2]: new refresh key
+-- KEYS[3]: refresh family key
+-- KEYS[4]: user session version key
+
+-- ARGV[1]: family ID
+-- ARGV[2]: user ID
+-- ARGV[3]: TTL in seconds
+
+local status = redis.call("HGET", KEYS[1], "status")
+
+if not status then
+	return 0
+end
+
+if status ~= "active" then
+	return 2
+end
+
+local token_version = tonumber(redis.call("HGET", KEYS[1], "sess_ver") or "0")
+local current_version = tonumber(redis.call("GET", KEYS[4]) or "0")
+
+if token_version < current_version then
+	return 3
+end
+
+redis.call(
+	"HSET",
+	KEYS[1],
+	"status", "revoked"
+)
+
+redis.call(
+	"HSET",
+	KEYS[2],
+	"fid", ARGV[1],
+	"status", "active",
+	"user_id", ARGV[2],
+	"sess_ver", current_version
+)
+
+redis.call("EXPIRE", KEYS[2], ARGV[3])
+redis.call("EXPIRE", KEYS[3], ARGV[3])
+
+return 1
 `)
 
 // IncrCounter atomically increments key and sets ttl on first increment via Lua.
@@ -234,29 +300,46 @@ func (c *Client) RevokeAllSessions(ctx context.Context, userID string) error {
 	return nil
 }
 
-// RotateRefresh atomically revokes the old token, stores the new one, and extends the family TTL.
+// RotateRefresh atomically checks and revokes the old refresh token,
+// stores the new token, and extends the family TTL.
 func (c *Client) RotateRefresh(ctx context.Context, req RotateRefreshRequest) error {
-	version, err := c.GetUserSessionVersion(ctx, req.NewRecord.UserID)
-	if err != nil {
-		return fmt.Errorf("redis.RotateRefresh: %w", err)
-	}
-	req.NewRecord.SessionVersion = version
-
 	oldKey := "refresh:" + req.OldJTI
 	newKey := "refresh:" + req.NewJTI
 	familyKey := "refresh_family:" + req.NewRecord.FID
+	sessionVersionKey := "user_session_version:" + req.NewRecord.UserID
 
-	_, err = c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.HSet(ctx, oldKey, "status", "revoked")
-		pipe.HSet(ctx, newKey, req.NewRecord)
-		pipe.Expire(ctx, newKey, req.TTL)
-		pipe.Expire(ctx, familyKey, req.TTL)
-		return nil
-	})
+	result, err := rotateRefresh.Run(
+		ctx,
+		c.rdb,
+		[]string{
+			oldKey,
+			newKey,
+			familyKey,
+			sessionVersionKey,
+		},
+		req.NewRecord.FID,
+		req.NewRecord.UserID,
+		int64(req.TTL.Seconds()),
+	).Int()
 	if err != nil {
-		return fmt.Errorf("redis.RotateRefresh: %w", err)
+		return fmt.Errorf("redis.RotateRefresh: execute script: %w", err)
 	}
-	return nil
+
+	switch result {
+	case 0:
+		return ErrNotFound
+	case 1:
+		return nil
+	case 2:
+		return ErrRefreshNotActive
+	case 3:
+		return ErrSessionRevoked
+	default:
+		return fmt.Errorf(
+			"redis.RotateRefresh: unexpected script result: %d",
+			result,
+		)
+	}
 }
 
 // getHash loads the hash at key into dest, or returns ErrNotFound.

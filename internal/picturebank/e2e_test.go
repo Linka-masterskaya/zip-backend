@@ -229,14 +229,16 @@ func picturesE2EServer(
 func picturesE2EToken(t *testing.T, userID uuid.UUID) string {
 	t.Helper()
 	now := time.Now()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.AccessClaims{
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.AccessClaims{
 		Role: "defectologist",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject: userID.String(), Issuer: middleware.JWTIssuer,
 			Audience: jwt.ClaimStrings{middleware.JWTAudience},
 			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		},
-	}).SignedString([]byte(picturesE2EJWTSecret))
+	})
+	jwtToken.Header["typ"] = "access"
+	token, err := jwtToken.SignedString([]byte(picturesE2EJWTSecret))
 	require.NoError(t, err)
 	return token
 }

@@ -56,6 +56,7 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 		FROM users u
 		JOIN auth_cred ac ON ac.user_id = u.id
 		WHERE ac.email_hash = $1
+			AND u.deleted_at IS NULL
 	`
 
 	err := r.db.QueryRow(ctx, query, emailHash).Scan(
@@ -75,9 +76,46 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 	return &user, nil
 }
 
+func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
+	var user User
+
+	query := `
+		SELECT
+			u.id,
+			u.org_id,
+			ac.password_hash,
+			ac.role,
+			u.email_verified
+		FROM users u
+		JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE u.id = $1
+			AND u.deleted_at IS NULL
+	`
+
+	err := r.db.QueryRow(ctx, query, userID).Scan(
+		&user.ID,
+		&user.OrgID,
+		&user.PasswordHash,
+		&user.Role,
+		&user.EmailVerified,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperr.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authRepo.GetUserByID: %w", err)
+	}
+
+	return &user, nil
+}
+
 // CreatePasswordResetToken гасит активные не истекшие reset-токены пользователя,
 // создает новый одноразовый reset-токен и сохраняет в БД его hash.
-func (r *authRepo) CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error) {
+func (r *authRepo) CreatePasswordResetToken(
+	ctx context.Context,
+	userID string,
+	ttl time.Duration,
+) (string, error) {
 	token, rawToken, err := newPasswordResetToken()
 	if err != nil {
 		return "", err

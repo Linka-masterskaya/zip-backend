@@ -74,6 +74,21 @@ func (mr *MockauthRepoIfaceMockRecorder) GetUserByEmailHash(ctx, emailHash any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByEmailHash", reflect.TypeOf((*MockauthRepoIface)(nil).GetUserByEmailHash), ctx, emailHash)
 }
 
+// GetUserByID mocks base method.
+func (m *MockauthRepoIface) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserByID", ctx, userID)
+	ret0, _ := ret[0].(*User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserByID indicates an expected call of GetUserByID.
+func (mr *MockauthRepoIfaceMockRecorder) GetUserByID(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByID", reflect.TypeOf((*MockauthRepoIface)(nil).GetUserByID), ctx, userID)
+}
+
 // ResetPasswordByToken mocks base method.
 func (m *MockauthRepoIface) ResetPasswordByToken(ctx context.Context, token, passwordHash string) (string, error) {
 	m.ctrl.T.Helper()
@@ -216,6 +231,51 @@ func (m *MockrefreshStore) EXPECT() *MockrefreshStoreMockRecorder {
 	return m.recorder
 }
 
+// GetRefresh mocks base method.
+func (m *MockrefreshStore) GetRefresh(ctx context.Context, jti string) (*cache.RefreshRecord, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetRefresh", ctx, jti)
+	ret0, _ := ret[0].(*cache.RefreshRecord)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetRefresh indicates an expected call of GetRefresh.
+func (mr *MockrefreshStoreMockRecorder) GetRefresh(ctx, jti any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRefresh", reflect.TypeOf((*MockrefreshStore)(nil).GetRefresh), ctx, jti)
+}
+
+// IsFamilyRevoked mocks base method.
+func (m *MockrefreshStore) IsFamilyRevoked(ctx context.Context, fid string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsFamilyRevoked", ctx, fid)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// IsFamilyRevoked indicates an expected call of IsFamilyRevoked.
+func (mr *MockrefreshStoreMockRecorder) IsFamilyRevoked(ctx, fid any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsFamilyRevoked", reflect.TypeOf((*MockrefreshStore)(nil).IsFamilyRevoked), ctx, fid)
+}
+
+// IsSessionRevoked mocks base method.
+func (m *MockrefreshStore) IsSessionRevoked(ctx context.Context, rec cache.RefreshRecord) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsSessionRevoked", ctx, rec)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// IsSessionRevoked indicates an expected call of IsSessionRevoked.
+func (mr *MockrefreshStoreMockRecorder) IsSessionRevoked(ctx, rec any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsSessionRevoked", reflect.TypeOf((*MockrefreshStore)(nil).IsSessionRevoked), ctx, rec)
+}
+
 // RevokeAllSessions mocks base method.
 func (m *MockrefreshStore) RevokeAllSessions(ctx context.Context, userID string) error {
 	m.ctrl.T.Helper()
@@ -228,6 +288,34 @@ func (m *MockrefreshStore) RevokeAllSessions(ctx context.Context, userID string)
 func (mr *MockrefreshStoreMockRecorder) RevokeAllSessions(ctx, userID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevokeAllSessions", reflect.TypeOf((*MockrefreshStore)(nil).RevokeAllSessions), ctx, userID)
+}
+
+// RevokeFamily mocks base method.
+func (m *MockrefreshStore) RevokeFamily(ctx context.Context, fid string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RevokeFamily", ctx, fid)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RevokeFamily indicates an expected call of RevokeFamily.
+func (mr *MockrefreshStoreMockRecorder) RevokeFamily(ctx, fid any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevokeFamily", reflect.TypeOf((*MockrefreshStore)(nil).RevokeFamily), ctx, fid)
+}
+
+// RotateRefresh mocks base method.
+func (m *MockrefreshStore) RotateRefresh(ctx context.Context, req cache.RotateRefreshRequest) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RotateRefresh", ctx, req)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RotateRefresh indicates an expected call of RotateRefresh.
+func (mr *MockrefreshStoreMockRecorder) RotateRefresh(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RotateRefresh", reflect.TypeOf((*MockrefreshStore)(nil).RotateRefresh), ctx, req)
 }
 
 // StoreRefresh mocks base method.

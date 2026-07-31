@@ -125,6 +125,7 @@ func run() error {
 	packRateLimit := middleware.RateLimit(deps.redis, "packs_api", int64(deps.cfg.Auth.PackRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	picturesRateLimit := middleware.RateLimit(deps.redis, "pictures_api", deps.cfg.PicturesBank.InboundPerMinute, time.Minute, deps.cfg.App.TrustedProxies)
 	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	refreshRateLimit := middleware.RateLimit(deps.redis, "refresh", int64(deps.cfg.Auth.RefreshRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	forgotRateLimit := middleware.RateLimit(deps.redis, "forgot", int64(deps.cfg.Auth.ForgotRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	resetRateLimit := middleware.RateLimit(deps.redis, "reset", int64(deps.cfg.Auth.ResetRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	profileEmailChangeRateLimit := middleware.RateLimit(deps.redis, "profile-email-change", int64(deps.cfg.Profile.EmailChangeRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
@@ -146,6 +147,13 @@ func run() error {
 			middleware.ErrorMiddleware(authHandler.Login),
 		),
 	)
+	mainMux.Handle(
+		"POST /api/v1/auth/refresh",
+		refreshRateLimit(
+			middleware.ErrorMiddleware(authHandler.Refresh),
+		),
+	)
+
 	mainMux.Handle(
 		"POST /api/v1/auth/password/forgot",
 		forgotRateLimit(

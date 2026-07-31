@@ -673,8 +673,9 @@ func e2eToken(t *testing.T, userID uuid.UUID, role string) string {
 			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		},
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).
-		SignedString([]byte(e2eJWTSecret))
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	jwtToken.Header["typ"] = "access"
+	token, err := jwtToken.SignedString([]byte(e2eJWTSecret))
 	require.NoError(t, err)
 	return token
 }

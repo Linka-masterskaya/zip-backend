@@ -54,6 +54,8 @@ type authRepoIface interface {
 		hash []byte,
 		expiresAt time.Time,
 	) error
+
+	GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error)
 }
 
 type refreshStore interface {
@@ -63,6 +65,32 @@ type refreshStore interface {
 		rec cache.RefreshRecord,
 		ttl time.Duration,
 	) error
+
+	GetRefresh(
+		ctx context.Context,
+		jti string,
+	) (*cache.RefreshRecord, error)
+
+	RevokeFamily(
+		ctx context.Context,
+		fid string,
+	) error
+
+	IsFamilyRevoked(
+		ctx context.Context,
+		fid string,
+	) (bool, error)
+
+	IsSessionRevoked(
+		ctx context.Context,
+		rec cache.RefreshRecord,
+	) (bool, error)
+
+	RotateRefresh(
+		ctx context.Context,
+		req cache.RotateRefreshRequest,
+	) error
+
 	RevokeAllSessions(ctx context.Context, userID string) error
 }
 
@@ -96,13 +124,7 @@ type authService struct {
 	crp    cryptoService
 }
 
-func NewAuthService(
-	repo authRepoIface,
-	cache refreshStore,
-	mailer mailer.EmailSender,
-	cfg Config,
-	crp cryptoService,
-) *authService {
+func NewAuthService(repo authRepoIface, cache refreshStore, mailer mailer.EmailSender, cfg Config, crp cryptoService) *authService {
 	return &authService{
 		repo:   repo,
 		cache:  cache,
@@ -112,10 +134,7 @@ func NewAuthService(
 	}
 }
 
-func (au *authService) Login(
-	ctx context.Context,
-	email, password string,
-) (*LoginResult, error) {
+func (au *authService) Login(ctx context.Context, email, password string) (*LoginResult, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	emailHash := au.crp.Hash([]byte(email))
 
@@ -178,10 +197,7 @@ func (au *authService) Login(
 	}, nil
 }
 
-func (au *authService) verifyEmail(
-	ctx context.Context,
-	verifyToken string,
-) error {
+func (au *authService) verifyEmail(ctx context.Context, verifyToken string) error {
 	raw, err := base64.RawURLEncoding.DecodeString(verifyToken)
 	if err != nil {
 		return apperr.ErrVerifyTokenInvalid
@@ -286,4 +302,134 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (au *authService) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
+	claims, err := au.parseRefreshToken(refreshToken)
+	if err != nil {
+		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+
+	rec, err := au.getActiveRefreshRecord(ctx, claims.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := au.getRefreshUser(ctx, claims.Subject)
+	if err != nil {
+		return nil, err
+	}
+
+	accessToken, err := au.generateAccessToken(user)
+	if err != nil {
+		return nil, fmt.Errorf("generate access token: %w", err)
+	}
+
+	newRefreshToken, err := au.rotateRefresh(ctx, claims.ID, rec, user)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LoginResult{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+	}, nil
+}
+
+func (au *authService) getActiveRefreshRecord(
+	ctx context.Context,
+	jti string,
+) (*cache.RefreshRecord, error) {
+	rec, err := au.cache.GetRefresh(ctx, jti)
+	if errors.Is(err, cache.ErrNotFound) {
+		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get refresh token: %w", err)
+	}
+
+	if rec.Status == "revoked" {
+		if err := au.cache.RevokeFamily(ctx, rec.FID); err != nil {
+			return nil, fmt.Errorf("revoke refresh family: %w", err)
+		}
+
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+
+	revoked, err := au.cache.IsFamilyRevoked(ctx, rec.FID)
+	if err != nil {
+		return nil, fmt.Errorf("check refresh family: %w", err)
+	}
+	if revoked {
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+
+	sessionRevoked, err := au.cache.IsSessionRevoked(ctx, *rec)
+	if err != nil {
+		return nil, fmt.Errorf("check refresh session: %w", err)
+	}
+	if sessionRevoked {
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+
+	return rec, nil
+}
+
+func (au *authService) getRefreshUser(ctx context.Context, subject string) (*User, error) {
+	userID, err := uuid.Parse(subject)
+	if err != nil {
+		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+
+	user, err := au.repo.GetUserByID(ctx, userID)
+	if errors.Is(err, apperr.ErrUserNotFound) {
+		return nil, apperr.ErrUnauthorized
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get user by id: %w", err)
+	}
+
+	return user, nil
+}
+
+func (au *authService) rotateRefresh(
+	ctx context.Context,
+	oldJTI string,
+	rec *cache.RefreshRecord,
+	user *User,
+) (string, error) {
+	newJTI := uuid.NewString()
+
+	newRefreshToken, err := au.generateRefreshToken(user, newJTI)
+	if err != nil {
+		return "", fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	req := cache.RotateRefreshRequest{
+		OldJTI: oldJTI,
+		NewJTI: newJTI,
+		NewRecord: cache.RefreshRecord{
+			FID:    rec.FID,
+			Status: "active",
+			UserID: rec.UserID,
+		},
+		TTL: au.cfg.RefreshTokenTTL,
+	}
+
+	err = au.cache.RotateRefresh(ctx, req)
+	if errors.Is(err, cache.ErrRefreshNotActive) {
+		if revokeErr := au.cache.RevokeFamily(ctx, rec.FID); revokeErr != nil {
+			return "", fmt.Errorf("revoke refresh family: %w", revokeErr)
+		}
+
+		return "", apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+	if errors.Is(err, cache.ErrNotFound) || errors.Is(err, cache.ErrSessionRevoked) {
+		return "", apperr.ErrJWTTokenInvalid.WithError(err)
+	}
+	if err != nil {
+		return "", fmt.Errorf("rotate refresh: %w", err)
+	}
+
+	return newRefreshToken, nil
 }
