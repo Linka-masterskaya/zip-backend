@@ -18,6 +18,11 @@ wait_ready() {
   return 1
 }
 
+show_backend_state() {
+  compose ps zip-backend || true
+  compose logs --no-color --tail=200 zip-backend || true
+}
+
 if [ -z "${1:-}" ]; then
   echo "Usage: $0 <version>"
   exit 1
@@ -45,12 +50,13 @@ rollback() {
 
   echo "Rollback to $PREV_VERSION"
   compose stop caddy zip-backend
+  RESTORE_FAILED=false
   if [ -n "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ]; then
     if ! compose exec -T postgres \
       psql --set ON_ERROR_STOP=1 --single-transaction \
       -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"; then
-      echo "Rollback failed to restore the database backup"
-      return 1
+      echo "Rollback warning: database backup restore failed; attempting to restart the previous application"
+      RESTORE_FAILED=true
     fi
   fi
 
@@ -61,6 +67,7 @@ rollback() {
   fi
   if ! wait_ready; then
     echo "Rollback failed readiness check"
+    show_backend_state
     return 1
   fi
   if ! compose up -d --remove-orphans; then
@@ -68,6 +75,9 @@ rollback() {
     return 1
   fi
   echo "$PREV_VERSION" > .version
+  if [ "$RESTORE_FAILED" = true ]; then
+    echo "Previous application is ready, but the database backup was not restored"
+  fi
 }
 
 compose pull
@@ -96,6 +106,8 @@ if ! compose up -d zip-backend; then
 fi
 
 if ! wait_ready; then
+  echo "New application failed readiness check"
+  show_backend_state
   rollback || true
   exit 1
 fi
