@@ -87,7 +87,7 @@ func TestVerifyEmail(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewAuthHandler(mockSvc)
+			h := NewHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.VerifyEmail)
 
 			req := httptest.NewRequestWithContext(
@@ -163,7 +163,7 @@ func TestResendEmail(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewAuthHandler(mockSvc)
+			h := NewHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.ResendEmail)
 
 			req := httptest.NewRequestWithContext(
@@ -242,7 +242,7 @@ func TestForgotPassword(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewAuthHandler(mockSvc)
+			h := NewHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.ForgotPassword)
 
 			req := httptest.NewRequestWithContext(
@@ -330,7 +330,7 @@ func TestResetPassword(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewAuthHandler(mockSvc)
+			h := NewHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.ResetPassword)
 
 			req := httptest.NewRequestWithContext(
@@ -431,7 +431,7 @@ func TestRefresh(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewAuthHandler(mockSvc)
+			h := NewHandler(mockSvc)
 			h.refreshTokenTTL = time.Hour
 			h.cookieSecure = false
 

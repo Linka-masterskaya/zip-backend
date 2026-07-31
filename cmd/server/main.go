@@ -157,7 +157,7 @@ func run() error {
 	})
 	httpapi.RegisterPictureBankRoutes(mainMux, authMW, picturesRateLimit, picturesHandler)
 
-	authHandler := auth.NewAuthHandler(authService, authCfg)
+	authHandler := auth.NewHandler(authService, authCfg)
 
 	mainMux.Handle(
 		"POST /api/v1/auth/login",

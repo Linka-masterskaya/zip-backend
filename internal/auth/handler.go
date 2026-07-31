@@ -24,14 +24,16 @@ type authServiceIface interface {
 	resendEmail(ctx context.Context) error
 }
 
-type authHandlers struct {
+// Handler serves authentication HTTP endpoints.
+type Handler struct {
 	svc             authServiceIface
 	refreshTokenTTL time.Duration
 	cookieSecure    bool
 }
 
-func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
-	h := &authHandlers{
+// NewHandler creates an auth HTTP handler.
+func NewHandler(svc authServiceIface, cfg ...Config) *Handler {
+	h := &Handler{
 		svc: svc,
 	}
 
@@ -63,7 +65,7 @@ type ResetPasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
-func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) error {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest.WithError(err)
@@ -116,7 +118,7 @@ type verifyEmailRequest struct {
 	Token string `json:"token"`
 }
 
-func (h *authHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) error {
 	var req verifyEmailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest
@@ -134,7 +136,7 @@ func (h *authHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) error
 	return nil
 }
 
-func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) ResendEmail(w http.ResponseWriter, r *http.Request) error {
 	if err := h.svc.resendEmail(r.Context()); err != nil {
 		return err
 	}
@@ -143,7 +145,7 @@ func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error
 	return nil
 }
 
-func (h *authHandlers) ForgotPassword(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) error {
 	var req ForgotPasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
@@ -157,7 +159,7 @@ func (h *authHandlers) ForgotPassword(w http.ResponseWriter, r *http.Request) er
 	return nil
 }
 
-func (h *authHandlers) ResetPassword(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) error {
 	var req ResetPasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
@@ -171,7 +173,7 @@ func (h *authHandlers) ResetPassword(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-func (h *authHandlers) RegisterRoutes(
+func (h *Handler) RegisterRoutes(
 	mux *http.ServeMux,
 	authMW *middleware.AuthMW,
 	cacheClient *cache.Client,
@@ -218,7 +220,7 @@ func (h *authHandlers) RegisterRoutes(
 	)
 }
 
-func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
 	cookie, err := r.Cookie("refresh_token")
 	if errors.Is(err, http.ErrNoCookie) {
 		return apperr.ErrUnauthorized
