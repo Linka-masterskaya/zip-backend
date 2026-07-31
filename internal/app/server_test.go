@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -9,7 +10,8 @@ import (
 )
 
 func TestServeHTTPTreatsServerClosedAsSuccess(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -34,7 +36,8 @@ func TestServeHTTPTreatsServerClosedAsSuccess(t *testing.T) {
 }
 
 func TestServeHTTPReturnsBindError(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -42,7 +45,7 @@ func TestServeHTTPReturnsBindError(t *testing.T) {
 
 	srv := &http.Server{Addr: ln.Addr().String(), Handler: http.NewServeMux(), ReadHeaderTimeout: time.Second}
 
-	err = serveHTTP(srv)
+	err = serveHTTP(context.Background(), srv)
 	if err == nil {
 		t.Fatal("serveHTTP on a busy port = nil, want bind error")
 	}

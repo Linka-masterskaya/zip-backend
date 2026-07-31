@@ -91,8 +91,8 @@ func (a *App) Run(ctx context.Context) error {
 	// port, so a pod that loses it either never passes readiness or restarts
 	// forever on liveness. Failing loudly beats serving traffic unprobeable.
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return serveHTTP(a.apiSrv) })
-	g.Go(func() error { return serveHTTP(a.metricsSrv) })
+	g.Go(func() error { return serveHTTP(gctx, a.apiSrv) })
+	g.Go(func() error { return serveHTTP(gctx, a.metricsSrv) })
 	g.Go(func() error {
 		<-gctx.Done()
 		return a.shutdown()
