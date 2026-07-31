@@ -1,5 +1,5 @@
 app:
-  env: production
+  env: prod
   port: '8080'
   public_url: 'https://linka.rassokha.pro'
   frontend_url: 'https://linka.rassokha.pro'
@@ -110,6 +110,7 @@ auth:
   reset_rate_limit: 3
   verify_resend_rate_limit: 3
   email_confirm_rate_limit: 10
+  cookie_secure: true
 
 rate_limit:
   resend:
