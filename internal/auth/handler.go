@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,7 +17,7 @@ import (
 //go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
-	Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error)
+	Register(ctx context.Context, req RegisterRequest) error
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
@@ -234,25 +233,12 @@ func (h *authHandlers) Register(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	resp, err := h.svc.Register(r.Context(), req)
+	err := h.svc.Register(r.Context(), req)
 	if err != nil {
 		return err
 	}
 
-	h.setRefreshCookie(w, resp.RefreshToken)
-
-	var buf bytes.Buffer
-	//nolint:gosec // The access token is intentionally returned in the response.
-	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
-		return fmt.Errorf("encode register response: %w", err)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		return fmt.Errorf("write register response: %w", err)
-	}
 
 	return nil
 }

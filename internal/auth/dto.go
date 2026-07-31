@@ -11,8 +11,3 @@ type TokenResponse struct {
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int64  `json:"expires_in"`
 }
-
-type RegisterResponse struct {
-	TokenResponse
-	RefreshToken string `json:"-"`
-}

@@ -358,3 +358,108 @@ func TestResetPassword(t *testing.T) {
 		})
 	}
 }
+
+// Register tests
+
+func TestRegister(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		mockSetup  func(m *MockauthServiceIface)
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name: "success",
+			body: `{"email":"user@example.com","password":"strongpass123"}`,
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Register(gomock.Any(), RegisterRequest{
+						Email:    "user@example.com",
+						Password: "strongpass123",
+					}).
+					Return(nil)
+			},
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "malformed json",
+			body:       `{"email":`,
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name:       "invalid email",
+			body:       `{"email":"bad-email","password":"strongpass123"}`,
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name:       "weak password",
+			body:       `{"email":"user@example.com","password":"short"}`,
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name: "duplicate email",
+			body: `{"email":"user@example.com","password":"strongpass123"}`,
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Register(gomock.Any(), RegisterRequest{
+						Email:    "user@example.com",
+						Password: "strongpass123",
+					}).
+					Return(apperr.ErrConflict.WithMessage("email already exists"))
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "CONFLICT",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockauthServiceIface(ctrl)
+			tt.mockSetup(mockSvc)
+
+			h := NewAuthHandler(mockSvc)
+			wrapped := middleware.ErrorMiddleware(h.Register)
+
+			req := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/api/v1/auth/register",
+				bytes.NewBufferString(tt.body),
+			)
+			rec := httptest.NewRecorder()
+
+			wrapped.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+
+			if tt.wantCode != "" {
+				var resp middleware.JSONErrorResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if resp.Error.Code != tt.wantCode {
+					t.Errorf("code = %s, want %s", resp.Error.Code, tt.wantCode)
+				}
+			}
+
+			if tt.wantStatus == http.StatusCreated {
+				if rec.Body.Len() != 0 {
+					t.Errorf("body = %q, want empty", rec.Body.String())
+				}
+				if rec.Header().Get("Set-Cookie") != "" {
+					t.Errorf("Set-Cookie = %q, want empty", rec.Header().Get("Set-Cookie"))
+				}
+			}
+		})
+	}
+}

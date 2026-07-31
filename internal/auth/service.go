@@ -298,43 +298,6 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	return nil
 }
 
-func (au *authService) issueRegisterTokens(ctx context.Context, userID uuid.UUID) (*RegisterResponse, error) {
-	user := &User{
-		ID:            userID.String(),
-		Role:          RoleDefectologist,
-		EmailVerified: false,
-	}
-
-	accessToken, err := au.generateAccessToken(user)
-	if err != nil {
-		return nil, fmt.Errorf("authService.Register: generate access token: %w", err)
-	}
-
-	jti := uuid.NewString()
-	fid := uuid.NewString()
-
-	refreshToken, err := au.generateRefreshToken(user, jti)
-	if err != nil {
-		return nil, fmt.Errorf("authService.Register: generate refresh token: %w", err)
-	}
-
-	if err := au.cache.StoreRefresh(ctx, jti, cache.RefreshRecord{
-		FID:    fid,
-		Status: "active",
-	}, au.cfg.RefreshTokenTTL); err != nil {
-		return nil, fmt.Errorf("authService.Register: store refresh token: %w", err)
-	}
-
-	return &RegisterResponse{
-		TokenResponse: TokenResponse{
-			AccessToken: accessToken,
-			TokenType:   "Bearer",
-			ExpiresIn:   int64(au.cfg.AccessTokenTTL.Seconds()),
-		},
-		RefreshToken: refreshToken,
-	}, nil
-}
-
 func (au *authService) createEmailVerifyToken(ctx context.Context, repo authRepoIface, userID uuid.UUID) (string, error) {
 	verifyToken := make([]byte, 32)
 
@@ -361,34 +324,34 @@ func (au *authService) createEmailVerifyToken(ctx context.Context, repo authRepo
 }
 
 // Register регистрирует пользователя по email и паролю.
-func (au *authService) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
+func (au *authService) Register(ctx context.Context, req RegisterRequest) error {
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	emailHash := au.crp.Hash([]byte(email))
 
 	exists, err := au.repo.EmailExists(ctx, emailHash)
 	if err != nil {
-		return nil, fmt.Errorf("authService.Register: check email exists: %w", err)
+		return fmt.Errorf("authService.Register: check email exists: %w", err)
 	}
 
 	if exists {
 		runDummyPasswordCompare(req.Password)
-		return nil, apperr.ErrConflict.WithMessage("email already exists")
+		return apperr.ErrConflict.WithMessage("email already exists")
 	}
 
 	emailEncrypted, err := au.crp.Encrypt([]byte(email))
 	if err != nil {
-		return nil, fmt.Errorf("authService.Register: encrypt email: %w", err)
+		return fmt.Errorf("authService.Register: encrypt email: %w", err)
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
-		return nil, fmt.Errorf("authService.Register: hash password: %w", err)
+		return fmt.Errorf("authService.Register: hash password: %w", err)
 	}
 
 	tx, err := au.repo.beginTx(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("authService.Register: begin tx: %w", err)
+		return fmt.Errorf("authService.Register: begin tx: %w", err)
 	}
 
 	defer func() {
@@ -403,13 +366,13 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 	orgParams := CreateOrganizationParams{ID: uuid.New(), Name: "Personal organization"}
 
 	if err := txRepo.CreateOrganization(ctx, orgParams); err != nil {
-		return nil, fmt.Errorf("authService.Register: create organization: %w", err)
+		return fmt.Errorf("authService.Register: create organization: %w", err)
 	}
 
 	userParams := CreateUserParams{ID: uuid.New(), OrganizationID: orgParams.ID}
 
 	if err := txRepo.CreateUser(ctx, userParams); err != nil {
-		return nil, fmt.Errorf("authService.Register: create user: %w", err)
+		return fmt.Errorf("authService.Register: create user: %w", err)
 	}
 
 	credParams := CreateAuthCredParams{
@@ -421,16 +384,16 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 	}
 
 	if err := txRepo.CreateAuthCred(ctx, credParams); err != nil {
-		return nil, fmt.Errorf("authService.Register: create auth cred: %w", err)
+		return fmt.Errorf("authService.Register: create auth cred: %w", err)
 	}
 
 	verifyTokenString, err := au.createEmailVerifyToken(ctx, txRepo, userParams.ID)
 	if err != nil {
-		return nil, fmt.Errorf("authService.Register: create verify token: %w", err)
+		return fmt.Errorf("authService.Register: create verify token: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("authService.Register: commit tx: %w", err)
+		return fmt.Errorf("authService.Register: commit tx: %w", err)
 	}
 
 	mailTemplate := mailer.EmailData{Token: verifyTokenString, Email: email}
@@ -440,5 +403,5 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) (*Regi
 		slog.Error("failed to send verify email", "err", err)
 	}
 
-	return au.issueRegisterTokens(ctx, userParams.ID)
+	return nil
 }
