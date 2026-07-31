@@ -34,15 +34,7 @@ func RegisterAuthRoutes(
 	mux.Handle("POST /api/v1/auth/password/reset", public(rl.Reset, h.Auth.ResetPassword))
 	mux.Handle("POST /api/v1/auth/verify-email", public(rl.VerifyEmail, h.Auth.VerifyEmail))
 
-	// Resend is limited twice: by IP before authentication, then per user.
-	mux.Handle(
-		"POST /api/v1/auth/verify-email/resend",
-		rl.VerifyResend(
-			middleware.ErrorMiddleware(
-				authMW.AuthMiddleware(
-					middleware.RateLimitByUser(cacheClient, rl.ResendPolicy)(h.Auth.ResendEmail),
-				),
-			),
-		),
-	)
+	// Resend принимает адрес в теле и не требует токена: неподтверждённый
+	// пользователь может не пройти вход, и попросить письмо было бы нечем.
+	mux.Handle("POST /api/v1/auth/verify-email/resend", public(rl.VerifyResend, h.Auth.ResendEmail))
 }

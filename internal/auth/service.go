@@ -16,7 +16,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 )
@@ -243,21 +242,28 @@ func (au *authService) verifyEmail(ctx context.Context, verifyToken string) erro
 	return nil
 }
 
-func (au *authService) resendEmail(ctx context.Context) error {
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
+// resendEmail повторно отправляет письмо верификации по адресу, а не по JWT:
+// неподтверждённый пользователь может не иметь возможности войти, и тогда
+// запросить письмо было бы нечем.
+func (au *authService) resendEmail(ctx context.Context, email string) error {
+	email = normalizeEmail(email)
+	if err := ValidateEmail(email); err != nil {
 		return err
 	}
 
-	emailEncrypted, emailVerified, err := au.repo.getUserContactForResend(ctx, userID)
+	user, err := au.repo.GetUserByEmailHash(ctx, au.crp.Hash([]byte(email)))
 	if err != nil {
+		// Ответ одинаков для существующего и несуществующего адреса.
+		if errors.Is(err, apperr.ErrUserNotFound) {
+			return nil
+		}
 		return err
 	}
-	if emailVerified {
+	if user.EmailVerified {
 		return nil
 	}
 
-	email, err := au.crp.Decrypt(emailEncrypted)
+	userID, err := uuid.Parse(user.ID)
 	if err != nil {
 		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
@@ -291,7 +297,7 @@ func (au *authService) resendEmail(ctx context.Context) error {
 
 	err = au.mailer.Send(
 		ctx,
-		string(email),
+		email,
 		mailer.EmailVerify,
 		mailer.EmailData{
 			Token: verifyURL,

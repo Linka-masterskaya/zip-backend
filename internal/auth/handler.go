@@ -19,7 +19,7 @@ type authServiceIface interface {
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
-	resendEmail(ctx context.Context) error
+	resendEmail(ctx context.Context, email string) error
 }
 
 // Handler serves authentication HTTP endpoints.
@@ -54,6 +54,11 @@ type LoginResponse struct {
 
 // ForgotPasswordRequest описывает тело запроса на восстановление пароля.
 type ForgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+// ResendEmailRequest описывает тело запроса на повторную отправку письма верификации.
+type ResendEmailRequest struct {
 	Email string `json:"email"`
 }
 
@@ -135,7 +140,12 @@ func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) ResendEmail(w http.ResponseWriter, r *http.Request) error {
-	if err := h.svc.resendEmail(r.Context()); err != nil {
+	var req ResendEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
+	}
+
+	if err := h.svc.resendEmail(r.Context(), req.Email); err != nil {
 		return err
 	}
 

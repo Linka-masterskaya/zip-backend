@@ -113,17 +113,17 @@ func (mr *MockauthServiceIfaceMockRecorder) ResetPassword(ctx, token, newPasswor
 }
 
 // resendEmail mocks base method.
-func (m *MockauthServiceIface) resendEmail(ctx context.Context) error {
+func (m *MockauthServiceIface) resendEmail(ctx context.Context, email string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "resendEmail", ctx)
+	ret := m.ctrl.Call(m, "resendEmail", ctx, email)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // resendEmail indicates an expected call of resendEmail.
-func (mr *MockauthServiceIfaceMockRecorder) resendEmail(ctx any) *gomock.Call {
+func (mr *MockauthServiceIfaceMockRecorder) resendEmail(ctx, email any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resendEmail", reflect.TypeOf((*MockauthServiceIface)(nil).resendEmail), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resendEmail", reflect.TypeOf((*MockauthServiceIface)(nil).resendEmail), ctx, email)
 }
 
 // verifyEmail mocks base method.

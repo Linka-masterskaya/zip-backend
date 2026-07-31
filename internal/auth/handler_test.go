@@ -120,37 +120,41 @@ func TestVerifyEmail(t *testing.T) {
 func TestResendEmail(t *testing.T) {
 	tests := []struct {
 		name       string
+		body       string
 		mockSetup  func(m *MockauthServiceIface)
 		wantStatus int
 		wantCode   string
 	}{
 		{
 			name: "success",
+			body: `{"email":"user@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any()).Return(nil)
+				m.EXPECT().resendEmail(gomock.Any(), "user@example.com").Return(nil)
 			},
 			wantStatus: http.StatusAccepted,
 		},
 		{
-			name: "no user in context (auth middleware not in chain)",
-			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any()).Return(apperr.ErrUnauthorized)
-			},
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   "UNAUTHORIZED",
+			name:       "invalid json",
+			body:       `{`,
+			mockSetup:  func(_ *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
 		},
 		{
-			name: "user not found",
+			// Несуществующий адрес не отличим от существующего: сервис
+			// возвращает nil, чтобы нельзя было перебрать базу пользователей.
+			name: "unknown email is indistinguishable from known",
+			body: `{"email":"missing@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any()).Return(apperr.ErrUserNotFound)
+				m.EXPECT().resendEmail(gomock.Any(), "missing@example.com").Return(nil)
 			},
-			wantStatus: http.StatusNotFound,
-			wantCode:   "USER_NOT_FOUND",
+			wantStatus: http.StatusAccepted,
 		},
 		{
-			name: "mailer/decrypt/db failure",
+			name: "mailer/db failure",
+			body: `{"email":"user@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any()).Return(apperr.ErrInternal)
+				m.EXPECT().resendEmail(gomock.Any(), gomock.Any()).Return(apperr.ErrInternal)
 			},
 			wantStatus: http.StatusInternalServerError,
 			wantCode:   "INTERNAL",
@@ -169,8 +173,8 @@ func TestResendEmail(t *testing.T) {
 			req := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/auth/verify-email/resend",
-				nil,
+				"/api/v1/auth/verify-email/resend",
+				bytes.NewBufferString(tt.body),
 			)
 			rec := httptest.NewRecorder()
 
