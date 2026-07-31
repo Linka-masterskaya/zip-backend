@@ -27,6 +27,9 @@ func RegisterAuthRoutes(
 
 	mux.Handle("POST /api/v1/auth/login", public(rl.Login, h.Auth.Login))
 	mux.Handle("POST /api/v1/auth/refresh", public(rl.Refresh, h.Auth.Refresh))
+
+	// Logout only reads the refresh cookie, so it needs no access token.
+	mux.Handle("POST /api/v1/auth/logout", middleware.ErrorMiddleware(h.Auth.Logout))
 	mux.Handle("POST /api/v1/auth/password/forgot", public(rl.Forgot, h.Auth.ForgotPassword))
 	mux.Handle("POST /api/v1/auth/password/reset", public(rl.Reset, h.Auth.ResetPassword))
 	mux.Handle("POST /api/v1/auth/verify-email", public(rl.VerifyEmail, h.Auth.VerifyEmail))

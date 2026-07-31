@@ -15,6 +15,7 @@ import (
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
 	Refresh(ctx context.Context, refreshToken string) (*LoginResult, error)
+	Logout(ctx context.Context, refreshToken string) error
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
@@ -214,5 +215,28 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("write refresh response: %w", err)
 	}
 
+	return nil
+}
+
+// Logout revokes the refresh token family and clears the cookie.
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) error {
+	if cookie, err := r.Cookie("refresh_token"); err == nil {
+		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+			return err
+		}
+	}
+
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
 	return nil
 }

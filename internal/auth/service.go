@@ -336,6 +336,35 @@ func (au *authService) Refresh(ctx context.Context, refreshToken string) (*Login
 	}, nil
 }
 
+// Logout revokes the whole refresh token family. Идемпотентен: невалидный,
+// истёкший или уже отозванный токен не считается ошибкой.
+func (au *authService) Logout(ctx context.Context, refreshToken string) error {
+	const op = "authService.Logout"
+
+	if refreshToken == "" {
+		return nil
+	}
+
+	claims, err := au.parseRefreshToken(refreshToken)
+	if err != nil {
+		return nil
+	}
+
+	rec, err := au.cache.GetRefresh(ctx, claims.ID)
+	if errors.Is(err, cache.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := au.cache.RevokeFamily(ctx, rec.FID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
 func (au *authService) getActiveRefreshRecord(
 	ctx context.Context,
 	jti string,

@@ -99,6 +99,7 @@ func TestRegisterAuthRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/auth/login",
 		"POST /api/v1/auth/refresh",
+		"POST /api/v1/auth/logout",
 		"POST /api/v1/auth/password/forgot",
 		"POST /api/v1/auth/password/reset",
 		"POST /api/v1/auth/verify-email",
