@@ -161,6 +161,48 @@ func TestConcurrentChildCreateAndParentDeleteNeverCascadesData(t *testing.T) {
 	}
 }
 
+func TestLibraryAdminIsScopedToOrganization(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "owner")
+	foreignHeadID := seedFolderUser(t, pool, "foreign head")
+	service := NewService(NewRepository(pool))
+	ownerCtx := folderContext(ownerID)
+	foreignHeadCtx := folderContextWithRole(foreignHeadID, "head_defectologist")
+
+	target, err := service.Create(ownerCtx, CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Target",
+	})
+	require.NoError(t, err)
+	destination, err := service.Create(ownerCtx, CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Destination",
+	})
+	require.NoError(t, err)
+
+	_, err = service.Rename(foreignHeadCtx, target.ID, "Cross-org rename")
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+	_, err = service.Move(foreignHeadCtx, target.ID, &destination.ID)
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+	err = service.Delete(foreignHeadCtx, target.ID)
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+
+	var ownerOrgID uuid.UUID
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT org_id FROM users WHERE id = $1`, ownerID).Scan(&ownerOrgID))
+	sameOrgHeadID := uuid.New()
+	_, err = pool.Exec(t.Context(),
+		`INSERT INTO users (id, org_id) VALUES ($1, $2)`, sameOrgHeadID, ownerOrgID)
+	require.NoError(t, err)
+	sameOrgHeadCtx := folderContextWithRole(sameOrgHeadID, "head_defectologist")
+
+	renamed, err := service.Rename(sameOrgHeadCtx, target.ID, "Same-org rename")
+	require.NoError(t, err)
+	assert.Equal(t, "Same-org rename", renamed.Name)
+	moved, err := service.Move(sameOrgHeadCtx, target.ID, &destination.ID)
+	require.NoError(t, err)
+	require.NotNil(t, moved.ParentID)
+	assert.Equal(t, destination.ID, *moved.ParentID)
+}
+
 func folderTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool, cleanup := testutil.NewPostgres(t)
@@ -208,8 +250,12 @@ func seedFolderStudent(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) uuid
 }
 
 func folderContext(userID uuid.UUID) context.Context {
+	return folderContextWithRole(userID, "defectologist")
+}
+
+func folderContextWithRole(userID uuid.UUID, role string) context.Context {
 	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
-	return authctx.SetRoleToCtx(ctx, "defectologist")
+	return authctx.SetRoleToCtx(ctx, role)
 }
 
 func assertStatus(t *testing.T, err error, status int) {

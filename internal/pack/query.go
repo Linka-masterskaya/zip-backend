@@ -24,6 +24,16 @@ const getPackQuery = `
 	  )
 	  AND u.deleted_at IS NULL`
 
+const getPackForPublicationQuery = `
+	SELECT ` + qualifiedPackColumns + `
+	FROM packs p
+	JOIN users u ON u.id = $1
+	WHERE p.id = $2
+	  AND p.org_id = u.org_id
+	  AND u.org_id IS NOT NULL
+	  AND u.deleted_at IS NULL
+	  AND (p.owner_id = u.id OR $3)`
+
 const listPacksQuery = `
 	SELECT ` + qualifiedPackColumns + `
 	FROM packs p
@@ -100,12 +110,16 @@ const publishPackQuery = `
 	UPDATE packs p
 	SET library_folder_id = f.id,
 	    published_at = COALESCE(p.published_at, now()),
+	    status = 'published',
 	    updated_at = now()
 	FROM users u, folders f
 	WHERE p.id = $2
 	  AND u.id = $1
 	  AND u.deleted_at IS NULL
+	  AND u.org_id IS NOT NULL
+	  AND p.org_id = u.org_id
 	  AND f.id = $3
+	  AND f.org_id = u.org_id
 	  AND f.section = 'library'
 	  AND (f.owner_id = u.id OR $4)
 	  AND (p.owner_id = u.id OR $4)
@@ -114,17 +128,31 @@ const publishPackQuery = `
 
 const packPublishedInOtherFolderQuery = `
 	SELECT EXISTS (
-		SELECT 1 FROM packs
-		WHERE id = $2
-		  AND (owner_id = $1 OR $3)
-		  AND library_folder_id IS NOT NULL
-		  AND library_folder_id <> $4
+		SELECT 1
+		FROM packs p
+		JOIN users u ON u.id = $1
+		WHERE p.id = $2
+		  AND p.org_id = u.org_id
+		  AND u.org_id IS NOT NULL
+		  AND u.deleted_at IS NULL
+		  AND (p.owner_id = u.id OR $3)
+		  AND p.library_folder_id IS NOT NULL
+		  AND p.library_folder_id <> $4
 	)`
 
 const unpublishPackQuery = `
-	UPDATE packs
-	SET library_folder_id = NULL, published_at = NULL, updated_at = now()
-	WHERE id = $2 AND (owner_id = $1 OR $3)`
+	UPDATE packs p
+	SET library_folder_id = NULL,
+	    published_at = NULL,
+	    status = 'draft',
+	    updated_at = now()
+	FROM users u
+	WHERE p.id = $2
+	  AND u.id = $1
+	  AND u.org_id IS NOT NULL
+	  AND u.deleted_at IS NULL
+	  AND p.org_id = u.org_id
+	  AND (p.owner_id = u.id OR $3)`
 
 const folderAllowedQuery = `
 	SELECT EXISTS (

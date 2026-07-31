@@ -50,10 +50,19 @@ func NewMinIO(t *testing.T) (*storage.Client, func()) {
 		}
 		t.Fatalf("failed to get MinIO endpoint: %v", err)
 	}
-	client, err := storage.New(config.MinIOConfig{
+	storageConfig := config.MinIOConfig{
 		Endpoint: endpoint, AccessKey: accessKey, SecretKey: secretKey,
 		Bucket: "linka-e2e", Timeout: "15s",
-	})
+	}
+	var client *storage.Client
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		client, err = storage.New(storageConfig)
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	if err != nil {
 		if terminateErr := container.Terminate(ctx); terminateErr != nil {
 			t.Logf("terminate MinIO after client error: %v", terminateErr)

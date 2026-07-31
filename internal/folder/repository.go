@@ -157,9 +157,14 @@ func (r *Repository) Rename(
 	row := r.pool.QueryRow(ctx, `
 		UPDATE folders f
 		SET name = $3, updated_at = now()
+		FROM users u
 		WHERE f.id = $2
-		  AND (f.owner_id = $1 OR ($4 AND f.section = 'library'))
-		RETURNING `+folderColumns,
+		  AND u.id = $1
+		  AND u.org_id IS NOT NULL
+		  AND u.deleted_at IS NULL
+		  AND f.org_id = u.org_id
+		  AND (f.owner_id = u.id OR ($4 AND f.section = 'library'))
+		RETURNING `+qualifiedFolderColumns,
 		userID, folderID, name, isAdmin(role))
 	result, err := scanFolder(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -184,8 +189,12 @@ func (r *Repository) Move(
 	}
 	defer rollback(ctx, tx)
 
+	orgID, err := activeUserOrg(ctx, tx, userID)
+	if err != nil {
+		return nil, err
+	}
 	current, err := lockFolder(ctx, tx, folderID)
-	if err != nil || (current.OwnerID != userID &&
+	if err != nil || current.OrgID != orgID || (current.OwnerID != userID &&
 		(!isAdmin(role) || current.Section != SectionLibrary)) {
 		return nil, ErrNotFound
 	}
@@ -297,9 +306,13 @@ func (r *Repository) Delete(
 	folderID uuid.UUID,
 ) error {
 	tag, err := r.pool.Exec(ctx, `
-		DELETE FROM folders f
+		DELETE FROM folders f USING users u
 		WHERE f.id = $2
-		  AND (f.owner_id = $1 OR ($3 AND f.section = 'library'))
+		  AND u.id = $1
+		  AND u.org_id IS NOT NULL
+		  AND u.deleted_at IS NULL
+		  AND f.org_id = u.org_id
+		  AND (f.owner_id = u.id OR ($3 AND f.section = 'library'))
 		  AND NOT EXISTS (SELECT 1 FROM folders c WHERE c.parent_id = f.id)
 		  AND NOT EXISTS (SELECT 1 FROM packs p WHERE p.folder_id = f.id)
 		  AND NOT EXISTS (SELECT 1 FROM packs p WHERE p.library_folder_id = f.id)`,
@@ -317,8 +330,14 @@ func (r *Repository) Delete(
 	var exists bool
 	if err = r.pool.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM folders
-			WHERE id = $2 AND (owner_id = $1 OR ($3 AND section = 'library'))
+			SELECT 1
+			FROM folders f
+			JOIN users u ON u.id = $1
+			WHERE f.id = $2
+			  AND u.org_id IS NOT NULL
+			  AND u.deleted_at IS NULL
+			  AND f.org_id = u.org_id
+			  AND (f.owner_id = u.id OR ($3 AND f.section = 'library'))
 		)`, userID, folderID, isAdmin(role)).Scan(&exists); err != nil {
 		return fmt.Errorf("folder delete existence: %w", err)
 	}

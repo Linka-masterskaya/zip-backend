@@ -154,6 +154,37 @@ func TestServiceUpdateRejectsInvalidMetadata(t *testing.T) {
 	}
 }
 
+func TestServicePublishValidatesConfigBeforeMutation(t *testing.T) {
+	userID := uuid.New()
+	packID := uuid.New()
+	folderID := uuid.New()
+	publishCalled := false
+	repo := &fakePackRepository{
+		getForPublicationFn: func(
+			_ context.Context,
+			gotUserID, gotPackID uuid.UUID,
+			admin bool,
+		) (*Pack, error) {
+			assert.Equal(t, userID, gotUserID)
+			assert.Equal(t, packID, gotPackID)
+			assert.False(t, admin)
+			return &Pack{ID: packID, Config: json.RawMessage(`{}`)}, nil
+		},
+		publishFn: func(
+			context.Context, uuid.UUID, uuid.UUID, uuid.UUID, bool,
+		) (*Pack, error) {
+			publishCalled = true
+			return &Pack{}, nil
+		},
+	}
+	ctx := authctx.SetRoleToCtx(packContext(userID), "defectologist")
+
+	_, err := NewService(repo, nil).Publish(ctx, packID, folderID)
+
+	assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+	assert.False(t, publishCalled)
+}
+
 func TestServiceMapsRepositoryErrors(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -194,12 +225,25 @@ func assertAppErrorStatus(t *testing.T, err error, status int) {
 }
 
 type fakePackRepository struct {
-	createFn func(context.Context, uuid.UUID, CreateInput) (*Pack, error)
-	getFn    func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
-	listFn   func(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*Pack, error)
-	updateFn func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
-	deleteFn func(context.Context, uuid.UUID, uuid.UUID) error
-	moveFn   func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
+	createFn            func(context.Context, uuid.UUID, CreateInput) (*Pack, error)
+	getFn               func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
+	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
+	listFn              func(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*Pack, error)
+	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
+	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
+	moveFn              func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
+	publishFn           func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, bool) (*Pack, error)
+}
+
+func (f *fakePackRepository) GetForPublication(
+	ctx context.Context,
+	userID, packID uuid.UUID,
+	admin bool,
+) (*Pack, error) {
+	if f.getForPublicationFn != nil {
+		return f.getForPublicationFn(ctx, userID, packID, admin)
+	}
+	return &Pack{}, nil
 }
 
 func (f *fakePackRepository) Create(ctx context.Context, userID uuid.UUID, input CreateInput) (*Pack, error) {
@@ -249,12 +293,15 @@ func (f *fakePackRepository) Move(ctx context.Context, userID, packID, folderID 
 }
 
 func (f *fakePackRepository) Publish(
-	context.Context,
-	uuid.UUID,
-	uuid.UUID,
-	uuid.UUID,
-	bool,
+	ctx context.Context,
+	userID uuid.UUID,
+	packID uuid.UUID,
+	folderID uuid.UUID,
+	admin bool,
 ) (*Pack, error) {
+	if f.publishFn != nil {
+		return f.publishFn(ctx, userID, packID, folderID, admin)
+	}
 	return &Pack{}, nil
 }
 

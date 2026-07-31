@@ -17,6 +17,7 @@ import (
 type packRepository interface {
 	Create(context.Context, uuid.UUID, CreateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
+	GetForPublication(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
 	List(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*Pack, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
@@ -122,9 +123,16 @@ func (s *Service) Publish(ctx context.Context, packID, folderID uuid.UUID) (*Pac
 	if role != "defectologist" && role != "head_defectologist" && role != "admin" {
 		return nil, apperr.ErrForbidden
 	}
+	admin := role == "head_defectologist" || role == "admin"
+	candidate, err := s.repo.GetForPublication(ctx, userID, packID, admin)
+	if err != nil {
+		return nil, packError(err)
+	}
+	if _, err = validateAndMediaIDs(ctx, candidate.Config, false); err != nil {
+		return nil, err
+	}
 	result, err := s.repo.Publish(
-		ctx, userID, packID, folderID,
-		role == "head_defectologist" || role == "admin",
+		ctx, userID, packID, folderID, admin,
 	)
 	return result, packError(err)
 }

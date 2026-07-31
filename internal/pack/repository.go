@@ -58,6 +58,24 @@ func (r *Repository) Get(ctx context.Context, userID, packID uuid.UUID) (*Pack, 
 	return result, nil
 }
 
+// GetForPublication returns a same-organization pack that the caller may publish.
+func (r *Repository) GetForPublication(
+	ctx context.Context,
+	userID, packID uuid.UUID,
+	admin bool,
+) (*Pack, error) {
+	result, err := scanPack(r.pool.QueryRow(
+		ctx, getPackForPublicationQuery, userID, packID, admin,
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrPackNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pack repository get for publication: %w", err)
+	}
+	return result, nil
+}
+
 // List returns a bounded page of packs from an owned folder.
 func (r *Repository) List(
 	ctx context.Context,

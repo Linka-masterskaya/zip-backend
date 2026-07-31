@@ -80,6 +80,13 @@ func (s *ContentService) RestoreVersion(
 	if err != nil {
 		return nil, err
 	}
+	target, err := s.repo.GetVersion(ctx, userID, packID, versionNumber)
+	if err != nil {
+		return nil, contentError(err)
+	}
+	if _, err = validateAndMediaIDs(ctx, target.Config, false); err != nil {
+		return nil, err
+	}
 	result, err := s.repo.RestoreVersion(ctx, userID, packID, versionNumber)
 	return result, contentError(err)
 }

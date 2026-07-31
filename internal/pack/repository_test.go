@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -235,6 +236,7 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	require.NotNil(t, published.LibraryFolderID)
 	assert.Equal(t, libraryFolderID, *published.LibraryFolderID)
 	require.NotNil(t, published.PublishedAt)
+	assert.Equal(t, "published", published.Status)
 
 	again, err := repo.Publish(
 		context.Background(), ownerID, created.ID, libraryFolderID, false,
@@ -253,9 +255,59 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 
 	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
 	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
+	var status string
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT status FROM packs WHERE id = $1`, created.ID).Scan(&status))
+	assert.Equal(t, "draft", status)
 	_, err = repo.Get(context.Background(), readerID, created.ID)
 	assert.ErrorIs(t, err, ErrPackNotFound)
 	require.NoError(t, repo.Delete(context.Background(), ownerID, created.ID))
+}
+
+func TestRepositoryPublicationAdminIsScopedToOrganization(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	ownerOrgID, ownerID, folderID := seedPackOwner(t, pool, "owner org")
+	_, foreignHeadID, _ := seedPackOwner(t, pool, "foreign head org")
+	ownerLibraryID := seedPackLibraryFolder(t, pool, ownerID)
+	foreignLibraryID := seedPackLibraryFolder(t, pool, foreignHeadID)
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+	created, err := repo.Create(context.Background(), ownerID, CreateInput{
+		Title: "Scoped", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+
+	_, err = repo.Publish(
+		context.Background(), foreignHeadID, created.ID, ownerLibraryID, true,
+	)
+	assert.ErrorIs(t, err, ErrFolderNotAllowed)
+	_, err = repo.Publish(
+		context.Background(), foreignHeadID, created.ID, foreignLibraryID, true,
+	)
+	assert.ErrorIs(t, err, ErrFolderNotAllowed)
+
+	sameOrgHeadID := uuid.New()
+	_, err = pool.Exec(context.Background(),
+		`INSERT INTO users (id, org_id) VALUES ($1, $2)`, sameOrgHeadID, ownerOrgID)
+	require.NoError(t, err)
+	published, err := repo.Publish(
+		context.Background(), sameOrgHeadID, created.ID, ownerLibraryID, true,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "published", published.Status)
+
+	err = repo.Unpublish(context.Background(), foreignHeadID, created.ID, true)
+	assert.ErrorIs(t, err, ErrPackNotFound)
+	fetched, err := repo.Get(context.Background(), ownerID, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched.PublishedAt)
+	assert.Equal(t, "published", fetched.Status)
+
+	require.NoError(t, repo.Unpublish(context.Background(), sameOrgHeadID, created.ID, true))
+	fetched, err = repo.Get(context.Background(), ownerID, created.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetched.PublishedAt)
+	assert.Equal(t, "draft", fetched.Status)
 }
 
 func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) {
@@ -294,6 +346,29 @@ func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) 
 		SELECT count(*) FROM pack_adaptations WHERE pack_id = $1`, created.ID,
 	).Scan(&adaptationCount))
 	assert.Zero(t, adaptationCount)
+}
+
+func TestRestoreVersionRejectsSnapshotInvalidUnderCurrentSchema(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "schema evolution org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+	created, err := repo.Create(t.Context(), ownerID, CreateInput{
+		Title: "Versioned", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO pack_versions (pack_id, version, config, created_by)
+		VALUES ($1, 1, '{}'::jsonb, $2)`, created.ID, ownerID)
+	require.NoError(t, err)
+	service := NewContentService(repo, nil, nil, nil)
+
+	_, err = service.RestoreVersion(packContext(ownerID), created.ID, 1)
+
+	assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+	fetched, err := repo.Get(t.Context(), ownerID, created.ID)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(config), string(fetched.Config))
 }
 
 func TestRepositoryVersionsRestoreConfigAndRetainMedia(t *testing.T) {
