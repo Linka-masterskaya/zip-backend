@@ -1,0 +1,85 @@
+package httpapi
+
+import (
+	"net/http"
+	"sort"
+	"testing"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+)
+
+type recordingMux struct {
+	patterns []string
+}
+
+func (m *recordingMux) Handle(pattern string, _ http.Handler) {
+	m.patterns = append(m.patterns, pattern)
+}
+
+func passthrough(next http.Handler) http.Handler { return next }
+
+func assertPatterns(t *testing.T, got, want []string) {
+	t.Helper()
+	sort.Strings(got)
+	sorted := append([]string(nil), want...)
+	sort.Strings(sorted)
+
+	if len(got) != len(sorted) {
+		t.Fatalf("registered %d routes, want %d\ngot:  %v\nwant: %v", len(got), len(sorted), got, sorted)
+	}
+	for i := range sorted {
+		if got[i] != sorted[i] {
+			t.Fatalf("route mismatch at %d: got %q, want %q", i, got[i], sorted[i])
+		}
+	}
+}
+
+func TestRegisterP1RoutesPatterns(t *testing.T) {
+	m := &recordingMux{}
+	RegisterP1Routes(m, middleware.NewAuthMW([]byte("test-secret")), passthrough, P1Handlers{})
+
+	assertPatterns(t, m.patterns, []string{
+		"POST /api/v1/packs",
+		"GET /api/v1/packs/{id}",
+		"GET /api/v1/packs",
+		"PATCH /api/v1/packs/{id}",
+		"DELETE /api/v1/packs/{id}",
+		"POST /api/v1/packs/{id}/move",
+		"POST /api/v1/packs/{id}/publication",
+		"DELETE /api/v1/packs/{id}/publication",
+		"PUT /api/v1/packs/{id}/config",
+		"GET /api/v1/packs/{id}/export",
+		"POST /api/v1/packs/import",
+		"POST /api/v1/packs/{id}/students",
+		"DELETE /api/v1/packs/{id}/students/{student_id}",
+		"POST /api/v1/packs/{id}/versions",
+		"GET /api/v1/packs/{id}/versions",
+		"GET /api/v1/packs/{id}/versions/{version}",
+		"POST /api/v1/packs/{id}/versions/{version}/restore",
+		"POST /api/v1/media",
+		"GET /api/v1/media/{id}",
+		"DELETE /api/v1/media/{id}",
+		"POST /api/v1/folders",
+		"GET /api/v1/folders",
+		"GET /api/v1/folders/{id}/contents",
+		"PATCH /api/v1/folders/{id}",
+		"POST /api/v1/folders/{id}/move",
+		"DELETE /api/v1/folders/{id}",
+		"POST /api/v1/students",
+		"GET /api/v1/students",
+		"PATCH /api/v1/students/{id}",
+		"DELETE /api/v1/students/{id}",
+	})
+}
+
+func TestRegisterPictureBankRoutesPatterns(t *testing.T) {
+	m := &recordingMux{}
+	RegisterPictureBankRoutes(m, middleware.NewAuthMW([]byte("test-secret")), passthrough, nil)
+
+	assertPatterns(t, m.patterns, []string{
+		"GET /api/v1/pictures/categories",
+		"GET /api/v1/pictures/search",
+		"GET /api/v1/pictures/{id}/content",
+		"POST /api/v1/pictures/{id}/import",
+	})
+}

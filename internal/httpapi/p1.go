@@ -22,9 +22,9 @@ type P1Handlers struct {
 
 // RegisterP1Routes registers folders, packs, publication, and students routes.
 func RegisterP1Routes(
-	mux *http.ServeMux,
+	mux Mux,
 	authMW *middleware.AuthMW,
-	rateLimit func(http.Handler) http.Handler,
+	rateLimit Middleware,
 	handlers P1Handlers,
 ) {
 	protected := func(next middleware.AppHandler) http.Handler {

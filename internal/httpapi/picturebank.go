@@ -8,9 +8,9 @@ import (
 )
 
 func RegisterPictureBankRoutes(
-	mux *http.ServeMux,
+	mux Mux,
 	authMW *middleware.AuthMW,
-	rateLimit func(http.Handler) http.Handler,
+	rateLimit Middleware,
 	handler *picturebank.Handler,
 ) {
 	protected := func(next middleware.AppHandler) http.Handler {
