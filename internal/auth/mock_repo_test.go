@@ -119,22 +119,6 @@ func (mr *MockauthRepoIfaceMockRecorder) beginTx(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "beginTx", reflect.TypeOf((*MockauthRepoIface)(nil).beginTx), ctx)
 }
 
-// getUserContactForResend mocks base method.
-func (m *MockauthRepoIface) getUserContactForResend(ctx context.Context, userID uuid.UUID) ([]byte, bool, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "getUserContactForResend", ctx, userID)
-	ret0, _ := ret[0].([]byte)
-	ret1, _ := ret[1].(bool)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// getUserContactForResend indicates an expected call of getUserContactForResend.
-func (mr *MockauthRepoIfaceMockRecorder) getUserContactForResend(ctx, userID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getUserContactForResend", reflect.TypeOf((*MockauthRepoIface)(nil).getUserContactForResend), ctx, userID)
-}
-
 // rotateEmailTokens mocks base method.
 func (m *MockauthRepoIface) rotateEmailTokens(ctx context.Context, tokenID, userID uuid.UUID, hash []byte, expiresAt time.Time) error {
 	m.ctrl.T.Helper()

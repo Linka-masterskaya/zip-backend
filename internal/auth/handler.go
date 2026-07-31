@@ -11,7 +11,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 )
 
-//go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
+//go:generate go run go.uber.org/mock/mockgen -source=handler.go -destination=mock_service_test.go -package=auth
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
 	Refresh(ctx context.Context, refreshToken string) (*LoginResult, error)

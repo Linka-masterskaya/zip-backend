@@ -35,7 +35,7 @@ func runDummyPasswordCompare(password string) {
 	_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
 }
 
-//go:generate mockgen -source=service.go -destination=mock_repo_test.go -package=auth
+//go:generate go run go.uber.org/mock/mockgen -source=service.go -destination=mock_repo_test.go -package=auth
 type authRepoIface interface {
 	GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
 	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
@@ -46,7 +46,6 @@ type authRepoIface interface {
 	useEmailVerifyToken(ctx context.Context, token []byte) (uuid.UUID, uuid.UUID, error)
 	verifyUser(ctx context.Context, userID uuid.UUID) error
 	verifyStudent(ctx context.Context, studentID uuid.UUID) error
-	getUserContactForResend(ctx context.Context, userID uuid.UUID) ([]byte, bool, error)
 	rotateEmailTokens(
 		ctx context.Context,
 		tokenID, userID uuid.UUID,
