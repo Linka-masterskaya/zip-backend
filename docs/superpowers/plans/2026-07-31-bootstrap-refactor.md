@@ -987,70 +987,32 @@ package app
 
 import (
 	"context"
-	"errors"
 	"testing"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
 )
 
-// Ресурсы инфраструктуры требуют живых Postgres/Redis/NATS/MinIO, поэтому
-// проверяется сам контракт: последовательность шагов, где каждый успешный шаг
-// регистрирует освобождение до того, как выполнится следующий.
-func TestInitStepsReleaseOnFailure(t *testing.T) {
-	var closed []string
-	var c Closer
-
-	steps := []struct {
-		name string
-		fail bool
-	}{
-		{name: "storage"},
-		{name: "nats"},
-		{name: "redis"},
-		{name: "postgres", fail: true},
-		{name: "crypto"},
-	}
-
-	boom := errors.New("postgres unavailable")
-	var initErr error
-	for _, s := range steps {
-		if s.fail {
-			initErr = boom
-			break
-		}
-		name := s.name
-		c.Add(name, func(context.Context) error { closed = append(closed, name); return nil })
-	}
-
-	if initErr == nil {
-		t.Fatal("expected init failure")
-	}
-	if err := c.Close(context.Background()); err != nil {
-		t.Fatalf("Close() = %v, want nil", err)
-	}
-
-	want := []string{"redis", "nats", "storage"}
-	if len(closed) != len(want) {
-		t.Fatalf("closed = %v, want %v", closed, want)
-	}
-	for i := range want {
-		if closed[i] != want[i] {
-			t.Fatalf("closed = %v, want %v", closed, want)
-		}
-	}
-}
-
+// initInfra needs live Postgres/Redis/NATS/MinIO, so the reachable assertion is
+// the failure path: unreachable dependencies must produce an error, and the
+// closer must release whatever was created before the failing step.
 func TestInitInfraFailsOnUnreachableDependencies(t *testing.T) {
 	cfg := minimalUnreachableConfig()
 	var c Closer
 
-	_, err := initInfra(cfg, &c)
+	in, err := initInfra(cfg, &c)
 	if err == nil {
 		t.Fatal("initInfra() = nil error, want failure on unreachable dependencies")
+	}
+	if in != nil {
+		t.Errorf("initInfra() returned %v on failure, want nil", in)
 	}
 	if closeErr := c.Close(context.Background()); closeErr != nil {
 		t.Errorf("Close() after failed init = %v, want nil", closeErr)
 	}
 }
 ```
+
+Порядок освобождения проверяется тестами `Closer` в Task 1 — здесь он не дублируется.
 
 Хелпер `minimalUnreachableConfig` добавить в тот же файл:
 
@@ -1065,11 +1027,9 @@ func minimalUnreachableConfig() *config.Config {
 }
 ```
 
-Импортировать `"github.com/Linka-masterskaya/zip-backend/internal/config"`.
-
 - [ ] **Step 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/app/ -run TestInit -v`
+Run: `go test ./internal/app/ -run TestInitInfra -v`
 Expected: FAIL — `undefined: initInfra`.
 
 - [ ] **Step 3: Реализовать**
