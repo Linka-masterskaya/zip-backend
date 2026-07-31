@@ -140,53 +140,19 @@ func run() error {
 		return fmt.Errorf("health checker init: %w", err)
 	}
 
-	packRateLimit := middleware.RateLimit(deps.redis, "packs_api", int64(deps.cfg.Auth.PackRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	picturesRateLimit := middleware.RateLimit(deps.redis, "pictures_api", deps.cfg.PicturesBank.InboundPerMinute, time.Minute, deps.cfg.App.TrustedProxies)
-	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	refreshRateLimit := middleware.RateLimit(deps.redis, "refresh", int64(deps.cfg.Auth.RefreshRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	forgotRateLimit := middleware.RateLimit(deps.redis, "forgot", int64(deps.cfg.Auth.ForgotRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	resetRateLimit := middleware.RateLimit(deps.redis, "reset", int64(deps.cfg.Auth.ResetRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	profileEmailChangeRateLimit := middleware.RateLimit(deps.redis, "profile-email-change", int64(deps.cfg.Profile.EmailChangeRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	profileEmailConfirmRateLimit := middleware.RateLimit(deps.redis, "profile-email-confirm", int64(deps.cfg.Profile.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
+	rateLimits := httpapi.NewRateLimits(deps.redis, deps.cfg)
 
 	authMW := middleware.NewAuthMW([]byte(deps.cfg.JWT.Secret))
 	mainMux := http.NewServeMux()
-	httpapi.RegisterP1Routes(mainMux, authMW, packRateLimit, httpapi.P1Handlers{
+	httpapi.RegisterP1Routes(mainMux, authMW, rateLimits.Packs, httpapi.P1Handlers{
 		Pack: packHandler, Content: contentHandler, Media: mediaHandler,
 		Folder: folderHandler, Student: studentHandler,
 	})
-	httpapi.RegisterPictureBankRoutes(mainMux, authMW, picturesRateLimit, picturesHandler)
+	httpapi.RegisterPictureBankRoutes(mainMux, authMW, rateLimits.Pictures, picturesHandler)
 
 	authHandler := auth.NewHandler(authService, authCfg)
 
-	mainMux.Handle(
-		"POST /api/v1/auth/login",
-		loginRateLimit(
-			middleware.ErrorMiddleware(authHandler.Login),
-		),
-	)
-	mainMux.Handle(
-		"POST /api/v1/auth/refresh",
-		refreshRateLimit(
-			middleware.ErrorMiddleware(authHandler.Refresh),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /api/v1/auth/password/forgot",
-		forgotRateLimit(
-			middleware.ErrorMiddleware(authHandler.ForgotPassword),
-		),
-	)
-	mainMux.Handle(
-		"POST /api/v1/auth/password/reset",
-		resetRateLimit(
-			middleware.ErrorMiddleware(authHandler.ResetPassword),
-		),
-	)
-
-	// Verify/resend auth-маршруты подключаются в auth handler.
-	authHandler.RegisterRoutes(mainMux, authMW, deps.redis, deps.cfg)
+	httpapi.RegisterAuthRoutes(mainMux, authMW, rateLimits, deps.redis, httpapi.AuthHandlers{Auth: authHandler})
 
 	profileRepo := profile.NewRepository(deps.db)
 	profileService := profile.NewService(profileRepo, deps.storage, deps.mailer, deps.crypto, deps.redis,
@@ -209,13 +175,13 @@ func run() error {
 	)
 	mainMux.Handle(
 		"POST /api/v1/profile/me/email",
-		profileEmailChangeRateLimit(
+		rateLimits.ProfileEmailChange(
 			middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.RequestEmailChange)),
 		),
 	)
 	mainMux.Handle(
 		"POST /api/v1/profile/me/email/confirm",
-		profileEmailConfirmRateLimit(
+		rateLimits.ProfileEmailConfirm(
 			middleware.ErrorMiddleware(profileHandler.ConfirmEmailChange),
 		),
 	)

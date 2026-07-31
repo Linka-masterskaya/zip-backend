@@ -9,9 +9,6 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
-	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 )
 
 //go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
@@ -171,53 +168,6 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) error {
 
 	w.WriteHeader(http.StatusNoContent)
 	return nil
-}
-
-func (h *Handler) RegisterRoutes(
-	mux *http.ServeMux,
-	authMW *middleware.AuthMW,
-	cacheClient *cache.Client,
-	cfg *config.Config,
-) {
-	verifyEmailIPLimit := middleware.RateLimit(
-		cacheClient,
-		"email-confirm",
-		int64(cfg.Auth.EmailConfirmRateLimit),
-		time.Minute,
-		cfg.App.TrustedProxies,
-	)
-
-	verifyResendIPLimit := middleware.RateLimit(
-		cacheClient,
-		"verify-resend",
-		int64(cfg.Auth.VerifyResendRateLimit),
-		time.Minute,
-		cfg.App.TrustedProxies,
-	)
-
-	resendPolicy := middleware.RateLimitPolicy{
-		Scope:  cfg.RateLimit.Resend.Scope,
-		Limit:  cfg.RateLimit.Resend.Limit,
-		Window: cfg.RateLimit.Resend.Window,
-	}
-
-	mux.Handle(
-		"POST /api/v1/auth/verify-email",
-		verifyEmailIPLimit(
-			middleware.ErrorMiddleware(h.VerifyEmail),
-		),
-	)
-
-	mux.Handle(
-		"POST /api/v1/auth/verify-email/resend",
-		verifyResendIPLimit(
-			middleware.ErrorMiddleware(
-				authMW.AuthMiddleware(
-					middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
-				),
-			),
-		),
-	)
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
