@@ -76,6 +76,15 @@ func newRegisterTestService(mailerFake *registerMailerFake) *authService {
 	)
 }
 
+func registerCtx(t *testing.T) context.Context {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	return ctx
+}
+
 // SQL-запрос. Возвращает количество записей после регистрации.
 // Нужен для проверки duplicate/email и mailer-error сценариев: убеждаемся, что лишние записи не появились.
 func getRegisterCounts(t *testing.T, ctx context.Context) registerCounts {
@@ -101,7 +110,7 @@ func getRegisterCounts(t *testing.T, ctx context.Context) registerCounts {
 
 func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	truncateAll(t)
-	ctx := testCtx(t)
+	ctx := registerCtx(t)
 
 	mailerFake := &registerMailerFake{}
 	svc := newRegisterTestService(mailerFake)
@@ -194,7 +203,7 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 
 func TestAuthService_Register_IntegrationDuplicateEmail(t *testing.T) {
 	truncateAll(t)
-	ctx := testCtx(t)
+	ctx := registerCtx(t)
 
 	mailerFake := &registerMailerFake{}
 	svc := newRegisterTestService(mailerFake)
@@ -225,7 +234,7 @@ func TestAuthService_Register_IntegrationDuplicateEmail(t *testing.T) {
 
 func TestAuthService_Register_MailerErrorIsSuccess(t *testing.T) {
 	truncateAll(t)
-	ctx := testCtx(t)
+	ctx := registerCtx(t)
 
 	mailerFake := &registerMailerFake{err: errors.New("smtp unavailable")}
 	svc := newRegisterTestService(mailerFake)
