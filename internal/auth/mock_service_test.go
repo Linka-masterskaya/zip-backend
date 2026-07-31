@@ -69,6 +69,35 @@ func (mr *MockauthServiceIfaceMockRecorder) Login(ctx, email, password any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Login", reflect.TypeOf((*MockauthServiceIface)(nil).Login), ctx, email, password)
 }
 
+// Logout mocks base method.
+func (m *MockauthServiceIface) Logout(ctx context.Context, refreshToken string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Logout", ctx, refreshToken)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Logout indicates an expected call of Logout.
+func (mr *MockauthServiceIfaceMockRecorder) Logout(ctx, refreshToken any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Logout", reflect.TypeOf((*MockauthServiceIface)(nil).Logout), ctx, refreshToken)
+}
+
+// Refresh mocks base method.
+func (m *MockauthServiceIface) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Refresh", ctx, refreshToken)
+	ret0, _ := ret[0].(*LoginResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Refresh indicates an expected call of Refresh.
+func (mr *MockauthServiceIfaceMockRecorder) Refresh(ctx, refreshToken any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refresh", reflect.TypeOf((*MockauthServiceIface)(nil).Refresh), ctx, refreshToken)
+}
+
 // ResetPassword mocks base method.
 func (m *MockauthServiceIface) ResetPassword(ctx context.Context, token, newPassword string) error {
 	m.ctrl.T.Helper()
@@ -84,17 +113,17 @@ func (mr *MockauthServiceIfaceMockRecorder) ResetPassword(ctx, token, newPasswor
 }
 
 // resendEmail mocks base method.
-func (m *MockauthServiceIface) resendEmail(ctx context.Context) error {
+func (m *MockauthServiceIface) resendEmail(ctx context.Context, email string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "resendEmail", ctx)
+	ret := m.ctrl.Call(m, "resendEmail", ctx, email)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // resendEmail indicates an expected call of resendEmail.
-func (mr *MockauthServiceIfaceMockRecorder) resendEmail(ctx any) *gomock.Call {
+func (mr *MockauthServiceIfaceMockRecorder) resendEmail(ctx, email any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resendEmail", reflect.TypeOf((*MockauthServiceIface)(nil).resendEmail), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resendEmail", reflect.TypeOf((*MockauthServiceIface)(nil).resendEmail), ctx, email)
 }
 
 // verifyEmail mocks base method.

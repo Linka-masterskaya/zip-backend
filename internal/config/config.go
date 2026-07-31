@@ -25,8 +25,29 @@ type Config struct {
 	CORS         CORSConfig         `mapstructure:"cors"`
 	OpenAI       OpenAIConfig       `mapstructure:"openai"`
 	PicturesBank PicturesBankConfig `mapstructure:"pictures_bank"`
+	FeatureFlags FeatureFlagsConfig `mapstructure:"feature_flags"`
 	Crypto       CryptoConfig       `mapstructure:"crypto"`
 	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
+	Server       ServerConfig       `mapstructure:"server"`
+}
+
+// MigrationConfig contains only the settings required by the migration binary.
+// Keeping it separate prevents migrations from depending on unrelated runtime
+// secrets such as JWT, MinIO and SMTP credentials.
+type MigrationConfig struct {
+	App AppConfig `mapstructure:"app"`
+	DB  DBConfig  `mapstructure:"db"`
+}
+
+// ServerConfig contains HTTP server ports and timeouts.
+type ServerConfig struct {
+	MetricsPort         string        `mapstructure:"metrics_port"`
+	ReadTimeout         time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout        time.Duration `mapstructure:"write_timeout"`
+	IdleTimeout         time.Duration `mapstructure:"idle_timeout"`
+	MetricsReadTimeout  time.Duration `mapstructure:"metrics_read_timeout"`
+	MetricsWriteTimeout time.Duration `mapstructure:"metrics_write_timeout"`
+	ShutdownTimeout     time.Duration `mapstructure:"shutdown_timeout"`
 }
 
 // CryptoConfig contains encryption and hashing settings.
@@ -159,7 +180,19 @@ type OpenAIConfig struct {
 
 // PicturesBankConfig contains Pictures Bank settings.
 type PicturesBankConfig struct {
-	URL string `mapstructure:"url"`
+	URL               string        `mapstructure:"url"`
+	Timeout           time.Duration `mapstructure:"timeout"`
+	RequestsPerSecond int64         `mapstructure:"requests_per_second"`
+	InboundPerMinute  int64         `mapstructure:"inbound_per_minute"`
+	MaxConcurrent     int           `mapstructure:"max_concurrent"`
+	CacheTTL          time.Duration `mapstructure:"cache_ttl"`
+	MaxMetadataBytes  int64         `mapstructure:"max_metadata_bytes"`
+	MaxImageBytes     int64         `mapstructure:"max_image_bytes"`
+}
+
+// FeatureFlagsConfig controls optional runtime behavior.
+type FeatureFlagsConfig struct {
+	LocalBank bool `mapstructure:"local_bank"`
 }
 
 // SMTPConfig contains Email settings.
@@ -184,6 +217,7 @@ type AuthConfig struct {
 	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
 	CookieSecure             bool          `mapstructure:"cookie_secure"`
 	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
+	RefreshRateLimit         int           `mapstructure:"refresh_rate_limit"`
 	PackRateLimit            int           `mapstructure:"pack_rate_limit"`
 	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit"`
 	ResetRateLimit           int           `mapstructure:"reset_rate_limit"`
@@ -209,34 +243,64 @@ type CORSConfig struct {
 	MaxAge           int      `mapstructure:"max_age"`
 }
 
-// Load reads configuration from a file and applies environment overrides.
+// Load reads application settings from a configuration file and applies
+// environment overrides. Feature flags are deliberately owned by the file.
 func Load(path string) (*Config, error) {
-	v := viper.New()
-
-	v.SetConfigFile(path)
-	v.SetConfigType("yaml")
-
-	// Set defaults
-	setDefaults(v)
-
-	// Environment variables override YAML keys, for example APP_PORT overrides app.port.
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+	v, err := readConfig(path)
+	if err != nil {
+		return nil, err
 	}
+
+	// Capture file-owned flags before enabling environment overrides.
+	localBank := v.GetBool("feature_flags.local_bank")
+	enableEnvironment(v)
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	cfg.FeatureFlags.LocalBank = localBank
 
 	// Validate required fields
 	if err := validateConfig(&cfg); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return &cfg, nil
+}
+
+// LoadMigration reads only the settings needed to run database migrations.
+func LoadMigration(path string) (*MigrationConfig, error) {
+	v, err := readConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	enableEnvironment(v)
+
+	var cfg MigrationConfig
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal migration config: %w", err)
+	}
+	if cfg.DB.URL == "" {
+		return nil, fmt.Errorf("validate migration config: db.url is required")
+	}
+	return &cfg, nil
+}
+
+func readConfig(path string) (*viper.Viper, error) {
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+	setDefaults(v)
+
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	return v, nil
+}
+
+func enableEnvironment(v *viper.Viper) {
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 }
 
 // setDefaults sets default values for all configuration keys.
@@ -248,6 +312,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.frontend_url", "http://localhost:3000")
 	v.SetDefault("app.migrations_dir", "./migrations")
 	v.SetDefault("app.trusted_proxies", []string{})
+
+	// Server defaults
+	v.SetDefault("server.metrics_port", "9090")
+	v.SetDefault("server.read_timeout", "10s")
+	v.SetDefault("server.write_timeout", "30s")
+	v.SetDefault("server.idle_timeout", "60s")
+	v.SetDefault("server.metrics_read_timeout", "5s")
+	v.SetDefault("server.metrics_write_timeout", "5s")
+	v.SetDefault("server.shutdown_timeout", "30s")
 
 	// DB defaults
 	v.SetDefault("db.max_open_conns", 25)
@@ -308,7 +381,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("openai.base_url", "https://api.openai.com/v1")
 
 	// Pictures Bank defaults
-	v.SetDefault("pictures_bank.url", "")
+	v.SetDefault("pictures_bank.url", "https://pictures.linka.su")
+	v.SetDefault("pictures_bank.timeout", "5s")
+	v.SetDefault("pictures_bank.requests_per_second", 5)
+	v.SetDefault("pictures_bank.inbound_per_minute", 120)
+	v.SetDefault("pictures_bank.max_concurrent", 4)
+	v.SetDefault("pictures_bank.cache_ttl", "1h")
+	v.SetDefault("pictures_bank.max_metadata_bytes", 2097152)
+	v.SetDefault("pictures_bank.max_image_bytes", 10485760)
+
+	// The adapter is intentionally disabled until its implementation lands.
+	v.SetDefault("feature_flags.local_bank", false)
 
 	// SMTP defaults
 	v.SetDefault("smtp.host", "smtp.yandex.ru")
@@ -327,6 +410,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.reset_password_token_ttl", "1h")
 	v.SetDefault("auth.bcrypt_cost", 12)
 	v.SetDefault("auth.login_rate_limit", 5)
+	v.SetDefault("auth.refresh_rate_limit", 10)
 	v.SetDefault("auth.require_email_verification", false)
 	v.SetDefault("auth.cookie_secure", false)
 	v.SetDefault("auth.pack_rate_limit", 60)

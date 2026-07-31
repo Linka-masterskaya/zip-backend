@@ -1,0 +1,80 @@
+package linka
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestValidateConfig(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		fixtureName string
+		wantErr     bool
+		errMsg      string
+	}{
+		{"Valid Grid", "valid_grid.json", false, ""},
+		{"Valid Empty Pack", "valid_empty_pack.json", false, ""},
+		{"Valid Single Choice", "valid_single_choice.json", false, ""},
+		{"Valid Sequence", "valid_sequence.json", false, ""},
+		{"Valid Matching", "valid_matching.json", false, ""},
+		{"Valid Categories", "valid_categories.json", false, ""},
+		{"Invalid Single (0 correct)", "invalid_single_0.json", true, "requires exactly 1 correct answer"},
+		{"Invalid Single (2 correct)", "invalid_single_2.json", true, "requires exactly 1 correct answer"},
+		{"Invalid Multi (0 correct)", "invalid_multi_0.json", true, "requires at least 1 correct answer"},
+		{"Invalid Sequence (Dup order)", "invalid_seq_dup.json", true, "unique order"},
+		{"Invalid Type (Open Answer)", "invalid_open_answer.json", true, "schema validation failed"},
+		{"Invalid Settings (Rows > 100)", "invalid_rows_101.json", true, "schema validation failed"},
+		{"Invalid Empty Pack", "invalid_empty_pack.json", true, "schema validation failed"},
+		{"Invalid Typo Property", "invalid_typo_property.json", true, "schema validation failed"},
+		{"Invalid Broken Link", "invalid_broken_link.json", true, "invalid element_id"},
+		{"Invalid Duplicate Element ID", "invalid_duplicate_element_id.json", true, "duplicate element id found"},
+		{"Invalid Missing Array", "invalid_missing_array.json", true, "schema validation failed"},
+		{"Invalid Empty Object", "invalid_empty_object.json", true, "schema validation failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join("testdata", tt.fixtureName)
+			data, err := os.ReadFile(path)
+
+			if err != nil {
+				t.Fatalf("failed to load fixture %s: %v", tt.fixtureName, err)
+			}
+
+			err = ValidateConfig(ctx, json.RawMessage(data))
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateConfig() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if err != nil && tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+				t.Errorf("Expected error containing %q, got %q", tt.errMsg, err.Error())
+			}
+		})
+	}
+}
+
+func TestValidateConfigAllowsPicturesBankSourceID(t *testing.T) {
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{
+			"id":"block","type":"grid",
+			"elements":[{
+				"id":"image","kind":"image",
+				"media_id":"9153ae50-9c6a-4b71-a8de-df458a905d51",
+				"source_picture_id":"0ca59ca4-2298-4a70-a37b-a5107e90844e"
+			}]
+		}]
+	}`)
+
+	if err := ValidateConfig(t.Context(), config); err != nil {
+		t.Fatalf("config with source_picture_id must be valid: %v", err)
+	}
+}

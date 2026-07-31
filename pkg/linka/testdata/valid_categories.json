@@ -1,0 +1,27 @@
+{
+	"metadata": {
+		"version": "2.0",
+		"title": "Categories Test"
+	},
+	"settings": {
+		"columns": 2,
+		"rows": 2
+	},
+	"blocks": [
+		{
+			"id": "block-1",
+			"type": "categories",
+			"elements": [
+				{ "id": "el-1", "kind": "text", "value": "Собака" },
+				{ "id": "el-2", "kind": "text", "value": "Кот" }
+			],
+			"categories": [
+				{
+					"id": "cat-1",
+					"name": "Животные",
+					"items": ["el-1", "el-2"]
+				}
+			]
+		}
+	]
+}

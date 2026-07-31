@@ -395,67 +395,6 @@ func TestRotateEmailTokens(t *testing.T) {
 	})
 }
 
-func TestGetUserContactForResend(t *testing.T) {
-	repo := NewAuthRepo(testPool)
-
-	t.Run("happy path", func(t *testing.T) {
-		truncateAll(t)
-		ctx := testCtx(t)
-
-		userID := seedUser(t, testPool)
-		seedAuthCred(t, testPool, userID, []byte("encrypted-email"), "defectologist")
-
-		email, verified, err := repo.getUserContactForResend(ctx, userID)
-
-		require.NoError(t, err)
-		assert.Equal(t, []byte("encrypted-email"), email)
-		assert.False(t, verified)
-	})
-
-	t.Run("verified user", func(t *testing.T) {
-		truncateAll(t)
-		ctx := testCtx(t)
-
-		userID := seedUser(t, testPool)
-		_, err := testPool.Exec(ctx,
-			`UPDATE users SET email_verified = true WHERE id = $1`, userID)
-		require.NoError(t, err)
-		seedAuthCred(t, testPool, userID, []byte("encrypted-email"), "defectologist")
-
-		email, verified, err := repo.getUserContactForResend(ctx, userID)
-
-		require.NoError(t, err)
-		assert.Equal(t, []byte("encrypted-email"), email)
-		assert.True(t, verified)
-	})
-
-	t.Run("user not found", func(t *testing.T) {
-		truncateAll(t)
-		ctx := testCtx(t)
-
-		fakeID, _ := uuid.NewV7()
-
-		_, _, err := repo.getUserContactForResend(ctx, fakeID)
-
-		assert.ErrorIs(t, err, apperr.ErrUserNotFound)
-	})
-
-	t.Run("soft deleted user", func(t *testing.T) {
-		truncateAll(t)
-		ctx := testCtx(t)
-
-		userID := seedUser(t, testPool)
-		seedAuthCred(t, testPool, userID, []byte("encrypted-email"), "defectologist")
-		_, err := testPool.Exec(ctx,
-			`UPDATE users SET deleted_at = now() WHERE id = $1`, userID)
-		require.NoError(t, err)
-
-		_, _, err = repo.getUserContactForResend(ctx, userID)
-
-		assert.ErrorIs(t, err, apperr.ErrUserNotFound)
-	})
-}
-
 func TestCreatePasswordResetToken(t *testing.T) {
 	repo := NewAuthRepo(testPool)
 

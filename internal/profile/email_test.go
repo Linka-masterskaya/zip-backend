@@ -18,76 +18,15 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
+	"github.com/Linka-masterskaya/zip-backend/migrations"
 )
 
 // ============ Test Helpers ============
 
-// runMigrations creates all necessary tables for tests.
+// runMigrations applies the real migrations, so tests run against the same
+// schema as production instead of a hand-maintained copy that drifts from it.
 func runMigrations(db *sql.DB) error {
-	ctx := context.Background()
-
-	_, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS users (
-			id UUID PRIMARY KEY,
-			email_verified BOOLEAN NOT NULL DEFAULT FALSE,
-			display_name TEXT,
-			avatar_key TEXT,
-			org_id UUID,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-			deleted_at TIMESTAMPTZ
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS organizations (
-			id UUID PRIMARY KEY,
-			storage_used_bytes BIGINT NOT NULL DEFAULT 0,
-			storage_quota_bytes BIGINT NOT NULL DEFAULT 10737418240
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS auth_cred (
-			user_id UUID PRIMARY KEY REFERENCES users(id),
-			email_hash BYTEA NOT NULL,
-			email_encrypted BYTEA NOT NULL,
-			password_hash TEXT,
-			role TEXT NOT NULL DEFAULT 'user',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS verify_tokens (
-			id UUID PRIMARY KEY,
-			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			purpose TEXT NOT NULL,
-			token_hash BYTEA NOT NULL,
-			payload BYTEA,
-			expires_at TIMESTAMPTZ NOT NULL,
-			used_at TIMESTAMPTZ,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, `
-		CREATE INDEX IF NOT EXISTS verify_tokens_token_hash_idx ON verify_tokens (token_hash)
-	`)
-	return err
+	return migrations.Run(db)
 }
 
 // newTestCrypto creates a real cryptox instance for tests.
@@ -122,7 +61,7 @@ func insertTempUser(ctx context.Context, db *sql.DB, id uuid.UUID, email string,
 	emailHash := crypto.Hash([]byte(email))
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO auth_cred (user_id, email_hash, email_encrypted, role)
-		VALUES ($1, $2, $3, 'user')
+		VALUES ($1, $2, $3, 'defectologist')
 	`, id, emailHash, emailEncrypted)
 	if err != nil {
 		return err
@@ -130,8 +69,8 @@ func insertTempUser(ctx context.Context, db *sql.DB, id uuid.UUID, email string,
 
 	orgID := uuid.New()
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO organizations (id, storage_used_bytes, storage_quota_bytes)
-		VALUES ($1, 0, 10737418240)
+		INSERT INTO organizations (id, name, storage_used_bytes, storage_quota_bytes)
+		VALUES ($1, 'Test Org', 0, 10737418240)
 	`, orgID)
 	if err != nil {
 		return err

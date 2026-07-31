@@ -57,12 +57,25 @@ coverage/
 *.coverage
 htmlcov/
 
+# ── Temporary / scratch ──────────────────────────────────────────────────────
+tmp/
+temp/
+.tmp/
+.temp/
+scratch/
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
 # ── Misc ─────────────────────────────────────────────────────────────────────
 *.linka
-tmp/
 
-# ── Internal docs (не для репо) ──────────────────────────────────────────────
-docs/architecture-decisions.md
+# ── Local configuration ─────────────────────────────────────────────────────
 config/*.yml
 !config/config.dev.yml
 bin/
+
+# ── Subagent-driven development scratch ──────────────────────────────────────
+.superpowers/

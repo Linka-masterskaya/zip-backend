@@ -17,74 +17,6 @@ import (
 
 // ============ Test Helpers for Repository Tests ============
 
-// runMigrationsRepo creates all necessary tables for repository tests.
-func runMigrationsRepo(db *sql.DB) error {
-	ctx := context.Background()
-
-	_, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS users (
-			id UUID PRIMARY KEY,
-			email_verified BOOLEAN NOT NULL DEFAULT FALSE,
-			display_name TEXT,
-			avatar_key TEXT,
-			org_id UUID,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-			deleted_at TIMESTAMPTZ
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS organizations (
-			id UUID PRIMARY KEY,
-			storage_used_bytes BIGINT NOT NULL DEFAULT 0,
-			storage_quota_bytes BIGINT NOT NULL DEFAULT 10737418240
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS auth_cred (
-			user_id UUID PRIMARY KEY REFERENCES users(id),
-			email_hash BYTEA NOT NULL,
-			email_encrypted BYTEA NOT NULL,
-			password_hash TEXT,
-			role TEXT NOT NULL DEFAULT 'user',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS verify_tokens (
-			id UUID PRIMARY KEY,
-			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			purpose TEXT NOT NULL,
-			token_hash BYTEA NOT NULL,
-			payload BYTEA,
-			expires_at TIMESTAMPTZ NOT NULL,
-			used_at TIMESTAMPTZ,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, `
-		CREATE INDEX IF NOT EXISTS verify_tokens_token_hash_idx ON verify_tokens (token_hash)
-	`)
-	return err
-}
-
 // insertTestUserRepo inserts a test user for repository tests.
 func insertTestUserRepo(ctx context.Context, db *sql.DB, id uuid.UUID, email string) error {
 	_, err := db.ExecContext(ctx, `
@@ -100,7 +32,7 @@ func insertTestUserRepo(ctx context.Context, db *sql.DB, id uuid.UUID, email str
 	emailHash := sha256.Sum256([]byte(email))
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO auth_cred (user_id, email_hash, email_encrypted, role)
-		VALUES ($1, $2, $3, 'user')
+		VALUES ($1, $2, $3, 'defectologist')
 	`, id, emailHash[:], []byte(email))
 	if err != nil {
 		return err
@@ -108,8 +40,8 @@ func insertTestUserRepo(ctx context.Context, db *sql.DB, id uuid.UUID, email str
 
 	orgID := uuid.New()
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO organizations (id, storage_used_bytes, storage_quota_bytes)
-		VALUES ($1, 0, 10737418240)
+		INSERT INTO organizations (id, name, storage_used_bytes, storage_quota_bytes)
+		VALUES ($1, 'Test Org', 0, 10737418240)
 	`, orgID)
 	if err != nil {
 		return err
@@ -135,7 +67,7 @@ func TestRepository_CreateToken(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -173,7 +105,7 @@ func TestRepository_FindTokenByHash(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -219,7 +151,7 @@ func TestRepository_MarkTokenUsed(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -264,7 +196,7 @@ func TestRepository_DeleteToken(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -309,7 +241,7 @@ func TestRepository_DeleteExpiredTokens(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -374,7 +306,7 @@ func TestRepository_FindByID(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -403,7 +335,7 @@ func TestRepository_FindByEmailHash(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -433,7 +365,7 @@ func TestRepository_UpdateEmailWithTx(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -477,7 +409,7 @@ func TestRepository_BeginTx(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -506,7 +438,7 @@ func TestRepository_FindByIDWithTx(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -543,7 +475,7 @@ func TestRepository_FindByEmailHashWithTx(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 
@@ -581,7 +513,7 @@ func TestRepository_MarkTokenUsedWithTx(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, runMigrationsRepo(db))
+	require.NoError(t, runMigrations(db))
 
 	repo := NewRepository(dbPool)
 

@@ -9,28 +9,29 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
-	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 )
 
-//go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
+//go:generate go run go.uber.org/mock/mockgen -source=handler.go -destination=mock_service_test.go -package=auth
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
+	Refresh(ctx context.Context, refreshToken string) (*LoginResult, error)
+	Logout(ctx context.Context, refreshToken string) error
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
-	resendEmail(ctx context.Context) error
+	resendEmail(ctx context.Context, email string) error
 }
 
-type authHandlers struct {
+// Handler serves authentication HTTP endpoints.
+type Handler struct {
 	svc             authServiceIface
 	refreshTokenTTL time.Duration
 	cookieSecure    bool
 }
 
-func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
-	h := &authHandlers{
+// NewHandler creates an auth HTTP handler.
+func NewHandler(svc authServiceIface, cfg ...Config) *Handler {
+	h := &Handler{
 		svc: svc,
 	}
 
@@ -56,13 +57,18 @@ type ForgotPasswordRequest struct {
 	Email string `json:"email"`
 }
 
+// ResendEmailRequest описывает тело запроса на повторную отправку письма верификации.
+type ResendEmailRequest struct {
+	Email string `json:"email"`
+}
+
 // ResetPasswordRequest описывает тело запроса на установку нового пароля по токену.
 type ResetPasswordRequest struct {
 	Token       string `json:"token"`
 	NewPassword string `json:"new_password"`
 }
 
-func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) error {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest.WithError(err)
@@ -78,6 +84,16 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
+	}
+
+	//nolint:gosec // The access token is intentionally serialized into the API response.
+	body, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("marshal login response: %w", err)
+	}
+
 	//nolint:gosec // Secure is configured separately for local and production environments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
@@ -91,13 +107,9 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	resp := LoginResponse{
-		AccessToken: result.AccessToken,
-	}
-
 	//nolint:gosec // The access token is intentionally returned in the response.
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		return fmt.Errorf("encode login response: %w", err)
+	if _, err := w.Write(body); err != nil {
+		return fmt.Errorf("write login response: %w", err)
 	}
 
 	return nil
@@ -109,7 +121,7 @@ type verifyEmailRequest struct {
 	Token string `json:"token"`
 }
 
-func (h *authHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) error {
 	var req verifyEmailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest
@@ -127,8 +139,13 @@ func (h *authHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) error
 	return nil
 }
 
-func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error {
-	if err := h.svc.resendEmail(r.Context()); err != nil {
+func (h *Handler) ResendEmail(w http.ResponseWriter, r *http.Request) error {
+	var req ResendEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
+	}
+
+	if err := h.svc.resendEmail(r.Context(), req.Email); err != nil {
 		return err
 	}
 
@@ -136,7 +153,7 @@ func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error
 	return nil
 }
 
-func (h *authHandlers) ForgotPassword(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) error {
 	var req ForgotPasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
@@ -150,7 +167,7 @@ func (h *authHandlers) ForgotPassword(w http.ResponseWriter, r *http.Request) er
 	return nil
 }
 
-func (h *authHandlers) ResetPassword(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) error {
 	var req ResetPasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return apperr.ErrBadRequest.WithMessage("invalid JSON request body")
@@ -164,49 +181,72 @@ func (h *authHandlers) ResetPassword(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-func (h *authHandlers) RegisterRoutes(
-	mux *http.ServeMux,
-	authMW *middleware.AuthMW,
-	cacheClient *cache.Client,
-	cfg *config.Config,
-) {
-	verifyEmailIPLimit := middleware.RateLimit(
-		cacheClient,
-		"email-confirm",
-		int64(cfg.Auth.EmailConfirmRateLimit),
-		time.Minute,
-		cfg.App.TrustedProxies,
-	)
-
-	verifyResendIPLimit := middleware.RateLimit(
-		cacheClient,
-		"verify-resend",
-		int64(cfg.Auth.VerifyResendRateLimit),
-		time.Minute,
-		cfg.App.TrustedProxies,
-	)
-
-	resendPolicy := middleware.RateLimitPolicy{
-		Scope:  cfg.RateLimit.Resend.Scope,
-		Limit:  cfg.RateLimit.Resend.Limit,
-		Window: cfg.RateLimit.Resend.Window,
+func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
+	cookie, err := r.Cookie("refresh_token")
+	if errors.Is(err, http.ErrNoCookie) {
+		return apperr.ErrUnauthorized
+	}
+	if err != nil {
+		return fmt.Errorf("get refresh cookie: %w", err)
+	}
+	if cookie.Value == "" {
+		return apperr.ErrUnauthorized
+	}
+	result, err := h.svc.Refresh(r.Context(), cookie.Value)
+	if err != nil {
+		return err
 	}
 
-	mux.Handle(
-		"POST /api/v1/auth/verify-email",
-		verifyEmailIPLimit(
-			middleware.ErrorMiddleware(h.VerifyEmail),
-		),
-	)
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
+	}
 
-	mux.Handle(
-		"POST /api/v1/auth/verify-email/resend",
-		verifyResendIPLimit(
-			middleware.ErrorMiddleware(
-				authMW.AuthMiddleware(
-					middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
-				),
-			),
-		),
-	)
+	//nolint:gosec // The access token is intentionally serialized into the API response.
+	body, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("marshal refresh response: %w", err)
+	}
+
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    result.RefreshToken,
+		Path:     "/",
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+
+	//nolint:gosec // Returning the access token is the expected API behavior.
+	if _, err := w.Write(body); err != nil {
+		return fmt.Errorf("write refresh response: %w", err)
+	}
+
+	return nil
+}
+
+// Logout revokes the refresh token family and clears the cookie.
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) error {
+	if cookie, err := r.Cookie("refresh_token"); err == nil {
+		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+			return err
+		}
+	}
+
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }

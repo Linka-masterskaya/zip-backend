@@ -26,6 +26,31 @@ type Client struct {
 	bucket string
 }
 
+// GetObject opens an object for streaming. The caller must close the returned reader.
+func (c *Client) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	if c == nil || c.client == nil {
+		return nil, errors.New("minio client is not initialized")
+	}
+	if key == "" {
+		return nil, errors.New("object key is required")
+	}
+
+	object, err := c.client.GetObject(ctx, c.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get object %q: %w", key, err)
+	}
+	if _, err = object.Stat(); err != nil {
+		if closeErr := object.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close object after stat: %w", closeErr))
+		}
+		if isNotFound(err) {
+			return nil, ErrObjectNotFound
+		}
+		return nil, fmt.Errorf("stat opened object %q: %w", key, err)
+	}
+	return object, nil
+}
+
 // New creates a MinIO client, ensures the configured bucket exists, and keeps it private.
 func New(cfg config.MinIOConfig) (*Client, error) {
 	if cfg.Endpoint == "" {

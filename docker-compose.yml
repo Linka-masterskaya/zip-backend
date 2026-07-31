@@ -10,7 +10,7 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     depends_on:
       - zip-backend
 

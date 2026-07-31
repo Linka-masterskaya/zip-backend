@@ -1,0 +1,226 @@
+{
+  "info": {
+    "_postman_id": "905bff72-d6f9-4df5-b66e-c34857e4018d",
+    "name": "Linka Backend — Local",
+    "description": "Локальная smoke/auth-коллекция. Выберите окружение Linka Local и запускайте запросы сверху вниз. Postman сам хранит refresh_token из Set-Cookie; login/refresh сохраняют accessToken. В текущей реализации 2026-07-31 маршрут регистрации отсутствует и первый auth-запрос ожидаемо сигнализирует об этом.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 — Health",
+      "item": [
+        {
+          "name": "Health",
+          "request": { "method": "GET", "url": "{{metricsUrl}}/health" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('status=ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "Readiness (all dependencies)",
+          "request": { "method": "GET", "url": "{{metricsUrl}}/readyz" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('all dependencies are ready', () => {", "  const body = pm.response.json();", "  pm.expect(body.status).to.eql('ok');", "  Object.values(body.checks).forEach(check => pm.expect(check.status).to.eql('ok'));", "});"], "type": "text/javascript" } }]
+        }
+      ]
+    },
+    {
+      "name": "01 — Authentication",
+      "item": [
+        {
+          "name": "Register (currently missing — returns 404)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" },
+            "url": "{{baseUrl}}/auth/register",
+            "description": "Маршрут заявлен в docs/api/openapi.yaml, но не зарегистрирован в cmd/server/main.go. После реализации замените тест 404 на 201 и сохраняйте access_token так же, как в Login."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Known gap: endpoint is not implemented', () => pm.response.to.have.status(404));"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "Verify email",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{verifyToken}}\"\n}" },
+            "url": "{{baseUrl}}/auth/verify-email",
+            "description": "Вставьте 43-символьный токен из verify-письма в переменную verifyToken. При auth.require_email_verification=false этот шаг для login не обязателен."
+          }
+        },
+        {
+          "name": "Login (saves access token and refresh cookie)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" },
+            "url": "{{baseUrl}}/auth/login"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "if (pm.response.code === 200) {", "  const body = pm.response.json();", "  pm.expect(body.access_token).to.be.a('string').and.not.empty;", "  pm.environment.set('accessToken', body.access_token);", "}", "pm.test('refresh cookie received', () => pm.expect(pm.cookies.has('refresh_token')).to.be.true);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "Refresh (rotates cookie and access token)",
+          "request": { "method": "POST", "url": "{{baseUrl}}/auth/refresh", "description": "Postman отправит HttpOnly refresh_token из cookie jar автоматически." },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "if (pm.response.code === 200) pm.environment.set('accessToken', pm.response.json().access_token);", "pm.test('rotated refresh cookie received', () => pm.expect(pm.cookies.has('refresh_token')).to.be.true);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "Resend verification email",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }],
+            "url": "{{baseUrl}}/auth/verify-email/resend"
+          }
+        },
+        {
+          "name": "Forgot password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\"\n}" },
+            "url": "{{baseUrl}}/auth/password/forgot",
+            "description": "Всегда отвечает 202. Локальная конфигурация сейчас указывает на внешний SMTP, а не Mailpit."
+          }
+        },
+        {
+          "name": "Reset password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"new_password\": \"{{newPassword}}\"\n}" },
+            "url": "{{baseUrl}}/auth/password/reset"
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 — Authenticated smoke",
+      "item": [
+        {
+          "name": "My profile",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/profile/me" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "List folders",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/folders?section=my" }
+        },
+        {
+          "name": "List packs",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/packs?folder_id={{folderId}}" }
+        },
+        {
+          "name": "List students",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/students" }
+        }
+      ]
+    },
+    {
+      "name": "03 — Сценарий пользователя: Еда → ученик",
+      "description": "Запускайте после Login строго сверху вниз. По ТЗ и макетам папка содержит набор, картинки находятся в config набора, а ученику назначается набор — не папка.",
+      "item": [
+        {
+          "name": "1. Посмотреть банк — котлета (кандидат 1)",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/search?query=котлета" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "const images = pm.response.json().filter(p => (p.mimeType || '').startsWith('image/'));", "pm.expect(images.length, 'food images').to.be.above(0);", "if (images[0]) pm.environment.set('foodPicture1', images[0].id);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "2. Посмотреть банк — яблоки (кандидаты 2 и 3)",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/search?query=яблоко" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "const images = pm.response.json().filter(p => (p.mimeType || '').startsWith('image/'));", "pm.expect(images.length, 'two apple images').to.be.at.least(2);", "if (images[0]) pm.environment.set('foodPicture2', images[0].id);", "if (images[1]) pm.environment.set('foodPicture3', images[1].id);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "3. Посмотреть банк — суп (кандидат 4)",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/search?query=суп" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "const images = pm.response.json().filter(p => (p.mimeType || '').startsWith('image/'));", "pm.expect(images.length, 'food images').to.be.above(0);", "if (images[0]) pm.environment.set('foodPicture4', images[0].id);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "4. Посмотреть банк — каша (кандидат 5)",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/search?query=каша" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "const images = pm.response.json().filter(p => (p.mimeType || '').startsWith('image/'));", "pm.expect(images.length, 'food images').to.be.above(0);", "if (images[0]) pm.environment.set('foodPicture5', images[0].id);", "pm.test('five candidates selected', () => {", "  const ids = [1,2,3,4,5].map(n => pm.environment.get('foodPicture' + n));", "  pm.expect(ids.every(Boolean)).to.be.true;", "  pm.expect(new Set(ids).size).to.eql(5);", "});"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "5. Открыть 5 выбранных картинок",
+          "item": [
+            { "name": "Открыть 1 — котлета", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/{{foodPicture1}}/content" } },
+            { "name": "Открыть 2 — зелёное яблоко", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/{{foodPicture2}}/content" } },
+            { "name": "Открыть 3 — красное яблоко (не добавляем)", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/{{foodPicture3}}/content" } },
+            { "name": "Открыть 4 — суп", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/{{foodPicture4}}/content" } },
+            { "name": "Открыть 5 — каша", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/pictures/{{foodPicture5}}/content" } }
+          ]
+        },
+        {
+          "name": "6. Создать папку «Еда»",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }, { "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"parent_id\": null,\n  \"section\": \"my\",\n  \"kind\": \"folder\",\n  \"student_id\": null,\n  \"name\": \"Еда\"\n}" },
+            "url": "{{baseUrl}}/folders"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "if (pm.response.code === 201) pm.environment.set('folderId', pm.response.json().id);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "7. Создать в папке набор «Еда — 4 картинки»",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }, { "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"Еда — 4 картинки\",\n  \"folder_id\": \"{{folderId}}\"\n}" },
+            "url": "{{baseUrl}}/packs"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "if (pm.response.code === 201) pm.environment.set('packId', pm.response.json().id);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "8. Положить в набор 4 картинки из 5",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }, { "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"metadata\": {\"version\": \"2.0\", \"title\": \"Еда — 4 картинки\"},\n  \"settings\": {\"columns\": 2, \"rows\": 2},\n  \"blocks\": [{\n    \"id\": \"food-grid\",\n    \"type\": \"grid\",\n    \"elements\": [\n      {\"id\": \"food-1\", \"kind\": \"image\", \"source_picture_id\": \"{{foodPicture1}}\"},\n      {\"id\": \"food-2\", \"kind\": \"image\", \"source_picture_id\": \"{{foodPicture2}}\"},\n      {\"id\": \"food-3\", \"kind\": \"image\", \"source_picture_id\": \"{{foodPicture4}}\"},\n      {\"id\": \"food-4\", \"kind\": \"image\", \"source_picture_id\": \"{{foodPicture5}}\"}\n    ]\n  }]\n}" },
+            "url": "{{baseUrl}}/packs/{{packId}}/config"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('pack contains exactly four external pictures', () => {", "  const elements = pm.response.json().config.blocks[0].elements;", "  pm.expect(elements).to.have.length(4);", "  pm.expect(elements.every(e => e.source_picture_id && !e.media_id)).to.be.true;", "  pm.expect(elements.map(e => e.source_picture_id)).not.to.include(pm.environment.get('foodPicture3'));", "});"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "9. Проверить содержимое папки «Еда»",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/folders/{{folderId}}/contents" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('folder contains created pack', () => pm.expect(pm.response.json().items.map(i => i.id)).to.include(pm.environment.get('packId')));"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "10. Создать тестового ученика",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }, { "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"student.{{$timestamp}}@example.com\",\n  \"name\": \"Тестовый ученик\",\n  \"age\": 7,\n  \"status\": \"active\"\n}" },
+            "url": "{{baseUrl}}/students"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "if (pm.response.code === 201) pm.environment.set('studentId', pm.response.json().id);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "11. Создать полку ученика",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }, { "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"parent_id\": null,\n  \"section\": \"students\",\n  \"kind\": \"student\",\n  \"student_id\": \"{{studentId}}\",\n  \"name\": \"Полка — Тестовый ученик\"\n}" },
+            "url": "{{baseUrl}}/folders"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "if (pm.response.code === 201) pm.environment.set('studentFolderId', pm.response.json().id);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "12. Назначить набор ученику",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }, { "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"student_ids\": [\"{{studentId}}\"]\n}" },
+            "url": "{{baseUrl}}/packs/{{packId}}/students"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('one adaptation created', () => pm.expect(pm.response.json()).to.have.length(1));", "if (pm.response.code === 200 && pm.response.json()[0]) pm.environment.set('adaptationId', pm.response.json()[0].id);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "13. Проверить набор на полке ученика",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/folders/{{studentFolderId}}/contents" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('student shelf contains shared pack', () => pm.expect(pm.response.json().items.map(i => i.id)).to.include(pm.environment.get('packId')));"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "14. Открыть набор с полки ученика",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }], "url": "{{baseUrl}}/packs/{{packId}}" },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "if (pm.response.code === 200) {", "  const pack = pm.response.json();", "  const elements = pack.config?.blocks?.flatMap(block => block.elements || []) || [];", "  const pictures = elements.filter(element => element.kind === 'image' && element.source_picture_id);", "  pm.test('pack config contains four external pictures', () => pm.expect(pictures).to.have.length(4));", "  pictures.forEach((picture, index) => pm.environment.set('assignedPicture' + (index + 1), picture.source_picture_id));", "}"], "type": "text/javascript" } }]
+        }
+      ]
+    }
+  ]
+}

@@ -21,13 +21,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
-	"github.com/Linka-masterskaya/zip-backend/internal/reqctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
+
+var avatarTestUserID = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 
 // fakeEmailSender implements EmailSender interface for tests.
 type fakeEmailSender struct{}
@@ -92,7 +94,7 @@ func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
 	if resp.AvatarURL == "" {
 		t.Fatal("expected avatar_url in response")
 	}
-	if !strings.HasPrefix(repo.avatarKeyValue(), "avatars/user-1/") {
+	if !strings.HasPrefix(repo.avatarKeyValue(), "avatars/"+avatarTestUserID.String()+"/") {
 		t.Fatalf("unexpected avatar key: %q", repo.avatarKeyValue())
 	}
 	if !store.hasObject(repo.avatarKeyValue()) {
@@ -308,7 +310,7 @@ func multipartAvatarRequest(t *testing.T, data []byte, filename string) *http.Re
 		t.Fatalf("close multipart writer: %v", err)
 	}
 
-	ctx := reqctx.PutUserID(context.Background(), "user-1")
+	ctx := authctx.SetUserIDToCtx(context.Background(), avatarTestUserID)
 	req := httptest.NewRequestWithContext(ctx, http.MethodPut, "/api/v1/profile/me/avatar", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req
@@ -518,10 +520,6 @@ func (r *fakeAvatarRepo) FindByEmailHash(_ context.Context, _ []byte) (*User, er
 	return nil, nil
 }
 
-func (r *fakeAvatarRepo) Update(_ context.Context, _ *User, _ []byte, _ []byte) error {
-	return nil
-}
-
 // ============ Token methods ============
 
 func (r *fakeAvatarRepo) CreateToken(_ context.Context, _ *Token) error {
@@ -589,4 +587,8 @@ func (r *fakeAvatarRepo) addStorageUsage(delta int64) {
 
 func (r *fakeAvatarRepo) GetUserProfile(ctx context.Context, userID uuid.UUID) (*UserProfile, error) {
 	return nil, nil
+}
+
+func (r *fakeAvatarRepo) UpdateDisplayName(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
 }

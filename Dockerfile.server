@@ -14,11 +14,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags "-s -w \
-    -X main.version=${VERSION} \
-    -X main.buildTime=${BUILD_TIME}" \
+    -X github.com/Linka-masterskaya/zip-backend/internal/app.Version=${VERSION} \
+    -X github.com/Linka-masterskaya/zip-backend/internal/app.BuildTime=${BUILD_TIME}" \
     -trimpath \
     -o /app/bin/server \
-    ./cmd/server
+    ./cmd/server && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-s -w" \
+    -trimpath \
+    -o /app/bin/migrate \
+    ./cmd/migrate
 
 # Stage 2
 FROM gcr.io/distroless/static-debian12
@@ -26,6 +31,11 @@ FROM gcr.io/distroless/static-debian12
 WORKDIR /app
 
 COPY --from=builder /app/bin/server .
+COPY --from=builder /app/bin/migrate .
+COPY config/config.prod.yml /app/config/config.prod.yml
+
+ENV CONFIG_PATH=config/config.prod.yml
+
 
 EXPOSE 8080
 USER nonroot:nonroot

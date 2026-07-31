@@ -1,4 +1,4 @@
-.PHONY: build run test lint mock dev-up dev-down dev-reset migrate migrate-down
+.PHONY: build run run-local test test-e2e lint mock dev-up dev-down dev-reset migrate migrate-down
 
 # ── Environment ──────────────────────────────────────────────────────────────
 # Load variables from .env file (if exists) and export them for subprocesses
@@ -10,15 +10,24 @@ endif
 # ── Build ────────────────────────────────────────────────────────────────────
 build:
 	go build -o bin/server ./cmd/server
-	go build -o bin/ai-worker ./cmd/ai-worker
+	go build -o bin/migrate ./cmd/migrate
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 run:
 	CONFIG_PATH=config/config.dev.yml go run ./cmd/server
 
+# Full local stack: infra + migrations + server (blocks in foreground)
+run-local:
+	docker compose -f compose.dev.yaml up -d postgres minio nats redis
+	$(MAKE) migrate-embed
+	$(MAKE) run
+
 # ── Test ─────────────────────────────────────────────────────────────────────
 test:
 	go test ./... -race -count=1
+
+test-e2e:
+	go test -tags=e2e ./e2e -run '^TestE2E_' -race -count=1 -v
 
 test-cover:
 	go test ./... -race -count=1 -coverprofile=coverage.out
@@ -50,6 +59,9 @@ migrate:
 migrate-down:
 	goose -dir migrations postgres "$(DB_URL)" down
 
+migrate-reset:
+	goose -dir migrations postgres "$(DB_URL)" down-to 0
+
 migration-generate:
 	@if [ -z "$(NAME)" ]; then \
 		echo "Error: specify the migration name"; \
@@ -72,4 +84,4 @@ migration-help:
 	@echo "*  make migrate-down                     Roll back the last migration"
 
 migrate-embed:
-	go run ./cmd/server --migrate
+	go run ./cmd/migrate

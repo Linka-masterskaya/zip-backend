@@ -14,7 +14,67 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
+
+// NewMinIO starts a private temporary object store and returns the application client.
+func NewMinIO(t *testing.T) (*storage.Client, func()) {
+	t.Helper()
+	ctx := context.Background()
+	const accessKey = "test-access-key"
+	const secretKey = "test-secret-key-12345"
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "minio/minio:RELEASE.2025-04-22T22-12-26Z",
+			ExposedPorts: []string{"9000/tcp"},
+			Env: map[string]string{
+				"MINIO_ROOT_USER":     accessKey,
+				"MINIO_ROOT_PASSWORD": secretKey,
+			},
+			Cmd: []string{"server", "/data"},
+			WaitingFor: wait.ForHTTP("/minio/health/ready").
+				WithPort("9000/tcp").
+				WithStartupTimeout(30 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to start MinIO container: %v", err)
+	}
+	endpoint, err := container.PortEndpoint(ctx, "9000/tcp", "")
+	if err != nil {
+		if terminateErr := container.Terminate(ctx); terminateErr != nil {
+			t.Logf("terminate MinIO after endpoint error: %v", terminateErr)
+		}
+		t.Fatalf("failed to get MinIO endpoint: %v", err)
+	}
+	storageConfig := config.MinIOConfig{
+		Endpoint: endpoint, AccessKey: accessKey, SecretKey: secretKey,
+		Bucket: "linka-e2e", Timeout: "15s",
+	}
+	var client *storage.Client
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		client, err = storage.New(storageConfig)
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		if terminateErr := container.Terminate(ctx); terminateErr != nil {
+			t.Logf("terminate MinIO after client error: %v", terminateErr)
+		}
+		t.Fatalf("failed to create MinIO client: %v", err)
+	}
+	return client, func() {
+		if err := container.Terminate(ctx); err != nil {
+			t.Logf("failed to terminate MinIO container: %v", err)
+		}
+	}
+}
 
 // NewPostgres starts a temporary PostgreSQL container for integration tests,
 // creates a pgx connection pool and returns a cleanup function that releases

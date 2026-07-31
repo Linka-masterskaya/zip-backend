@@ -16,13 +16,14 @@ type AppError struct {
 
 // Стандартные ошибки приложения для использования в хендлерах.
 var (
-	ErrNotFound        = &AppError{Code: "NOT_FOUND", HTTPStatus: http.StatusNotFound, Message: "resource not found"}
-	ErrUnauthorized    = &AppError{Code: "UNAUTHORIZED", HTTPStatus: http.StatusUnauthorized, Message: "unauthorized"}
-	ErrForbidden       = &AppError{Code: "FORBIDDEN", HTTPStatus: http.StatusForbidden, Message: "forbidden"}
-	ErrBadRequest      = &AppError{Code: "BAD_REQUEST", HTTPStatus: http.StatusBadRequest, Message: "bad request"}
-	ErrConflict        = &AppError{Code: "CONFLICT", HTTPStatus: http.StatusConflict, Message: "conflict"}
-	ErrInternal        = &AppError{Code: "INTERNAL", HTTPStatus: http.StatusInternalServerError, Message: "internal server error"}
-	ErrPayloadTooLarge = &AppError{Code: "PAYLOAD_TOO_LARGE", HTTPStatus: http.StatusRequestEntityTooLarge, Message: "payload too large"}
+	ErrNotFound           = &AppError{Code: "NOT_FOUND", HTTPStatus: http.StatusNotFound, Message: "resource not found"}
+	ErrUnauthorized       = &AppError{Code: "UNAUTHORIZED", HTTPStatus: http.StatusUnauthorized, Message: "unauthorized"}
+	ErrForbidden          = &AppError{Code: "FORBIDDEN", HTTPStatus: http.StatusForbidden, Message: "forbidden"}
+	ErrBadRequest         = &AppError{Code: "BAD_REQUEST", HTTPStatus: http.StatusBadRequest, Message: "bad request"}
+	ErrConflict           = &AppError{Code: "CONFLICT", HTTPStatus: http.StatusConflict, Message: "conflict"}
+	ErrInternal           = &AppError{Code: "INTERNAL", HTTPStatus: http.StatusInternalServerError, Message: "internal server error"}
+	ErrPayloadTooLarge    = &AppError{Code: "PAYLOAD_TOO_LARGE", HTTPStatus: http.StatusRequestEntityTooLarge, Message: "payload too large"}
+	ErrServiceUnavailable = &AppError{Code: "SERVICE_UNAVAILABLE", HTTPStatus: http.StatusServiceUnavailable, Message: "service temporarily unavailable"}
 
 	ErrUserNotFound           = &AppError{Code: "USER_NOT_FOUND", HTTPStatus: http.StatusNotFound, Message: "user not found"}
 	ErrVerifyTokenInvalid     = &AppError{Code: "VERIFY_TOKEN_INVALID", HTTPStatus: http.StatusBadRequest, Message: "verification link is invalid or expired"}
