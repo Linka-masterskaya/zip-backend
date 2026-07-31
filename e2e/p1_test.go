@@ -525,15 +525,12 @@ func e2eServer(
 	mux := http.NewServeMux()
 	auth := middleware.NewAuthMW([]byte(e2eJWTSecret))
 	passthrough := func(next http.Handler) http.Handler { return next }
-	httpapi.RegisterP1Routes(
-		mux,
-		auth,
-		passthrough,
-		httpapi.P1Handlers{
-			Pack: packHandler, Content: contentHandler, Media: mediaHandler,
-			Folder: folderHandler, Student: studentHandler,
-		},
-	)
+	httpapi.RegisterPackRoutes(mux, auth, passthrough, httpapi.PackHandlers{
+		Pack: packHandler, Content: contentHandler,
+	})
+	httpapi.RegisterMediaRoutes(mux, auth, passthrough, httpapi.MediaHandlers{Media: mediaHandler})
+	httpapi.RegisterFolderRoutes(mux, auth, passthrough, httpapi.FolderHandlers{Folder: folderHandler})
+	httpapi.RegisterStudentRoutes(mux, auth, passthrough, httpapi.StudentHandlers{Student: studentHandler})
 	for _, pictureHandler := range pictureHandlers {
 		httpapi.RegisterPictureBankRoutes(mux, auth, passthrough, pictureHandler)
 	}

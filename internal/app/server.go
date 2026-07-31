@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,8 +21,9 @@ import (
 // serveHTTP binds the server's address and serves until shutdown. Binding here
 // rather than inside ListenAndServe makes an "address already in use" failure a
 // plain error the caller can act on.
-func serveHTTP(srv *http.Server) error {
-	ln, err := net.Listen("tcp", srv.Addr)
+func serveHTTP(ctx context.Context, srv *http.Server) error {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", srv.Addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", srv.Addr, err)
 	}
@@ -41,7 +43,10 @@ func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redi
 	authMW := middleware.NewAuthMW([]byte(cfg.JWT.Secret))
 	mux := http.NewServeMux()
 
-	httpapi.RegisterP1Routes(mux, authMW, rl.Packs, mods.p1)
+	httpapi.RegisterPackRoutes(mux, authMW, rl.Packs, mods.packs)
+	httpapi.RegisterMediaRoutes(mux, authMW, rl.Packs, mods.media)
+	httpapi.RegisterFolderRoutes(mux, authMW, rl.Packs, mods.folders)
+	httpapi.RegisterStudentRoutes(mux, authMW, rl.Packs, mods.students)
 	httpapi.RegisterPictureBankRoutes(mux, authMW, rl.Pictures, mods.pictures)
 	httpapi.RegisterAuthRoutes(mux, authMW, rl, redis, mods.auth)
 	httpapi.RegisterProfileRoutes(mux, authMW, rl, mods.profile)

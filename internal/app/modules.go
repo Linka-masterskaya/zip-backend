@@ -19,7 +19,10 @@ import (
 )
 
 type modules struct {
-	p1       httpapi.P1Handlers
+	packs    httpapi.PackHandlers
+	media    httpapi.MediaHandlers
+	folders  httpapi.FolderHandlers
+	students httpapi.StudentHandlers
 	auth     httpapi.AuthHandlers
 	profile  httpapi.ProfileHandlers
 	pictures *picturebank.Handler
@@ -92,11 +95,17 @@ func buildModules(in *infra) (*modules, error) {
 	}
 
 	return &modules{
-		p1: httpapi.P1Handlers{
+		packs: httpapi.PackHandlers{
 			Pack:    pack.NewHandler(packService),
 			Content: pack.NewContentHandler(contentService),
-			Media:   media.NewHandler(mediaService),
-			Folder:  folder.NewHandler(folder.NewService(folderRepo)),
+		},
+		media: httpapi.MediaHandlers{
+			Media: media.NewHandler(mediaService),
+		},
+		folders: httpapi.FolderHandlers{
+			Folder: folder.NewHandler(folder.NewService(folderRepo)),
+		},
+		students: httpapi.StudentHandlers{
 			Student: student.NewHandler(student.NewService(studentRepo, in.crypto)),
 		},
 		auth: httpapi.AuthHandlers{

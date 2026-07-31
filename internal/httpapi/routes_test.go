@@ -34,9 +34,9 @@ func assertPatterns(t *testing.T, got, want []string) {
 	}
 }
 
-func TestRegisterP1RoutesPatterns(t *testing.T) {
+func TestRegisterPackRoutesPatterns(t *testing.T) {
 	m := &recordingMux{}
-	RegisterP1Routes(m, middleware.NewAuthMW([]byte("test-secret")), passthrough, P1Handlers{})
+	RegisterPackRoutes(m, middleware.NewAuthMW([]byte("test-secret")), passthrough, PackHandlers{})
 
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/packs",
@@ -56,15 +56,39 @@ func TestRegisterP1RoutesPatterns(t *testing.T) {
 		"GET /api/v1/packs/{id}/versions",
 		"GET /api/v1/packs/{id}/versions/{version}",
 		"POST /api/v1/packs/{id}/versions/{version}/restore",
+	})
+}
+
+func TestRegisterMediaRoutesPatterns(t *testing.T) {
+	m := &recordingMux{}
+	RegisterMediaRoutes(m, middleware.NewAuthMW([]byte("test-secret")), passthrough, MediaHandlers{})
+
+	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/media",
 		"GET /api/v1/media/{id}",
 		"DELETE /api/v1/media/{id}",
+	})
+}
+
+func TestRegisterFolderRoutesPatterns(t *testing.T) {
+	m := &recordingMux{}
+	RegisterFolderRoutes(m, middleware.NewAuthMW([]byte("test-secret")), passthrough, FolderHandlers{})
+
+	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/folders",
 		"GET /api/v1/folders",
 		"GET /api/v1/folders/{id}/contents",
 		"PATCH /api/v1/folders/{id}",
 		"POST /api/v1/folders/{id}/move",
 		"DELETE /api/v1/folders/{id}",
+	})
+}
+
+func TestRegisterStudentRoutesPatterns(t *testing.T) {
+	m := &recordingMux{}
+	RegisterStudentRoutes(m, middleware.NewAuthMW([]byte("test-secret")), passthrough, StudentHandlers{})
+
+	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/students",
 		"GET /api/v1/students",
 		"PATCH /api/v1/students/{id}",

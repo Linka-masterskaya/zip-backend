@@ -1,31 +1,25 @@
-// Package httpapi wires feature handlers to the public HTTP API.
 package httpapi
 
 import (
 	"net/http"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/folder"
-	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
-	"github.com/Linka-masterskaya/zip-backend/internal/student"
 )
 
-// P1Handlers contains the handlers exposed by the P1 API.
-type P1Handlers struct {
+// PackHandlers contains the handlers exposed by the packs API.
+type PackHandlers struct {
 	Pack    *pack.Handler
 	Content *pack.ContentHandler
-	Media   *media.Handler
-	Folder  *folder.Handler
-	Student *student.Handler
 }
 
-// RegisterP1Routes registers folders, packs, publication, and students routes.
-func RegisterP1Routes(
+// RegisterPackRoutes registers pack CRUD, publication, config, import/export,
+// student assignment, and version history routes.
+func RegisterPackRoutes(
 	mux Mux,
 	authMW *middleware.AuthMW,
 	rateLimit Middleware,
-	handlers P1Handlers,
+	handlers PackHandlers,
 ) {
 	protected := func(next middleware.AppHandler) http.Handler {
 		return rateLimit(middleware.ErrorMiddleware(authMW.AuthMiddleware(next)))
@@ -48,19 +42,4 @@ func RegisterP1Routes(
 	mux.Handle("GET /api/v1/packs/{id}/versions", protected(handlers.Content.ListVersions))
 	mux.Handle("GET /api/v1/packs/{id}/versions/{version}", protected(handlers.Content.GetVersion))
 	mux.Handle("POST /api/v1/packs/{id}/versions/{version}/restore", protected(handlers.Content.RestoreVersion))
-	mux.Handle("POST /api/v1/media", protected(handlers.Media.Upload))
-	mux.Handle("GET /api/v1/media/{id}", protected(handlers.Media.Get))
-	mux.Handle("DELETE /api/v1/media/{id}", protected(handlers.Media.Delete))
-
-	mux.Handle("POST /api/v1/folders", protected(handlers.Folder.Create))
-	mux.Handle("GET /api/v1/folders", protected(handlers.Folder.List))
-	mux.Handle("GET /api/v1/folders/{id}/contents", protected(handlers.Folder.Contents))
-	mux.Handle("PATCH /api/v1/folders/{id}", protected(handlers.Folder.Rename))
-	mux.Handle("POST /api/v1/folders/{id}/move", protected(handlers.Folder.Move))
-	mux.Handle("DELETE /api/v1/folders/{id}", protected(handlers.Folder.Delete))
-
-	mux.Handle("POST /api/v1/students", protected(handlers.Student.Create))
-	mux.Handle("GET /api/v1/students", protected(handlers.Student.List))
-	mux.Handle("PATCH /api/v1/students/{id}", protected(handlers.Student.Update))
-	mux.Handle("DELETE /api/v1/students/{id}", protected(handlers.Student.Delete))
 }
