@@ -20,6 +20,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
+	"github.com/Linka-masterskaya/zip-backend/internal/picturebank"
 	"github.com/Linka-masterskaya/zip-backend/internal/student"
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 	"github.com/Linka-masterskaya/zip-backend/migrations"
@@ -499,7 +500,11 @@ func e2eDatabase(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func e2eServer(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
+func e2eServer(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	pictureHandlers ...*picturebank.Handler,
+) *httptest.Server {
 	t.Helper()
 	crypto, err := cryptox.New(bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32))
 	require.NoError(t, err)
@@ -518,15 +523,20 @@ func e2eServer(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
 	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto))
 
 	mux := http.NewServeMux()
+	auth := middleware.NewAuthMW([]byte(e2eJWTSecret))
+	passthrough := func(next http.Handler) http.Handler { return next }
 	httpapi.RegisterP1Routes(
 		mux,
-		middleware.NewAuthMW([]byte(e2eJWTSecret)),
-		func(next http.Handler) http.Handler { return next },
+		auth,
+		passthrough,
 		httpapi.P1Handlers{
 			Pack: packHandler, Content: contentHandler, Media: mediaHandler,
 			Folder: folderHandler, Student: studentHandler,
 		},
 	)
+	for _, pictureHandler := range pictureHandlers {
+		httpapi.RegisterPictureBankRoutes(mux, auth, passthrough, pictureHandler)
+	}
 	server := httptest.NewServer(middleware.Chain(
 		mux,
 		middleware.RecoveryMiddleware,
