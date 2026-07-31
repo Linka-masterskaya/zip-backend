@@ -27,6 +27,18 @@ type Config struct {
 	FeatureFlags FeatureFlagsConfig `mapstructure:"feature_flags"`
 	Crypto       CryptoConfig       `mapstructure:"crypto"`
 	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
+	Server       ServerConfig       `mapstructure:"server"`
+}
+
+// ServerConfig contains HTTP server ports and timeouts.
+type ServerConfig struct {
+	MetricsPort         string        `mapstructure:"metrics_port"`
+	ReadTimeout         time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout        time.Duration `mapstructure:"write_timeout"`
+	IdleTimeout         time.Duration `mapstructure:"idle_timeout"`
+	MetricsReadTimeout  time.Duration `mapstructure:"metrics_read_timeout"`
+	MetricsWriteTimeout time.Duration `mapstructure:"metrics_write_timeout"`
+	ShutdownTimeout     time.Duration `mapstructure:"shutdown_timeout"`
 }
 
 // CryptoConfig contains encryption and hashing settings.
@@ -257,6 +269,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.frontend_url", "http://localhost:3000")
 	v.SetDefault("app.migrations_dir", "./migrations")
 	v.SetDefault("app.trusted_proxies", []string{})
+
+	// Server defaults
+	v.SetDefault("server.metrics_port", "9090")
+	v.SetDefault("server.read_timeout", "10s")
+	v.SetDefault("server.write_timeout", "30s")
+	v.SetDefault("server.idle_timeout", "60s")
+	v.SetDefault("server.metrics_read_timeout", "5s")
+	v.SetDefault("server.metrics_write_timeout", "5s")
+	v.SetDefault("server.shutdown_timeout", "30s")
 
 	// DB defaults
 	v.SetDefault("db.max_open_conns", 25)
