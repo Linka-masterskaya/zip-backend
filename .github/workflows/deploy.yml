@@ -54,25 +54,3 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
-
-      - name: Docker meta AI Worker
-        id: meta_ai_worker
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.REGISTRY }}/linka-masterskaya/zip-backend/ai-worker
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
-
-      - name: Build and push AI Worker
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          file: Dockerfile.ai-worker
-          push: true
-          tags: ${{ steps.meta_ai_worker.outputs.tags }}
-          labels: ${{ steps.meta_ai_worker.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false

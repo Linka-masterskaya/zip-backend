@@ -47,12 +47,12 @@ nats:
 
   consumers:
     tts:
-      durable: "ai-worker-tts"
+      durable: "linka-tts"
       ack_wait: "30s"
       max_deliver: 3
       fetch_max_wait: "5s"
     clamav:
-      durable: "ai-worker-clamav"
+      durable: "linka-clamav"
       ack_wait: "10s"
       max_deliver: 3
       fetch_max_wait: "5s"
