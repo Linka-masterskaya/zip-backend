@@ -1,0 +1,36 @@
+{
+    email {$CADDY_LETSENCRYPT_EMAIL}
+}
+
+{$CADDY_DOMAIN_NAME} {
+    header Strict-Transport-Security max-age=31536000;
+    header -Server
+
+    handle /api/* {
+        reverse_proxy zip-backend:8080
+    }
+
+    handle /linka-media/* {
+        reverse_proxy minio:9000
+    }
+
+    handle /grafana/* {
+        reverse_proxy grafana:3000 {
+            header_up Host {host}
+            header_up X-Forwarded-Prefix "/grafana"
+        }
+    }
+
+    handle {
+        root * /srv/frontend
+        file_server
+        try_files {path} {path}/ /index.html
+    }
+
+    encode gzip
+
+    log {
+        output stdout
+        format console
+    }
+}

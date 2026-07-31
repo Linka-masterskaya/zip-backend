@@ -26,6 +26,10 @@ FROM gcr.io/distroless/static-debian12
 WORKDIR /app
 
 COPY --from=builder /app/bin/server .
+COPY config/config.prod.yml /app/config/config.prod.yml
+
+ENV CONFIG_PATH=config/config.prod.yml
+
 
 EXPOSE 8080
 USER nonroot:nonroot
