@@ -161,38 +161,15 @@ func run() error {
 			EmailVerifyTTL: deps.cfg.Profile.EmailVerifyTTL},
 	)
 	profileHandler := profile.NewHandler(profileService)
-	mainMux.Handle(
-		"GET /api/v1/profile/me",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.GetProfile)),
-	)
-	mainMux.Handle(
-		"PUT /api/v1/profile/me/avatar",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.UploadAvatar)),
-	)
-	mainMux.Handle(
-		"DELETE /api/v1/profile/me/avatar",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.DeleteAvatar)),
-	)
-	mainMux.Handle(
-		"POST /api/v1/profile/me/email",
-		rateLimits.ProfileEmailChange(
-			middleware.ErrorMiddleware(authMW.AuthMiddleware(profileHandler.RequestEmailChange)),
-		),
-	)
-	mainMux.Handle(
-		"POST /api/v1/profile/me/email/confirm",
-		rateLimits.ProfileEmailConfirm(
-			middleware.ErrorMiddleware(profileHandler.ConfirmEmailChange),
-		),
-	)
 
 	changePasswordRepo := profile.NewChangePasswordRepo(deps.db)
 	changePasswordService := profile.NewChangePasswordService(changePasswordRepo, deps.redis)
 	changePasswordHandler := profile.NewChangePasswordHandler(changePasswordService)
-	mainMux.Handle(
-		"POST /api/v1/profile/me/password",
-		middleware.ErrorMiddleware(authMW.AuthMiddleware(changePasswordHandler.ChangePassword)),
-	)
+
+	httpapi.RegisterProfileRoutes(mainMux, authMW, rateLimits, httpapi.ProfileHandlers{
+		Profile:        profileHandler,
+		ChangePassword: changePasswordHandler,
+	})
 
 	wrappedHandler := middleware.Chain(
 		mainMux,

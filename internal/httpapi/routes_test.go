@@ -105,3 +105,21 @@ func TestRegisterAuthRoutesPatterns(t *testing.T) {
 		"POST /api/v1/auth/verify-email/resend",
 	})
 }
+
+func TestRegisterProfileRoutesPatterns(t *testing.T) {
+	m := &recordingMux{}
+	rl := RateLimits{
+		ProfileEmailChange:  passthrough,
+		ProfileEmailConfirm: passthrough,
+	}
+	RegisterProfileRoutes(m, middleware.NewAuthMW([]byte("test-secret")), rl, ProfileHandlers{})
+
+	assertPatterns(t, m.patterns, []string{
+		"GET /api/v1/profile/me",
+		"PUT /api/v1/profile/me/avatar",
+		"DELETE /api/v1/profile/me/avatar",
+		"POST /api/v1/profile/me/email",
+		"POST /api/v1/profile/me/email/confirm",
+		"POST /api/v1/profile/me/password",
+	})
+}
