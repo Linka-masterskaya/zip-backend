@@ -9,10 +9,10 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
+	"github.com/Linka-masterskaya/zip-backend/migrations"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -96,10 +96,7 @@ func studentTestDB(t *testing.T) *pgxpool.Pool {
 }
 
 func applyStudentMigrations(db *sql.DB) error {
-	if err := goose.SetDialect("postgres"); err != nil {
-		return err
-	}
-	return goose.Up(db, "../../migrations")
+	return migrations.Run(db)
 }
 
 func seedStudentUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
