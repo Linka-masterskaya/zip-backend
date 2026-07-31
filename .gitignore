@@ -61,12 +61,10 @@ htmlcov/
 *.linka
 tmp/
 
-# ── Internal docs (не для репо) ──────────────────────────────────────────────
-docs/architecture-decisions.md
+# ── Local configuration ─────────────────────────────────────────────────────
 config/*.yml
 !config/config.dev.yml
 bin/
 
-# ── Design assets (400+ MB, не для git — держим вне репозитория) ─────────────
-docs/figma/
-docs/temp/
+# ── Subagent-driven development scratch ──────────────────────────────────────
+.superpowers/
