@@ -57,9 +57,20 @@ coverage/
 *.coverage
 htmlcov/
 
+# ── Temporary / scratch ──────────────────────────────────────────────────────
+tmp/
+temp/
+.tmp/
+.temp/
+scratch/
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
 # ── Misc ─────────────────────────────────────────────────────────────────────
 *.linka
-tmp/
 
 # ── Local configuration ─────────────────────────────────────────────────────
 config/*.yml
