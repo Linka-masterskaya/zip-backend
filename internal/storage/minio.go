@@ -140,14 +140,21 @@ func (c *Client) PresignedURL(ctx context.Context, key string, ttl time.Duration
 	return objectURL.String(), nil
 }
 
-// ListBuckets returns a list of buckets in MinIO.
-// Implements health.Lister interface.
-func (c *Client) ListBuckets(ctx context.Context) ([]minio.BucketInfo, error) {
+// Ping checks that the configured media bucket is reachable. Checking the
+// specific bucket also works behind a bucket-scoped reverse-proxy route.
+func (c *Client) Ping(ctx context.Context) error {
 	if c == nil || c.client == nil {
-		return nil, errors.New("minio client is not initialized")
+		return errors.New("minio client is not initialized")
 	}
 
-	return c.client.ListBuckets(ctx)
+	exists, err := c.client.BucketExists(ctx, c.bucket)
+	if err != nil {
+		return fmt.Errorf("check minio bucket %q: %w", c.bucket, err)
+	}
+	if !exists {
+		return fmt.Errorf("minio bucket %q does not exist", c.bucket)
+	}
+	return nil
 }
 
 // PutObject uploads an object to the configured bucket.

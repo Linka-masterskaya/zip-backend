@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/minio/minio-go/v7"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -33,11 +32,6 @@ type Pinger interface {
 // ConnectionChecker — интерфейс для проверки состояния подключения.
 type ConnectionChecker interface {
 	IsConnected() bool
-}
-
-// Lister — интерфейс для проверки MinIO.
-type Lister interface {
-	ListBuckets(ctx context.Context) ([]minio.BucketInfo, error)
 }
 
 type checkResult struct {
@@ -76,12 +70,12 @@ type Checker struct {
 	db          Pinger
 	redisClient Pinger
 	natsConn    ConnectionChecker
-	minioClient Lister
+	minioClient Pinger
 	bank        PicturesBank
 }
 
 // NewChecker validates health dependencies before endpoint registration.
-func NewChecker(db Pinger, redisClient Pinger, natsConn ConnectionChecker, minioClient Lister, bank PicturesBank) (*Checker, error) {
+func NewChecker(db Pinger, redisClient Pinger, natsConn ConnectionChecker, minioClient Pinger, bank PicturesBank) (*Checker, error) {
 	if isNilDependency(db) {
 		return nil, errors.New("postgres client not initialized")
 	}
@@ -160,10 +154,7 @@ func (c *Checker) checks() map[string]check {
 		}},
 		"minio": {
 			detail: "object storage for media and pack archives",
-			run: func(ctx context.Context) error {
-				_, err := c.minioClient.ListBuckets(ctx)
-				return err
-			},
+			run:    c.minioClient.Ping,
 		},
 		"pictures_bank": {
 			detail: c.bank.detail(),
