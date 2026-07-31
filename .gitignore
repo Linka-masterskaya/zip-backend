@@ -66,3 +66,7 @@ docs/architecture-decisions.md
 config/*.yml
 !config/config.dev.yml
 bin/
+
+# ── Design assets (400+ MB, не для git — держим вне репозитория) ─────────────
+docs/figma/
+docs/temp/

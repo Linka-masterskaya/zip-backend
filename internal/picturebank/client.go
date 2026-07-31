@@ -26,6 +26,7 @@ const (
 
 var (
 	ErrUnavailable      = errors.New("pictures bank unavailable")
+	ErrPictureNotFound  = errors.New("picture was removed from pictures bank")
 	ErrRateLimited      = errors.New("pictures bank outbound limit reached")
 	ErrResponseTooLarge = errors.New("pictures bank response is too large")
 	ErrInvalidResponse  = errors.New("pictures bank returned invalid data")
@@ -121,36 +122,19 @@ func (c *Client) Search(ctx context.Context, query string) ([]Picture, error) {
 
 func (c *Client) Image(ctx context.Context, pictureID string) (*Image, error) {
 	key := "image:" + pictureID
-	result := c.requests.DoChan(key, func() (any, error) {
-		requestCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
-		defer cancel()
-		data, contentType, err := c.get(
-			requestCtx, "/picture/"+url.PathEscape(pictureID)+"/buffer", nil, c.maxImageBytes,
-		)
-		if err != nil {
-			return nil, err
-		}
-		if !allowedImageType(contentType) {
-			contentType = http.DetectContentType(data)
-		}
-		if !allowedImageType(contentType) {
-			return nil, fmt.Errorf("%w: unexpected image content type", ErrInvalidResponse)
-		}
-		return &Image{Data: data, ContentType: contentType}, nil
-	})
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case value := <-result:
-		if value.Err != nil {
-			return nil, value.Err
-		}
-		image, ok := value.Val.(*Image)
-		if !ok {
-			return nil, ErrInvalidResponse
-		}
-		return image, nil
+	data, contentType, err := c.cachedGet(
+		ctx, key, "/picture/"+url.PathEscape(pictureID)+"/buffer", nil, c.maxImageBytes,
+	)
+	if err != nil {
+		return nil, err
 	}
+	if !allowedImageType(contentType) {
+		contentType = http.DetectContentType(data)
+	}
+	if !allowedImageType(contentType) {
+		return nil, fmt.Errorf("%w: unexpected image content type", ErrInvalidResponse)
+	}
+	return &Image{Data: data, ContentType: contentType}, nil
 }
 
 func (c *Client) cachedGet(
@@ -227,6 +211,9 @@ func (c *Client) get(
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		if closeErr := response.Body.Close(); closeErr != nil {
 			return nil, "", fmt.Errorf("%w: close error response", ErrUnavailable)
+		}
+		if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
+			return nil, "", fmt.Errorf("%w: status %d", ErrPictureNotFound, response.StatusCode)
 		}
 		return nil, "", fmt.Errorf("%w: status %d", ErrUnavailable, response.StatusCode)
 	}

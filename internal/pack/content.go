@@ -95,11 +95,16 @@ type mediaUploader interface {
 	Upload(context.Context, []byte) (*media.Response, error)
 }
 
+// PictureLoader resolves a Pictures Bank reference for a self-contained export.
+// Resolved bytes are not persisted in local object storage.
+type PictureLoader func(context.Context, uuid.UUID) ([]byte, string, error)
+
 type ContentService struct {
 	repo        contentRepository
 	storage     archiveStorage
 	uploader    mediaUploader
 	packService *Service
+	pictures    PictureLoader
 }
 
 func NewContentService(
@@ -107,8 +112,13 @@ func NewContentService(
 	storage archiveStorage,
 	uploader mediaUploader,
 	packService *Service,
+	pictures ...PictureLoader,
 ) *ContentService {
-	return &ContentService{repo: repo, storage: storage, uploader: uploader, packService: packService}
+	service := &ContentService{repo: repo, storage: storage, uploader: uploader, packService: packService}
+	if len(pictures) > 0 {
+		service.pictures = pictures[0]
+	}
+	return service
 }
 
 func (s *ContentService) SaveConfig(
@@ -165,7 +175,7 @@ func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) ([]byte, 
 	if err != nil {
 		return nil, "", contentError(err)
 	}
-	data, err := buildArchive(ctx, packData.Config, files, s.storage)
+	data, err := buildArchive(ctx, packData.Config, files, s.storage, s.pictures)
 	if err != nil {
 		return nil, "", contentError(err)
 	}
@@ -226,6 +236,11 @@ func (s *ContentService) uploadImportedMedia(
 			if element.Kind == linka.ElementKindText {
 				continue
 			}
+			if element.Kind == linka.ElementKindImage && element.SourcePictureID != nil {
+				element.MediaID = nil
+				element.MediaURL = ""
+				continue
+			}
 			content, ok := files[element.MediaURL]
 			if !ok || element.MediaURL == "" {
 				return apperr.ErrBadRequest.WithMessage("archive media reference is missing")
@@ -263,10 +278,16 @@ func validateAndMediaIDs(ctx context.Context, config json.RawMessage, allowArchi
 				continue
 			}
 			if element.MediaID == nil || *element.MediaID == uuid.Nil {
+				if element.Kind == linka.ElementKindImage && element.SourcePictureID != nil &&
+					*element.SourcePictureID != uuid.Nil {
+					continue
+				}
 				if allowArchiveURL && element.MediaURL != "" {
 					continue
 				}
-				return nil, apperr.ErrBadRequest.WithMessage("image and audio elements require media_id")
+				return nil, apperr.ErrBadRequest.WithMessage(
+					"image elements require media_id or source_picture_id; audio elements require media_id",
+				)
 			}
 			seen[*element.MediaID] = struct{}{}
 		}

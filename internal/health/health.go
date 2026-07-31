@@ -42,7 +42,28 @@ type Lister interface {
 
 type checkResult struct {
 	Status Status `json:"status"`
+	Detail string `json:"detail,omitempty"`
 	Error  string `json:"error,omitempty"`
+}
+
+// PicturesBank описывает выбранный источник картинок для отчёта в /readyz.
+// Проверка информационная: внешний банк не пингуется, чтобы готовность сервиса
+// не зависела от стороннего сервиса.
+type PicturesBank struct {
+	Local bool
+	URL   string
+}
+
+func (b PicturesBank) detail() string {
+	if b.Local {
+		return "local"
+	}
+	return "external " + b.URL
+}
+
+type check struct {
+	detail string
+	run    func(context.Context) error
 }
 
 type response struct {
@@ -56,10 +77,11 @@ type Checker struct {
 	redisClient Pinger
 	natsConn    ConnectionChecker
 	minioClient Lister
+	bank        PicturesBank
 }
 
 // NewChecker validates health dependencies before endpoint registration.
-func NewChecker(db Pinger, redisClient Pinger, natsConn ConnectionChecker, minioClient Lister) (*Checker, error) {
+func NewChecker(db Pinger, redisClient Pinger, natsConn ConnectionChecker, minioClient Lister, bank PicturesBank) (*Checker, error) {
 	if isNilDependency(db) {
 		return nil, errors.New("postgres client not initialized")
 	}
@@ -78,6 +100,7 @@ func NewChecker(db Pinger, redisClient Pinger, natsConn ConnectionChecker, minio
 		redisClient: redisClient,
 		natsConn:    natsConn,
 		minioClient: minioClient,
+		bank:        bank,
 	}, nil
 }
 
@@ -89,23 +112,23 @@ func (c *Checker) Run(ctx context.Context) (int, interface{}) {
 	var group errgroup.Group
 	var mu sync.Mutex
 
-	setResult := func(name string, err error) {
-		result := checkResult{Status: StatusOK}
+	setResult := func(name, detail string, err error) {
+		result := checkResult{Status: StatusOK, Detail: detail}
 		if err != nil {
-			result = checkResult{Status: StatusError, Error: err.Error()}
+			result = checkResult{Status: StatusError, Detail: detail, Error: err.Error()}
 		}
 		mu.Lock()
 		results[name] = result
 		mu.Unlock()
 	}
 
-	for name, check := range checks {
+	for name, c := range checks {
 		if err := ctx.Err(); err != nil {
-			setResult(name, err)
+			setResult(name, c.detail, err)
 		} else {
 			group.Go(func() error {
-				err := runCheck(ctx, check)
-				setResult(name, err)
+				err := runCheck(ctx, c.run)
+				setResult(name, c.detail, err)
 				return err
 			})
 		}
@@ -125,19 +148,31 @@ func (c *Checker) Run(ctx context.Context) (int, interface{}) {
 	}
 }
 
-func (c *Checker) checks() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		"postgres": c.db.Ping,
-		"redis":    c.redisClient.Ping,
-		"nats": func(context.Context) error {
+func (c *Checker) checks() map[string]check {
+	return map[string]check{
+		"postgres": {run: c.db.Ping},
+		"redis":    {run: c.redisClient.Ping},
+		"nats": {run: func(context.Context) error {
 			if !c.natsConn.IsConnected() {
 				return errors.New("nats connection is closed")
 			}
 			return nil
+		}},
+		"minio": {
+			detail: "object storage for media and pack archives",
+			run: func(ctx context.Context) error {
+				_, err := c.minioClient.ListBuckets(ctx)
+				return err
+			},
 		},
-		"minio": func(ctx context.Context) error {
-			_, err := c.minioClient.ListBuckets(ctx)
-			return err
+		"pictures_bank": {
+			detail: c.bank.detail(),
+			run: func(context.Context) error {
+				if c.bank.Local {
+					return errors.New("local pictures bank is not implemented")
+				}
+				return nil
+			},
 		},
 	}
 }

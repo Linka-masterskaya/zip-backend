@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/lib/pq"
 	"github.com/nats-io/nats.go"
@@ -74,8 +75,6 @@ func run() error {
 	mediaRepo := media.NewRepository(deps.db)
 	mediaService := media.NewService(mediaRepo, deps.storage)
 	mediaHandler := media.NewHandler(mediaService)
-	contentService := pack.NewContentService(packRepo, deps.storage, mediaService, packService)
-	contentHandler := pack.NewContentHandler(contentService)
 
 	folderRepo := folder.NewRepository(deps.db)
 	folderService := folder.NewService(folderRepo)
@@ -93,7 +92,23 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("pictures bank source: %w", err)
 	}
-	picturesHandler := picturebank.NewHandler(picturebank.NewService(picturesSource, mediaService))
+	picturesService := picturebank.NewService(picturesSource)
+	picturesHandler := picturebank.NewHandler(picturesService, deps.cfg.PicturesBank.CacheTTL)
+	contentService := pack.NewContentService(
+		packRepo, deps.storage, mediaService, packService,
+		func(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
+			image, loadErr := picturesService.Image(ctx, id.String())
+			if errors.Is(loadErr, picturebank.ErrPictureNotFound) {
+				image = picturebank.DeletedPicturePlaceholder()
+				loadErr = nil
+			}
+			if loadErr != nil {
+				return nil, "", loadErr
+			}
+			return image.Data, image.ContentType, nil
+		},
+	)
+	contentHandler := pack.NewContentHandler(contentService)
 
 	authRepo := auth.NewAuthRepo(deps.db)
 
@@ -117,7 +132,10 @@ func run() error {
 		deps.crypto,
 	)
 
-	checker, err := health.NewChecker(deps.db, deps.redis, deps.nc, deps.storage)
+	checker, err := health.NewChecker(deps.db, deps.redis, deps.nc, deps.storage, health.PicturesBank{
+		Local: deps.cfg.FeatureFlags.LocalBank,
+		URL:   deps.cfg.PicturesBank.URL,
+	})
 	if err != nil {
 		return fmt.Errorf("health checker init: %w", err)
 	}

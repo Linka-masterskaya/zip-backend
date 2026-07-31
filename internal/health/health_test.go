@@ -70,7 +70,7 @@ func TestNewCheckerRejectsNilDependencies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			checker, err := NewChecker(tt.db, tt.redisClient, tt.natsConn, tt.minioClient)
+			checker, err := NewChecker(tt.db, tt.redisClient, tt.natsConn, tt.minioClient, PicturesBank{URL: "https://pictures.example"})
 
 			require.Error(t, err)
 			assert.EqualError(t, err, tt.wantErr)
@@ -85,7 +85,7 @@ func TestNewCheckerRejectsTypedNilDependency(t *testing.T) {
 	validNATS := connectionCheckerFunc(func() bool { return true })
 	validMinIO := listerFunc(func(context.Context) ([]minio.BucketInfo, error) { return nil, nil })
 
-	checker, err := NewChecker(db, validPinger, validNATS, validMinIO)
+	checker, err := NewChecker(db, validPinger, validNATS, validMinIO, PicturesBank{URL: "https://pictures.example"})
 
 	require.Error(t, err)
 	assert.EqualError(t, err, "postgres client not initialized")
@@ -100,7 +100,7 @@ func TestCheckerRunAllDependenciesReady(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, status)
 	assert.Equal(t, StatusOK, result.Status)
-	require.Len(t, result.Checks, 4)
+	require.Len(t, result.Checks, 5)
 	for _, check := range result.Checks {
 		assert.Equal(t, StatusOK, check.Status)
 		assert.Empty(t, check.Error)
@@ -181,5 +181,6 @@ func newTestChecker(
 		redisClient: pingerFunc(func(context.Context) error { return redisErr }),
 		natsConn:    connectionCheckerFunc(func() bool { return true }),
 		minioClient: minioCheck,
+		bank:        PicturesBank{URL: "https://pictures.example"},
 	}
 }

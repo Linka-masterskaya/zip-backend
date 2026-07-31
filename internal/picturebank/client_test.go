@@ -170,7 +170,9 @@ func TestClientDoesNotRetryUpstreamFailures(t *testing.T) {
 }
 
 func TestClientSniffsImagesWithGenericUpstreamMIME(t *testing.T) {
+	var calls atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(testPNG())
 	}))
@@ -184,6 +186,29 @@ func TestClientSniffsImagesWithGenericUpstreamMIME(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "image/png", image.ContentType)
 	assert.Equal(t, testPNG(), image.Data)
+
+	second, err := client.Image(t.Context(), "c39d9b34-5339-4295-a56e-8996af77beb7")
+	require.NoError(t, err)
+	assert.Equal(t, image.Data, second.Data)
+	assert.EqualValues(t, 1, calls.Load(), "image bytes must be served from TTL cache")
+}
+
+func TestClientDistinguishesRemovedPicture(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusGone} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			t.Cleanup(upstream.Close)
+			client := testClient(
+				t, upstream, &fakeDistributedLimiter{allowed: true}, testPicturesConfig(),
+			)
+
+			_, err := client.Image(t.Context(), "c39d9b34-5339-4295-a56e-8996af77beb7")
+
+			require.ErrorIs(t, err, ErrPictureNotFound)
+		})
+	}
 }
 
 func testClient(

@@ -5,6 +5,7 @@ package picturebank
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -78,12 +79,22 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	}
 	client := newClient(picturesConfig, upstreamURL, upstream.Client(), redisCache)
 	mediaService := media.NewService(media.NewRepository(pool), objectStorage)
-	handler := NewHandler(NewService(client, mediaService))
+	picturesService := NewService(client)
+	handler := NewHandler(picturesService)
 	packRepo := pack.NewRepository(pool)
 	packService := pack.NewService(packRepo, nil)
 	packHandler := pack.NewHandler(packService)
 	contentHandler := pack.NewContentHandler(
-		pack.NewContentService(packRepo, objectStorage, mediaService, packService),
+		pack.NewContentService(
+			packRepo, objectStorage, mediaService, packService,
+			func(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
+				image, loadErr := picturesService.Image(ctx, id.String())
+				if loadErr != nil {
+					return nil, "", loadErr
+				}
+				return image.Data, image.ContentType, nil
+			},
+		),
 	)
 	server := picturesE2EServer(t, redisCache, handler, packHandler, contentHandler)
 	token := picturesE2EToken(t, userID)
@@ -101,7 +112,7 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	assert.EqualValues(t, 1, categoriesCalls.Load(), "categories response must be cached")
 	assert.EqualValues(t, 1, searchCalls.Load(), "search response must be cached")
 
-	firstImport := picturesE2EJSON[media.Response](
+	firstImport := picturesE2EJSON[PictureReference](
 		t,
 		picturesE2ERequest(
 			t, server, token, http.MethodPost,
@@ -109,7 +120,7 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 		),
 		http.StatusCreated,
 	)
-	secondImport := picturesE2EJSON[media.Response](
+	secondImport := picturesE2EJSON[PictureReference](
 		t,
 		picturesE2ERequest(
 			t, server, token, http.MethodPost,
@@ -117,8 +128,9 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 		),
 		http.StatusCreated,
 	)
-	assert.Equal(t, firstImport.ID, secondImport.ID, "same picture must be deduplicated")
-	assert.EqualValues(t, 2, imageCalls.Load(), "image bytes are fetched afresh on each import")
+	assert.Equal(t, firstImport.SourcePictureID, secondImport.SourcePictureID)
+	assert.Equal(t, pictureID, firstImport.SourcePictureID)
+	assert.EqualValues(t, 0, imageCalls.Load(), "reference creation must not fetch image bytes")
 
 	var mediaCount int
 	var storageUsed int64
@@ -128,8 +140,8 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 			SELECT org_id FROM users WHERE id = $1
 		)`, userID,
 	).Scan(&storageUsed))
-	assert.Equal(t, 1, mediaCount)
-	assert.EqualValues(t, len(imageData), storageUsed, "deduplication must reserve quota once")
+	assert.Zero(t, mediaCount, "Pictures Bank references must not create local media")
+	assert.Zero(t, storageUsed, "Pictures Bank references must not consume organization quota")
 
 	createdPack := picturesE2EJSON[pack.Pack](
 		t,
@@ -145,7 +157,7 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 			"id": "block-1", "type": "grid",
 			"elements": []any{map[string]any{
 				"id": "picture-1", "kind": "image",
-				"media_id": firstImport.ID, "source_picture_id": pictureID,
+				"source_picture_id": pictureID,
 			}},
 		}},
 	}
@@ -166,8 +178,9 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	exportedConfig, exportedMedia := picturesE2EArchive(t, archive)
 	assert.Equal(t, imageData, exportedMedia)
 	assert.Contains(t, string(exportedConfig), pictureID.String())
-	assert.Contains(t, string(exportedConfig), firstImport.ID.String())
-	assert.Contains(t, string(exportedConfig), "media/"+firstImport.ID.String()+".png")
+	assert.NotContains(t, string(exportedConfig), "media_id")
+	assert.Contains(t, string(exportedConfig), "media/picture-"+pictureID.String()+".png")
+	assert.EqualValues(t, 1, imageCalls.Load(), "export resolves external bytes on demand")
 }
 
 func picturesE2EDatabase(t *testing.T) *pgxpool.Pool {

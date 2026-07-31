@@ -6,21 +6,20 @@ import (
 	"strings"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/google/uuid"
 )
 
 type Service struct {
-	client   Source
-	uploader mediaUploader
+	client Source
 }
 
-type mediaUploader interface {
-	Upload(context.Context, []byte) (*media.Response, error)
+type PictureReference struct {
+	SourcePictureID uuid.UUID `json:"source_picture_id"`
+	ContentURL      string    `json:"content_url"`
 }
 
-func NewService(client Source, uploader mediaUploader) *Service {
-	return &Service{client: client, uploader: uploader}
+func NewService(client Source) *Service {
+	return &Service{client: client}
 }
 
 func (s *Service) Categories(ctx context.Context) ([]Category, error) {
@@ -45,16 +44,17 @@ func (s *Service) Image(ctx context.Context, pictureID string) (*Image, error) {
 	return result, pictureBankError(err)
 }
 
-func (s *Service) Import(ctx context.Context, pictureID string) (*media.Response, error) {
-	if _, err := uuid.Parse(pictureID); err != nil {
+// Import keeps the old endpoint as a compatibility bridge without copying
+// picture bytes into organization storage.
+func (s *Service) Import(_ context.Context, pictureID string) (*PictureReference, error) {
+	id, err := uuid.Parse(pictureID)
+	if err != nil {
 		return nil, apperr.ErrBadRequest.WithMessage("picture id must be a valid UUID")
 	}
-	image, err := s.client.Image(ctx, pictureID)
-	if err != nil {
-		return nil, pictureBankError(err)
-	}
-	result, err := s.uploader.Upload(ctx, image.Data)
-	return result, err
+	return &PictureReference{
+		SourcePictureID: id,
+		ContentURL:      "/api/v1/pictures/" + id.String() + "/content",
+	}, nil
 }
 
 func pictureBankError(err error) error {

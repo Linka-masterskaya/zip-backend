@@ -72,6 +72,45 @@ func TestValidateAndMediaIDsRequiresStoredReference(t *testing.T) {
 	assert.Contains(t, err.Error(), "media_id")
 }
 
+func TestValidateAndMediaIDsAllowsPicturesBankReferenceWithoutMedia(t *testing.T) {
+	pictureID := uuid.New()
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{"id":"b","type":"grid","elements":[{
+			"id":"e","kind":"image","source_picture_id":"` + pictureID.String() + `"
+		}]}]
+	}`)
+	ids, err := validateAndMediaIDs(context.Background(), config, false)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+}
+
+func TestBuildArchiveResolvesPicturesBankReferenceWithoutLocalStorage(t *testing.T) {
+	pictureID := uuid.New()
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{"id":"b","type":"grid","elements":[{
+			"id":"e","kind":"image","source_picture_id":"` + pictureID.String() + `"
+		}]}]
+	}`)
+	data, err := buildArchive(
+		context.Background(), config, nil, fakeArchiveStorage{},
+		func(_ context.Context, id uuid.UUID) ([]byte, string, error) {
+			assert.Equal(t, pictureID, id)
+			return []byte{1, 2, 3}, "image/png", nil
+		},
+	)
+	require.NoError(t, err)
+	parsed, err := parseArchive(data)
+	require.NoError(t, err)
+	path := "media/picture-" + pictureID.String() + ".png"
+	assert.Equal(t, []byte{1, 2, 3}, parsed.Files[path])
+	assert.Contains(t, string(parsed.Config), path)
+	assert.Contains(t, string(parsed.Config), pictureID.String())
+}
+
 func testZIP(t *testing.T, entries map[string][]byte) []byte {
 	t.Helper()
 	var buffer bytes.Buffer

@@ -1,4 +1,4 @@
-.PHONY: build run test test-e2e lint mock dev-up dev-down dev-reset migrate migrate-down
+.PHONY: build run run-local test test-e2e lint mock dev-up dev-down dev-reset migrate migrate-down
 
 # ── Environment ──────────────────────────────────────────────────────────────
 # Load variables from .env file (if exists) and export them for subprocesses
@@ -15,6 +15,12 @@ build:
 # ── Run ──────────────────────────────────────────────────────────────────────
 run:
 	CONFIG_PATH=config/config.dev.yml go run ./cmd/server
+
+# Full local stack: infra + migrations + server (blocks in foreground)
+run-local:
+	docker compose -f compose.dev.yaml up -d postgres minio nats redis
+	FEATURE_LOCAL_BANK=false $(MAKE) migrate-embed
+	FEATURE_LOCAL_BANK=false $(MAKE) run
 
 # ── Test ─────────────────────────────────────────────────────────────────────
 test:

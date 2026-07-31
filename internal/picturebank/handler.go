@@ -7,24 +7,30 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/media"
 )
 
 type service interface {
 	Categories(context.Context) ([]Category, error)
 	Search(context.Context, string) ([]Picture, error)
 	Image(context.Context, string) (*Image, error)
-	Import(context.Context, string) (*media.Response, error)
+	Import(context.Context, string) (*PictureReference, error)
 }
 
 type Handler struct {
-	service service
+	service         service
+	pictureCacheTTL time.Duration
 }
 
-func NewHandler(service service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service service, cacheTTL ...time.Duration) *Handler {
+	ttl := time.Hour
+	if len(cacheTTL) > 0 && cacheTTL[0] > 0 {
+		ttl = cacheTTL[0]
+	}
+	return &Handler{service: service, pictureCacheTTL: ttl}
 }
 
 func (h *Handler) Categories(w http.ResponseWriter, r *http.Request) error {
@@ -49,12 +55,29 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) error {
 
 func (h *Handler) Image(w http.ResponseWriter, r *http.Request) error {
 	result, err := h.service.Image(r.Context(), r.PathValue("id"))
+	placeholderReason := ""
+	switch {
+	case errors.Is(err, ErrPictureNotFound):
+		result = DeletedPicturePlaceholder()
+		err = nil
+		placeholderReason = "deleted"
+	case errors.Is(err, ErrUnavailable):
+		result = UnavailablePicturePlaceholder()
+		err = nil
+		placeholderReason = "unavailable"
+	}
 	if err != nil {
 		setRetryAfter(w, err)
 		return err
 	}
 	w.Header().Set("Content-Type", result.ContentType)
-	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+	if placeholderReason != "" {
+		w.Header().Set("Cache-Control", "public, max-age=30")
+		w.Header().Set("X-Picture-Placeholder", placeholderReason)
+	} else {
+		maxAge := int64(h.pictureCacheTTL / time.Second)
+		w.Header().Set("Cache-Control", "public, max-age="+strconv.FormatInt(maxAge, 10))
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, err = io.Copy(w, bytes.NewReader(result.Data))

@@ -330,7 +330,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pictures_bank.requests_per_second", 5)
 	v.SetDefault("pictures_bank.inbound_per_minute", 120)
 	v.SetDefault("pictures_bank.max_concurrent", 4)
-	v.SetDefault("pictures_bank.cache_ttl", "5m")
+	v.SetDefault("pictures_bank.cache_ttl", "1h")
 	v.SetDefault("pictures_bank.max_metadata_bytes", 2097152)
 	v.SetDefault("pictures_bank.max_image_bytes", 10485760)
 

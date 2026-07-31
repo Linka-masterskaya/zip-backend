@@ -37,8 +37,17 @@ func buildArchive(
 	config json.RawMessage,
 	files []*media.File,
 	storage archiveStorage,
+	pictureLoaders ...PictureLoader,
 ) ([]byte, error) {
 	exportedConfig, paths, err := archiveConfig(config, files)
+	if err != nil {
+		return nil, err
+	}
+	var pictureLoader PictureLoader
+	if len(pictureLoaders) > 0 {
+		pictureLoader = pictureLoaders[0]
+	}
+	exportedConfig, pictures, err := archivePictures(ctx, exportedConfig, pictureLoader)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +64,14 @@ func buildArchive(
 			return nil, ErrArchiveTooLarge
 		}
 	}
+	for _, picture := range pictures {
+		if err = writeZipEntry(writer, picture.name, bytes.NewReader(picture.data)); err != nil {
+			return nil, fmt.Errorf("write Pictures Bank image %s: %w", picture.name, err)
+		}
+		if int64(buffer.Len()) > MaxArchiveSize {
+			return nil, ErrArchiveTooLarge
+		}
+	}
 	if err = writer.Close(); err != nil {
 		return nil, fmt.Errorf("close archive: %w", err)
 	}
@@ -62,6 +79,54 @@ func buildArchive(
 		return nil, ErrArchiveTooLarge
 	}
 	return buffer.Bytes(), nil
+}
+
+type externalArchivePicture struct {
+	name string
+	data []byte
+}
+
+func archivePictures(
+	ctx context.Context,
+	config json.RawMessage,
+	loader PictureLoader,
+) ([]byte, []externalArchivePicture, error) {
+	var cfg linka.Config
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return nil, nil, fmt.Errorf("decode config for Pictures Bank export: %w", err)
+	}
+	paths := make(map[uuid.UUID]string)
+	pictures := make([]externalArchivePicture, 0)
+	for blockIndex := range cfg.Blocks {
+		for elementIndex := range cfg.Blocks[blockIndex].Elements {
+			element := &cfg.Blocks[blockIndex].Elements[elementIndex]
+			if element.Kind != linka.ElementKindImage || element.MediaID != nil ||
+				element.SourcePictureID == nil {
+				continue
+			}
+			pictureID := *element.SourcePictureID
+			if path, ok := paths[pictureID]; ok {
+				element.MediaURL = path
+				continue
+			}
+			if loader == nil {
+				return nil, nil, errors.New("Pictures Bank loader is required for export")
+			}
+			data, mimeType, err := loader(ctx, pictureID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("load Pictures Bank image %s: %w", pictureID, err)
+			}
+			path := "media/picture-" + pictureID.String() + extensionForMIME(mimeType)
+			paths[pictureID] = path
+			element.MediaURL = path
+			pictures = append(pictures, externalArchivePicture{name: path, data: data})
+		}
+	}
+	exported, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode Pictures Bank export config: %w", err)
+	}
+	return exported, pictures, nil
 }
 
 func archiveConfig(
