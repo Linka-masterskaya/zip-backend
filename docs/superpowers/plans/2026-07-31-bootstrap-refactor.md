@@ -1215,7 +1215,11 @@ Create `internal/app/modules.go`:
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
+
+	"github.com/google/uuid"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
@@ -1244,7 +1248,6 @@ func buildModules(in *infra) (*modules, error) {
 	packService := pack.NewService(packRepo, in.pub)
 	mediaRepo := media.NewRepository(in.db)
 	mediaService := media.NewService(mediaRepo, in.storage)
-	contentService := pack.NewContentService(packRepo, in.storage, mediaService, packService)
 
 	folderRepo := folder.NewRepository(in.db)
 	studentRepo := student.NewRepository(in.db)
@@ -1253,6 +1256,24 @@ func buildModules(in *infra) (*modules, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pictures bank source: %w", err)
 	}
+	picturesService := picturebank.NewService(picturesSource)
+
+	// Export substitutes a placeholder when a source picture is gone, so a
+	// deleted picture cannot fail the whole archive.
+	contentService := pack.NewContentService(
+		packRepo, in.storage, mediaService, packService,
+		func(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
+			image, loadErr := picturesService.Image(ctx, id.String())
+			if errors.Is(loadErr, picturebank.ErrPictureNotFound) {
+				image = picturebank.DeletedPicturePlaceholder()
+				loadErr = nil
+			}
+			if loadErr != nil {
+				return nil, "", loadErr
+			}
+			return image.Data, image.ContentType, nil
+		},
+	)
 
 	authCfg := auth.Config{
 		JWTSecret:                cfg.JWT.Secret,
@@ -1299,13 +1320,13 @@ func buildModules(in *infra) (*modules, error) {
 			Profile:        profile.NewHandler(profileService),
 			ChangePassword: profile.NewChangePasswordHandler(changePasswordService),
 		},
-		pictures: picturebank.NewHandler(picturebank.NewService(picturesSource, mediaService)),
+		pictures: picturebank.NewHandler(picturesService, cfg.PicturesBank.CacheTTL),
 		checker:  checker,
 	}, nil
 }
 ```
 
-Все конструкторы и порядок аргументов перенесены из `cmd/server/main.go:71-126` без изменений.
+Все конструкторы и порядок аргументов перенесены из `cmd/server/main.go:72-137` без изменений. Обратить внимание на сигнатуры — они отличаются от «очевидных»: `picturebank.NewService` принимает только источник, `picturebank.NewHandler` вторым аргументом берёт TTL кеша, а `pack.NewContentService` — пятым аргументом функцию загрузки картинки. Свериться с текущим `main.go`, а не додумывать.
 
 - [ ] **Step 2: Проверить компиляцию**
 
@@ -1743,7 +1764,7 @@ git commit -m "refactor(server): reduce main to bootstrap and run"
 
 **Files:**
 - Create: `cmd/migrate/main.go`
-- Modify: `Makefile:87`
+- Modify: `Makefile` (цель `migrate-embed`, строка 87)
 
 **Interfaces:**
 - Consumes: `config.Load`, `migrations.Run`
@@ -1814,7 +1835,7 @@ func run() error {
 
 - [ ] **Step 2: Поправить Makefile**
 
-`Makefile:87`, было:
+В цели `migrate-embed` (`Makefile:86-87`), было:
 ```make
 	go run ./cmd/server --migrate
 ```
@@ -1823,7 +1844,9 @@ func run() error {
 	go run ./cmd/migrate
 ```
 
-Добавить сборку бинаря в цель `build` (`Makefile:11-13`):
+Цель `run-local` (`Makefile:20-23`) зовёт `migrate-embed` через `$(MAKE)` — правка одной строки покрывает и её.
+
+Добавить сборку бинаря в цель `build` (`Makefile:11-14`):
 ```make
 	go build -o bin/migrate ./cmd/migrate
 ```
