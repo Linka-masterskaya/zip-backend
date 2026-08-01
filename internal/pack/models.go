@@ -72,10 +72,36 @@ type CreateInput struct {
 	Config   json.RawMessage
 }
 
-// ListInput contains offset pagination parameters for pack listing.
+// ListItem describes one pack placement returned by the global pack list.
+type ListItem struct {
+	ID              uuid.UUID       `json:"id"`
+	OrgID           uuid.UUID       `json:"org_id"`
+	OwnerID         uuid.UUID       `json:"owner_id"`
+	FolderID        uuid.UUID       `json:"folder_id"`
+	LibraryFolderID *uuid.UUID      `json:"library_folder_id,omitempty"`
+	PublishedAt     *time.Time      `json:"published_at,omitempty"`
+	Title           string          `json:"title"`
+	Status          string          `json:"status"`
+	AgeMin          *int            `json:"age_min,omitempty"`
+	AgeMax          *int            `json:"age_max,omitempty"`
+	Difficulty      *string         `json:"difficulty,omitempty"`
+	Goals           []string        `json:"goals"`
+	Notes           string          `json:"notes"`
+	Config          json.RawMessage `json:"config"`
+	IsFavorite      bool            `json:"is_favorite"`
+	Section         string          `json:"section"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+}
+
+// ListInput contains filters and offset pagination parameters for placement listing.
 type ListInput struct {
-	Limit  int
-	Offset int
+	Query      string
+	Age        *int
+	Difficulty string
+	Section    string
+	Limit      int
+	Offset     int
 }
 
 // NullablePatch distinguishes an omitted PATCH field from an explicit null.

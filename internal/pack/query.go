@@ -35,15 +35,72 @@ const getPackForPublicationQuery = `
 	  AND (p.owner_id = u.id OR $3)`
 
 const listPacksQuery = `
-	SELECT ` + qualifiedPackColumns + `
-	FROM packs p
-	JOIN users u ON u.id = $1
-	WHERE p.folder_id = $2
-	  AND p.owner_id = u.id
-	  AND p.org_id = u.org_id
-	  AND u.deleted_at IS NULL
-	ORDER BY p.updated_at DESC, p.id
-	LIMIT $3 OFFSET $4`
+	WITH active_user AS (
+		SELECT id, org_id
+		FROM users
+		WHERE id = $1
+		  AND org_id IS NOT NULL
+		  AND deleted_at IS NULL
+	), placements AS (
+		SELECT p.id, p.org_id, p.owner_id, p.folder_id AS result_folder_id,
+		       p.library_folder_id, p.published_at, p.title, p.status,
+		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.created_at, p.updated_at, f.section
+		FROM active_user u
+		JOIN packs p ON p.owner_id = u.id AND p.org_id = u.org_id
+		JOIN folders f ON f.id = p.folder_id
+		              AND f.owner_id = u.id
+		              AND f.org_id = u.org_id
+		              AND f.section IN ('my', 'students')
+		UNION ALL
+		SELECT p.id, p.org_id, p.owner_id, student_folder.id AS result_folder_id,
+		       p.library_folder_id, p.published_at, p.title, p.status,
+		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.created_at, p.updated_at, student_folder.section
+		FROM active_user u
+		JOIN students s ON s.defectologist_id = u.id
+		               AND s.deleted_at IS NULL
+		JOIN folders student_folder ON student_folder.student_id = s.id
+		                           AND student_folder.owner_id = u.id
+		                           AND student_folder.org_id = u.org_id
+		                           AND student_folder.section = 'students'
+		                           AND student_folder.kind = 'student'
+		JOIN pack_adaptations pa ON pa.student_id = s.id
+		                        AND pa.created_by = u.id
+		JOIN packs p ON p.id = pa.pack_id
+		            AND p.owner_id = u.id
+		            AND p.org_id = u.org_id
+		WHERE p.folder_id <> student_folder.id
+		UNION ALL
+		SELECT p.id, p.org_id, p.owner_id, p.library_folder_id AS result_folder_id,
+		       p.library_folder_id, p.published_at, p.title, p.status,
+		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.created_at, p.updated_at, f.section
+		FROM active_user u
+		JOIN packs p ON p.org_id = u.org_id
+		            AND p.published_at IS NOT NULL
+		JOIN folders f ON f.id = p.library_folder_id
+		              AND f.org_id = u.org_id
+		              AND f.section = 'library'
+	), filtered AS (
+		SELECT placements.*,
+		       EXISTS (
+			   SELECT 1
+			   FROM favorite_packs fp
+			   WHERE fp.user_id = $1 AND fp.pack_id = placements.id
+		       ) AS is_favorite
+		FROM placements
+		WHERE ($2::text = '' OR title ILIKE '%' || $2::text || '%')
+		  AND ($3::int IS NULL OR (age_min <= $3::int AND $3::int <= age_max))
+		  AND ($4::text = '' OR difficulty = $4::text)
+		  AND ($5::text = '' OR section = $5::text)
+	)
+	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
+	       published_at, title, status, age_min, age_max, difficulty,
+	       goals, notes, config, is_favorite, section, created_at, updated_at
+	FROM filtered
+	ORDER BY updated_at DESC, id, section, result_folder_id
+	LIMIT $6 OFFSET $7`
 
 const lockPackForUpdateQuery = `
 	SELECT p.org_id

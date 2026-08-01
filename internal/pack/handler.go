@@ -15,7 +15,7 @@ import (
 type packService interface {
 	Create(context.Context, string, uuid.UUID) (*Pack, error)
 	Get(context.Context, uuid.UUID) (*Pack, error)
-	List(context.Context, uuid.UUID, ListInput) ([]*Pack, error)
+	List(context.Context, ListInput) ([]*ListItem, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -107,17 +107,13 @@ func (h *Handler) GetPack(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, http.StatusOK, result)
 }
 
-// ListPacks handles GET /api/v1/packs?folder_id=&limit=&offset=.
+// ListPacks handles GET /api/v1/packs?query=&age=&difficulty=&section=.
 func (h *Handler) ListPacks(w http.ResponseWriter, r *http.Request) error {
-	folderID, err := uuid.Parse(r.URL.Query().Get("folder_id"))
-	if err != nil || folderID == uuid.Nil {
-		return apperr.ErrBadRequest.WithMessage("folder_id must be a valid UUID")
-	}
 	input, err := listInputFromRequest(r)
 	if err != nil {
 		return err
 	}
-	result, err := h.service.List(r.Context(), folderID, input)
+	result, err := h.service.List(r.Context(), input)
 	if err != nil {
 		return err
 	}
@@ -217,7 +213,15 @@ func (r updatePackRequest) hasFilterMetadata() bool {
 }
 
 func listInputFromRequest(r *http.Request) (ListInput, error) {
-	input := ListInput{}
+	input := ListInput{
+		Query:      r.URL.Query().Get("query"),
+		Difficulty: r.URL.Query().Get("difficulty"),
+		Section:    r.URL.Query().Get("section"),
+	}
+	age, err := optionalQueryIntPointer(r, "age")
+	if err != nil {
+		return ListInput{}, err
+	}
 	limit, err := optionalQueryInt(r, "limit")
 	if err != nil {
 		return ListInput{}, err
@@ -229,9 +233,22 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 	if err != nil {
 		return ListInput{}, err
 	}
+	input.Age = age
 	input.Limit = limit
 	input.Offset = offset
 	return validateListInput(input)
+}
+
+func optionalQueryIntPointer(r *http.Request, name string) (*int, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return nil, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
+	}
+	return &value, nil
 }
 
 func optionalQueryInt(r *http.Request, name string) (int, error) {
