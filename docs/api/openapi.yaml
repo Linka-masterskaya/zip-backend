@@ -158,6 +158,16 @@ components:
         created_at:        { type: string, format: date-time }
         updated_at:        { type: string, format: date-time }
 
+    PackListItem:
+      allOf:
+        - { $ref: '#/components/schemas/Pack' }
+        - type: object
+          required: [folder_id, is_favorite, section]
+          properties:
+            folder_id: { type: string, format: uuid, description: Папка конкретного размещения набора }
+            is_favorite: { type: boolean }
+            section: { type: string, enum: [library, my, students] }
+
     Media:
       type: object
       required: [id, uploader_id, sha256, mime_type, size_bytes, created_at, url]
@@ -685,7 +695,7 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         '200':
-          description: Изображение с браузерным Cache-Control; для удалённого оригинала — SVG и `X-Picture-Placeholder: deleted`, при временной недоступности — `unavailable`
+          description: "Изображение с браузерным Cache-Control; для удалённого оригинала — SVG и `X-Picture-Placeholder: deleted`, при временной недоступности — `unavailable`"
           content:
             image/png:  { schema: { type: string, format: binary } }
             image/jpeg: { schema: { type: string, format: binary } }
@@ -711,6 +721,33 @@ paths:
               schema: { $ref: '#/components/schemas/PictureReference' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
+
+  /packs:
+    get:
+      tags: [packs]
+      summary: Найти наборы во всех доступных папках
+      description: >-
+        Возвращает размещения наборов во всех доступных папках: личных, ученических
+        и библиотеке организации. Набор, размещённый в нескольких папках, возвращается
+        отдельной записью для каждой папки с соответствующими folder_id и section.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: query, in: query, schema: { type: string }, description: Подстрока title без учёта регистра }
+        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: age_min <= age <= age_max }
+        - { name: difficulty, in: query, schema: { type: string, enum: [easy, medium, hard] } }
+        - { name: section, in: query, schema: { type: string, enum: [library, my, students] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Размещения наборов, подходящие под поиск и фильтры
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PackListItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs/{id}/config:
     put:

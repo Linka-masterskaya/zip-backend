@@ -42,11 +42,14 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		assert.Equal(t, packID, gotPackID)
 		return &Pack{ID: packID}, nil
 	}
-	repo.listFn = func(_ context.Context, gotUserID, gotFolderID uuid.UUID, input ListInput) ([]*Pack, error) {
+	age := 5
+	repo.listFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) ([]*ListItem, error) {
 		assert.Equal(t, userID, gotUserID)
-		assert.Equal(t, folderID, gotFolderID)
-		assert.Equal(t, ListInput{Limit: 50}, input)
-		return []*Pack{{ID: packID}}, nil
+		assert.Equal(t, ListInput{
+			Query: "Speech", Age: &age, Difficulty: "easy",
+			Section: "my", Limit: 50,
+		}, input)
+		return []*ListItem{{ID: packID}}, nil
 	}
 	repo.deleteFn = func(_ context.Context, gotUserID, gotPackID uuid.UUID) error {
 		assert.Equal(t, userID, gotUserID)
@@ -64,7 +67,9 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 	ctx := packContext(userID)
 	_, err := service.Get(ctx, packID)
 	require.NoError(t, err)
-	listed, err := service.List(ctx, folderID, ListInput{})
+	listed, err := service.List(ctx, ListInput{
+		Query: "  Speech  ", Age: &age, Difficulty: "easy", Section: "my",
+	})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	require.NoError(t, service.Delete(ctx, packID))
@@ -85,7 +90,30 @@ func TestServiceListRejectsInvalidPagination(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := NewService(&fakePackRepository{}, nil).List(
-				packContext(uuid.New()), uuid.New(), test.input,
+				packContext(uuid.New()), test.input,
+			)
+			assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+		})
+	}
+}
+
+func TestServiceListRejectsInvalidFilters(t *testing.T) {
+	ageTooLow := 2
+	ageTooHigh := 19
+	tests := []struct {
+		name  string
+		input ListInput
+	}{
+		{name: "age too low", input: ListInput{Age: &ageTooLow}},
+		{name: "age too high", input: ListInput{Age: &ageTooHigh}},
+		{name: "difficulty", input: ListInput{Difficulty: "expert"}},
+		{name: "section", input: ListInput{Section: "shared"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewService(&fakePackRepository{}, nil).List(
+				packContext(uuid.New()), test.input,
 			)
 			assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
 		})
@@ -228,7 +256,7 @@ type fakePackRepository struct {
 	createFn            func(context.Context, uuid.UUID, CreateInput) (*Pack, error)
 	getFn               func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	listFn              func(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*Pack, error)
+	listFn              func(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
 	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
 	moveFn              func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -262,13 +290,13 @@ func (f *fakePackRepository) Get(ctx context.Context, userID, packID uuid.UUID) 
 
 func (f *fakePackRepository) List(
 	ctx context.Context,
-	userID, folderID uuid.UUID,
+	userID uuid.UUID,
 	input ListInput,
-) ([]*Pack, error) {
+) ([]*ListItem, error) {
 	if f.listFn != nil {
-		return f.listFn(ctx, userID, folderID, input)
+		return f.listFn(ctx, userID, input)
 	}
-	return []*Pack{}, nil
+	return []*ListItem{}, nil
 }
 
 func (f *fakePackRepository) Update(ctx context.Context, userID, packID uuid.UUID, input UpdateInput) (*Pack, error) {

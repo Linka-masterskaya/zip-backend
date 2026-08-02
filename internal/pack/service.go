@@ -18,7 +18,7 @@ type packRepository interface {
 	Create(context.Context, uuid.UUID, CreateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	GetForPublication(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	List(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*Pack, error)
+	List(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -65,8 +65,8 @@ func (s *Service) Get(ctx context.Context, packID uuid.UUID) (*Pack, error) {
 	return result, packError(err)
 }
 
-// List returns a bounded page of packs from an accessible folder.
-func (s *Service) List(ctx context.Context, folderID uuid.UUID, input ListInput) ([]*Pack, error) {
+// List returns a bounded page of packs from all accessible folders.
+func (s *Service) List(ctx context.Context, input ListInput) ([]*ListItem, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func (s *Service) List(ctx context.Context, folderID uuid.UUID, input ListInput)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.repo.List(ctx, userID, folderID, input)
+	result, err := s.repo.List(ctx, userID, input)
 	return result, packError(err)
 }
 
@@ -186,6 +186,18 @@ func validateListInput(input ListInput) (ListInput, error) {
 	const defaultLimit = 50
 	const maxLimit = 100
 
+	input.Query = strings.TrimSpace(input.Query)
+	input.Difficulty = strings.TrimSpace(input.Difficulty)
+	input.Section = strings.TrimSpace(input.Section)
+	if input.Age != nil && (*input.Age < 3 || *input.Age > 18) {
+		return ListInput{}, apperr.ErrBadRequest.WithMessage("age must be between 3 and 18")
+	}
+	if input.Difficulty != "" && !validDifficulty(input.Difficulty) {
+		return ListInput{}, apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
+	}
+	if input.Section != "" && !validSection(input.Section) {
+		return ListInput{}, apperr.ErrBadRequest.WithMessage("section must be library, my, or students")
+	}
 	if input.Limit == 0 {
 		input.Limit = defaultLimit
 	}
@@ -196,6 +208,14 @@ func validateListInput(input ListInput) (ListInput, error) {
 		return ListInput{}, apperr.ErrBadRequest.WithMessage("offset must not be negative")
 	}
 	return input, nil
+}
+
+func validDifficulty(value string) bool {
+	return value == "easy" || value == "medium" || value == "hard"
+}
+
+func validSection(value string) bool {
+	return value == "library" || value == "my" || value == "students"
 }
 
 func validateUpdate(input *UpdateInput) error {
@@ -229,7 +249,7 @@ func validateFilterMetadata(metadata *FilterMetadataPatch) error {
 	}
 	if metadata.Difficulty.Set && metadata.Difficulty.Value != nil {
 		difficulty := *metadata.Difficulty.Value
-		if difficulty != "easy" && difficulty != "medium" && difficulty != "hard" {
+		if !validDifficulty(difficulty) {
 			return apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
 		}
 	}

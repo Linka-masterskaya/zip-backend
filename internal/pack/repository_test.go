@@ -66,7 +66,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	assert.Empty(t, cleared.Notes)
 	assert.JSONEq(t, string(config), string(cleared.Config))
 
-	listed, err := repo.List(context.Background(), userID, folderID, ListInput{Limit: 50})
+	listed, err := repo.List(context.Background(), userID, ListInput{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created.ID, listed[0].ID)
@@ -100,8 +100,10 @@ func TestRepositoryEnforcesUserAndFolderAccess(t *testing.T) {
 	assert.ErrorIs(t, err, ErrFolderNotAllowed)
 	_, err = repo.Get(context.Background(), foreignUserID, created.ID)
 	assert.ErrorIs(t, err, ErrPackNotFound)
-	_, err = repo.List(context.Background(), ownerID, foreignFolderID, ListInput{Limit: 50})
-	assert.ErrorIs(t, err, ErrFolderNotAllowed)
+	listed, err := repo.List(context.Background(), ownerID, ListInput{Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.Equal(t, created.ID, listed[0].ID)
 	_, err = repo.Update(context.Background(), foreignUserID, created.ID, UpdateInput{Title: stringPtr("foreign")})
 	assert.ErrorIs(t, err, ErrPackNotFound)
 	_, err = repo.Update(context.Background(), ownerID, created.ID, UpdateInput{FolderID: &foreignFolderID})
@@ -133,11 +135,153 @@ func TestRepositoryListUsesLimitAndOffset(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	listed, err := repo.List(context.Background(), userID, folderID, ListInput{Limit: 1, Offset: 1})
+	listed, err := repo.List(context.Background(), userID, ListInput{Limit: 1, Offset: 1})
 
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created[1].ID, listed[0].ID)
+}
+
+func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	orgID, userID, myFolderID := seedPackOwner(t, pool, "search org")
+	studentFolderID := seedPackSectionFolder(t, pool, userID, "students")
+	colleagueID, colleagueFolderID := seedPackUserInOrg(t, pool, orgID, "my")
+	libraryFolderID := seedPackLibraryFolder(t, pool, colleagueID)
+	_, foreignID, foreignFolderID := seedPackOwner(t, pool, "foreign search org")
+	foreignLibraryID := seedPackLibraryFolder(t, pool, foreignID)
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	ownPack := createFilteredPack(t, repo, userID, myFolderID, "Speech Easy", 4, 6, "easy", config)
+	studentPack := createFilteredPack(t, repo, userID, studentFolderID, "Reading Hard", 5, 9, "hard", config)
+	privateColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "Speech Private", 4, 7, "easy", config)
+	publishedColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "SPEECH Medium", 5, 8, "medium", config)
+	_, err := repo.Publish(t.Context(), colleagueID, publishedColleague.ID, libraryFolderID, false)
+	require.NoError(t, err)
+	foreignPack := createFilteredPack(t, repo, foreignID, foreignFolderID, "Speech Foreign", 4, 8, "easy", config)
+	_, err = repo.Publish(t.Context(), foreignID, foreignPack.ID, foreignLibraryID, false)
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `INSERT INTO favorite_packs (user_id, pack_id) VALUES ($1, $2)`, userID, ownPack.ID)
+	require.NoError(t, err)
+
+	age := 5
+	listed, err := repo.List(t.Context(), userID, ListInput{Query: "sPeEcH", Age: &age, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, listed, 2)
+	items := listItemsByID(listed)
+	require.Contains(t, items, ownPack.ID)
+	require.Contains(t, items, publishedColleague.ID)
+	assert.True(t, items[ownPack.ID].IsFavorite)
+	assert.Equal(t, myFolderID, items[ownPack.ID].FolderID)
+	assert.Equal(t, "my", items[ownPack.ID].Section)
+	assert.False(t, items[publishedColleague.ID].IsFavorite)
+	assert.Equal(t, libraryFolderID, items[publishedColleague.ID].FolderID)
+	assert.Equal(t, "library", items[publishedColleague.ID].Section)
+	assert.NotContains(t, items, privateColleague.ID)
+	assert.NotContains(t, items, foreignPack.ID)
+
+	easy, err := repo.List(t.Context(), userID, ListInput{Difficulty: "easy", Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, easy, 1)
+	assert.Equal(t, ownPack.ID, easy[0].ID)
+	medium, err := repo.List(t.Context(), userID, ListInput{Difficulty: "medium", Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, medium, 1)
+	assert.Equal(t, publishedColleague.ID, medium[0].ID)
+	hard, err := repo.List(t.Context(), userID, ListInput{Difficulty: "hard", Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, hard, 1)
+	assert.Equal(t, studentPack.ID, hard[0].ID)
+
+	for _, boundaryAge := range []int{4, 6} {
+		boundary, boundaryErr := repo.List(t.Context(), userID, ListInput{
+			Query: "Speech Easy", Age: &boundaryAge, Limit: 50,
+		})
+		require.NoError(t, boundaryErr)
+		require.Len(t, boundary, 1)
+		assert.Equal(t, ownPack.ID, boundary[0].ID)
+	}
+
+	my, err := repo.List(t.Context(), userID, ListInput{Section: "my", Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, my, 1)
+	assert.Equal(t, ownPack.ID, my[0].ID)
+
+	library, err := repo.List(t.Context(), userID, ListInput{Section: "library", Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, library, 1)
+	assert.Equal(t, publishedColleague.ID, library[0].ID)
+
+	students, err := repo.List(t.Context(), userID, ListInput{Section: "students", Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, students, 1)
+	assert.Equal(t, studentPack.ID, students[0].ID)
+}
+
+func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, userID, myFolderID := seedPackOwner(t, pool, "placement org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, userID)
+	studentOneID, studentOneFolderID := seedPackStudentFolder(t, pool, userID, "Student One")
+	studentTwoID, studentTwoFolderID := seedPackStudentFolder(t, pool, userID, "Student Two")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	created := createFilteredPack(
+		t, repo, userID, myFolderID, "Placement Speech", 4, 7, "easy", config,
+	)
+	_, err := repo.Publish(t.Context(), userID, created.ID, libraryFolderID, false)
+	require.NoError(t, err)
+	_, err = repo.Assign(t.Context(), userID, created.ID, []uuid.UUID{studentOneID, studentTwoID})
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO favorite_packs (user_id, pack_id) VALUES ($1, $2)`, userID, created.ID)
+	require.NoError(t, err)
+
+	age := 5
+	listed, err := repo.List(t.Context(), userID, ListInput{
+		Query: "pLaCeMeNt", Age: &age, Difficulty: "easy", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, listed, 4)
+
+	expectedSections := map[uuid.UUID]string{
+		myFolderID:         "my",
+		libraryFolderID:    "library",
+		studentOneFolderID: "students",
+		studentTwoFolderID: "students",
+	}
+	for _, item := range listed {
+		assert.Equal(t, created.ID, item.ID)
+		assert.True(t, item.IsFavorite)
+		assert.Equal(t, expectedSections[item.FolderID], item.Section)
+		delete(expectedSections, item.FolderID)
+	}
+	assert.Empty(t, expectedSections)
+
+	students, err := repo.List(t.Context(), userID, ListInput{
+		Query: "Placement Speech", Section: "students", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, students, 2)
+	assert.ElementsMatch(t,
+		[]uuid.UUID{studentOneFolderID, studentTwoFolderID},
+		[]uuid.UUID{students[0].FolderID, students[1].FolderID},
+	)
+
+	direct := createFilteredPack(
+		t, repo, userID, studentOneFolderID, "Direct Student Pack", 5, 8, "hard", config,
+	)
+	_, err = repo.Assign(t.Context(), userID, direct.ID, []uuid.UUID{studentOneID})
+	require.NoError(t, err)
+	directPlacements, err := repo.List(t.Context(), userID, ListInput{
+		Query: "Direct Student Pack", Section: "students", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, directPlacements, 1)
+	assert.Equal(t, direct.ID, directPlacements[0].ID)
+	assert.Equal(t, studentOneFolderID, directPlacements[0].FolderID)
 }
 
 func TestRepositoryUpdateChecksFolderOwnershipAtomically(t *testing.T) {
@@ -497,6 +641,93 @@ func seedPackFolder(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) uuid.UU
 		FROM users WHERE id = $2`, folderID, ownerID)
 	require.NoError(t, err)
 	return folderID
+}
+
+func seedPackSectionFolder(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	ownerID uuid.UUID,
+	section string,
+) uuid.UUID {
+	t.Helper()
+	folderID := uuid.New()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO folders (id, org_id, owner_id, section, kind, name, depth)
+		SELECT $1, org_id, id, $3, 'folder', 'Folder', 0
+		FROM users WHERE id = $2`, folderID, ownerID, section)
+	require.NoError(t, err)
+	return folderID
+}
+
+func seedPackUserInOrg(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	orgID uuid.UUID,
+	section string,
+) (uuid.UUID, uuid.UUID) {
+	t.Helper()
+	userID := uuid.New()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO users (id, org_id) VALUES ($1, $2)`, userID, orgID)
+	require.NoError(t, err)
+	return userID, seedPackSectionFolder(t, pool, userID, section)
+}
+
+func seedPackStudentFolder(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	ownerID uuid.UUID,
+	name string,
+) (uuid.UUID, uuid.UUID) {
+	t.Helper()
+	studentID := uuid.New()
+	folderID := uuid.New()
+	_, err := pool.Exec(t.Context(), `
+		INSERT INTO students (
+			id, defectologist_id, email_encrypted, name, status
+		) VALUES ($1, $2, '\x00', $3, 'active')`, studentID, ownerID, name)
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO folders (
+			id, org_id, owner_id, section, kind, student_id, name, depth
+		)
+		SELECT $1, org_id, id, 'students', 'student', $3, $4, 0
+		FROM users WHERE id = $2`, folderID, ownerID, studentID, name)
+	require.NoError(t, err)
+	return studentID, folderID
+}
+
+func createFilteredPack(
+	t *testing.T,
+	repo *Repository,
+	userID, folderID uuid.UUID,
+	title string,
+	ageMin, ageMax int,
+	difficulty string,
+	config []byte,
+) *Pack {
+	t.Helper()
+	created, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: title, FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+	updated, err := repo.Update(t.Context(), userID, created.ID, UpdateInput{
+		FilterMetadata: &FilterMetadataPatch{
+			AgeMin:     NullablePatch[int]{Set: true, Value: &ageMin},
+			AgeMax:     NullablePatch[int]{Set: true, Value: &ageMax},
+			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
+		},
+	})
+	require.NoError(t, err)
+	return updated
+}
+
+func listItemsByID(items []*ListItem) map[uuid.UUID]*ListItem {
+	result := make(map[uuid.UUID]*ListItem, len(items))
+	for _, item := range items {
+		result[item.ID] = item
+	}
+	return result
 }
 
 func seedPackLibraryFolder(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) uuid.UUID {

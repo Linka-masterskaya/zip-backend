@@ -76,30 +76,32 @@ func (r *Repository) GetForPublication(
 	return result, nil
 }
 
-// List returns a bounded page of packs from an owned folder.
+// List returns a bounded page of packs from all folders accessible to the user.
 func (r *Repository) List(
 	ctx context.Context,
-	userID, folderID uuid.UUID,
+	userID uuid.UUID,
 	input ListInput,
-) ([]*Pack, error) {
-	allowed, err := r.folderAllowed(ctx, userID, folderID)
-	if err != nil {
-		return nil, err
-	}
-	if !allowed {
-		return nil, ErrFolderNotAllowed
-	}
-
+) ([]*ListItem, error) {
 	limit, offset := repositoryListBounds(input)
-	rows, err := r.pool.Query(ctx, listPacksQuery, userID, folderID, limit, offset)
+	rows, err := r.pool.Query(
+		ctx,
+		listPacksQuery,
+		userID,
+		input.Query,
+		input.Age,
+		input.Difficulty,
+		input.Section,
+		limit,
+		offset,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("pack repository list: %w", err)
 	}
 	defer rows.Close()
 
-	packs := make([]*Pack, 0)
+	packs := make([]*ListItem, 0)
 	for rows.Next() {
-		item, scanErr := scanPack(rows)
+		item, scanErr := scanListItem(rows)
 		if scanErr != nil {
 			return nil, fmt.Errorf("pack repository list scan: %w", scanErr)
 		}
@@ -357,6 +359,22 @@ func scanPack(row rowScanner) (*Pack, error) {
 		&result.LibraryFolderID, &result.PublishedAt,
 		&result.Title, &result.Status, &result.AgeMin, &result.AgeMax,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
+		&result.CreatedAt, &result.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func scanListItem(row rowScanner) (*ListItem, error) {
+	var result ListItem
+	err := row.Scan(
+		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
+		&result.LibraryFolderID, &result.PublishedAt,
+		&result.Title, &result.Status, &result.AgeMin, &result.AgeMax,
+		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
+		&result.IsFavorite, &result.Section,
 		&result.CreatedAt, &result.UpdatedAt,
 	)
 	if err != nil {
