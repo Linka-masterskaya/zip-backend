@@ -109,8 +109,9 @@ func TestContentHandlerExportAdaptationStreamsArchiveWithHeaders(t *testing.T) {
 		},
 	}
 	handler := NewContentHandler(service)
-	req := httptest.NewRequest(
-		http.MethodGet, "/api/v1/adaptations/"+adaptationID.String()+"/export", nil,
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet,
+		"/api/v1/adaptations/"+adaptationID.String()+"/export", nil,
 	)
 	req.SetPathValue("id", adaptationID.String())
 	rec := httptest.NewRecorder()
@@ -140,7 +141,9 @@ func TestContentHandlerExportStreamsArchiveWithHeaders(t *testing.T) {
 		},
 	}
 	handler := NewContentHandler(service)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/packs/"+packID.String()+"/export", nil)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/packs/"+packID.String()+"/export", nil,
+	)
 	req.SetPathValue("id", packID.String())
 	rec := httptest.NewRecorder()
 
