@@ -120,30 +120,36 @@ func buildArchiveWithLimit(
 	if err != nil {
 		return nil, fmt.Errorf("create temporary archive: %w", err)
 	}
-	path := temporary.Name()
-	completed := false
-	defer func() {
-		if !completed {
-			if closeErr := temporary.Close(); closeErr != nil {
-				slog.Warn("close incomplete archive", "path", path, "err", closeErr)
-			}
-			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				slog.Warn("remove incomplete archive", "path", path, "err", removeErr)
-			}
-		}
-	}()
+	archive, err := writeTemporaryArchive(
+		ctx, temporary, archiveConfig, archiveFiles, storageClient, pictureLoader, maxSize,
+	)
+	if err != nil {
+		cleanupTemporaryArchive(temporary)
+		return nil, err
+	}
+	return archive, nil
+}
 
+func writeTemporaryArchive(
+	ctx context.Context,
+	temporary *os.File,
+	config *linka.Config,
+	files []*media.File,
+	storageClient archiveStorage,
+	pictureLoader PictureLoader,
+	maxSize int64,
+) (*archiveStream, error) {
 	limited := &archiveLimitWriter{writer: temporary, remaining: maxSize}
 	writer := zip.NewWriter(limited)
-	for _, file := range archiveFiles {
-		if err = writeArchiveMedia(ctx, writer, file, storageClient); err != nil {
+	for _, file := range files {
+		if err := writeArchiveMedia(ctx, writer, file, storageClient); err != nil {
 			return nil, err
 		}
 	}
-	if err = writeArchivePictures(ctx, writer, archiveConfig, pictureLoader); err != nil {
+	if err := writeArchivePictures(ctx, writer, config, pictureLoader); err != nil {
 		return nil, err
 	}
-	exportedConfig, err := json.Marshal(archiveConfig)
+	exportedConfig, err := json.Marshal(config)
 	if err != nil {
 		return nil, fmt.Errorf("encode exported config: %w", err)
 	}
@@ -153,6 +159,10 @@ func buildArchiveWithLimit(
 	if err = writer.Close(); err != nil {
 		return nil, fmt.Errorf("close archive: %w", err)
 	}
+	return openTemporaryArchive(temporary, maxSize)
+}
+
+func openTemporaryArchive(temporary *os.File, maxSize int64) (*archiveStream, error) {
 	info, err := temporary.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat archive: %w", err)
@@ -163,8 +173,17 @@ func buildArchiveWithLimit(
 	if _, err = temporary.Seek(0, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("rewind archive: %w", err)
 	}
-	completed = true
-	return &archiveStream{file: temporary, path: path, size: info.Size()}, nil
+	return &archiveStream{file: temporary, path: temporary.Name(), size: info.Size()}, nil
+}
+
+func cleanupTemporaryArchive(temporary *os.File) {
+	path := temporary.Name()
+	if closeErr := temporary.Close(); closeErr != nil {
+		slog.Warn("close incomplete archive", "path", path, "err", closeErr)
+	}
+	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		slog.Warn("remove incomplete archive", "path", path, "err", removeErr)
+	}
 }
 
 func prepareArchiveConfig(
