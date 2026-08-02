@@ -96,7 +96,7 @@ func (au *authService) ResetPassword(ctx context.Context, token string, newPassw
 		return err
 	}
 
-	if err := au.cache.RevokeAllSessions(ctx, userID); err != nil {
+	if err := au.cache.RevokeAllSessions(ctx, userID.String()); err != nil {
 		slog.ErrorContext(ctx, "password reset sessions revoke failed",
 			"user_id", userID,
 			logger.Err(err),

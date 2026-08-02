@@ -2,6 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -418,4 +421,83 @@ func (r *authRepo) CreateAuthCred(ctx context.Context, params CreateAuthCredPara
 	}
 
 	return nil
+}
+
+func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (uuid.UUID, error) {
+	rawToken, err := decodePasswordResetToken(token)
+	if err != nil {
+		return uuid.Nil, apperr.ErrInvalidResetToken
+	}
+
+	tokenHash := hashPasswordResetToken(rawToken)
+
+	query := `
+        UPDATE verify_tokens
+        SET used_at = now()
+        WHERE token_hash = $1
+            AND purpose = 'password_reset'
+            AND used_at IS NULL
+            AND expires_at > now()
+        RETURNING user_id
+    `
+
+	var userID uuid.UUID
+	err = r.db.QueryRow(ctx, query, tokenHash).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, apperr.ErrInvalidResetToken
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("authRepo.ResetPasswordByToken: %w", err)
+	}
+
+	// Обновляем пароль
+	updateQuery := `
+        UPDATE auth_cred
+        SET password_hash = $1, updated_at = now()
+        WHERE user_id = $2
+    `
+	_, err = r.db.Exec(ctx, updateQuery, passwordHash, userID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("authRepo.ResetPasswordByToken: %w", err)
+	}
+
+	return userID, nil
+}
+
+func (r *authRepo) CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error) {
+	// Генерируем сырой токен
+	rawToken := make([]byte, 32)
+	if _, err := rand.Read(rawToken); err != nil {
+		return "", fmt.Errorf("CreatePasswordResetToken: generate token: %w", err)
+	}
+
+	// Кодируем токен для отправки пользователю
+	token := base64.RawURLEncoding.EncodeToString(rawToken)
+
+	// Хешируем токен для хранения в БД
+	tokenHash := sha256.Sum256(rawToken)
+
+	tokenID, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("CreatePasswordResetToken: generate id: %w", err)
+	}
+
+	userUUID, err := uuid.Parse(userID)
+	if err != nil {
+		return "", fmt.Errorf("CreatePasswordResetToken: parse user id: %w", err)
+	}
+
+	expiresAt := time.Now().Add(ttl)
+
+	query := `
+        INSERT INTO verify_tokens (id, user_id, purpose, token_hash, expires_at)
+        VALUES ($1, $2, 'password_reset', $3, $4)
+    `
+
+	_, err = r.db.Exec(ctx, query, tokenID, userUUID, tokenHash[:], expiresAt)
+	if err != nil {
+		return "", fmt.Errorf("CreatePasswordResetToken: %w", err)
+	}
+
+	return token, nil
 }
