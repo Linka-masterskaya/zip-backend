@@ -65,7 +65,7 @@ func run() error {
 		}
 	}()
 
-	packRepo := pack.NewRepository(deps.redis)
+	packRepo := pack.NewRepository(deps.db)
 	packService := pack.NewService(packRepo, deps.pub)
 	packHandler := pack.NewHandler(packService)
 
@@ -77,8 +77,10 @@ func run() error {
 		AccessTokenTTL:           deps.cfg.Auth.AccessTokenTTL,
 		RefreshTokenTTL:          deps.cfg.Auth.RefreshTokenTTL,
 		VerifyEmailTokenTTL:      deps.cfg.Auth.VerifyEmailTokenTTL,
+		ResetPasswordTokenTTL:    deps.cfg.Auth.ResetPasswordTokenTTL,
 		RequireEmailVerification: deps.cfg.Auth.RequireEmailVerification,
 		CookieSecure:             deps.cfg.Auth.CookieSecure,
+		BcryptCost:               deps.cfg.Auth.BcryptCost,
 	}
 
 	authService := auth.NewAuthService(

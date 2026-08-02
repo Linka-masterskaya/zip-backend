@@ -48,6 +48,8 @@ type authRepoIface interface {
 	UpdateUserName(ctx context.Context, userID uuid.UUID, name string) error
 	CreateIdentity(ctx context.Context, identity *UserIdentity) error
 	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
+	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
+	ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (uuid.UUID, error)
 	beginTx(ctx context.Context) (pgx.Tx, error)
 	withTx(tx pgx.Tx) authRepoIface
 	useEmailVerifyToken(ctx context.Context, token []byte) (uuid.UUID, uuid.UUID, error)
@@ -64,6 +66,7 @@ type refreshStore interface {
 		rec cache.RefreshRecord,
 		ttl time.Duration,
 	) error
+	RevokeAllSessions(ctx context.Context, userID string) error
 }
 
 type cryptoService interface {
@@ -78,8 +81,10 @@ type Config struct {
 	AccessTokenTTL           time.Duration
 	RefreshTokenTTL          time.Duration
 	VerifyEmailTokenTTL      time.Duration
+	ResetPasswordTokenTTL    time.Duration
 	RequireEmailVerification bool
 	CookieSecure             bool
+	BcryptCost               int
 }
 
 type LoginResult struct {
