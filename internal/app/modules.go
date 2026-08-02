@@ -47,15 +47,12 @@ func buildModules(in *infra) (*modules, error) {
 	}
 	picturesService := picturebank.NewService(picturesSource)
 
-	// Export substitutes a placeholder when a source picture is gone, so a
-	// deleted picture cannot fail the whole archive.
 	contentService := pack.NewContentService(
 		packRepo, in.storage, mediaService, packService,
 		func(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
 			image, loadErr := picturesService.Image(ctx, id.String())
 			if errors.Is(loadErr, picturebank.ErrPictureNotFound) {
-				image = picturebank.DeletedPicturePlaceholder()
-				loadErr = nil
+				return nil, "", pack.ErrMissingMediaReference
 			}
 			if loadErr != nil {
 				return nil, "", loadErr

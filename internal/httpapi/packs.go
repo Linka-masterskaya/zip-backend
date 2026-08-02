@@ -35,6 +35,7 @@ func RegisterPackRoutes(
 	mux.Handle("DELETE /api/v1/packs/{id}/publication", protected(handlers.Pack.UnpublishPack))
 	mux.Handle("PUT /api/v1/packs/{id}/config", protected(handlers.Content.SaveConfig))
 	mux.Handle("GET /api/v1/packs/{id}/export", protected(handlers.Content.Export))
+	mux.Handle("GET /api/v1/adaptations/{id}/export", protected(handlers.Content.ExportAdaptation))
 	mux.Handle("POST /api/v1/packs/import", protected(handlers.Content.Import))
 	mux.Handle("POST /api/v1/packs/{id}/students", protected(handlers.Content.Assign))
 	mux.Handle("DELETE /api/v1/packs/{id}/students/{student_id}", protected(handlers.Content.Unassign))

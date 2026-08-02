@@ -1,8 +1,11 @@
 package pack
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -93,6 +96,76 @@ func TestContentHandlerRestoreRejectsInvalidVersion(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestContentHandlerExportAdaptationStreamsArchiveWithHeaders(t *testing.T) {
+	adaptationID := uuid.New()
+	payload := []byte("streamed-adaptation")
+	stream := &trackedReadCloser{Reader: bytes.NewReader(payload)}
+	service := &fakeContentVersionService{
+		exportAdaptationFn: func(_ context.Context, gotID uuid.UUID) (*ExportArchive, error) {
+			assert.Equal(t, adaptationID, gotID)
+			return &ExportArchive{
+				Stream: stream, Filename: "Набор-adaptation.linka", Size: int64(len(payload)),
+			}, nil
+		},
+	}
+	handler := NewContentHandler(service)
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/adaptations/"+adaptationID.String()+"/export", nil,
+	)
+	req.SetPathValue("id", adaptationID.String())
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, handler.ExportAdaptation(rec, req))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/vnd.linka+zip", rec.Header().Get("Content-Type"))
+	assert.Equal(t, payload, rec.Body.Bytes())
+	assert.Equal(t, "19", rec.Header().Get("Content-Length"))
+	mediaType, params, err := mime.ParseMediaType(rec.Header().Get("Content-Disposition"))
+	require.NoError(t, err)
+	assert.Equal(t, "attachment", mediaType)
+	assert.Equal(t, "Набор-adaptation.linka", params["filename"])
+	assert.True(t, stream.closed)
+}
+
+func TestContentHandlerExportStreamsArchiveWithHeaders(t *testing.T) {
+	packID := uuid.New()
+	payload := []byte("streamed-linka")
+	stream := &trackedReadCloser{Reader: bytes.NewReader(payload)}
+	service := &fakeContentVersionService{
+		exportFn: func(_ context.Context, gotID uuid.UUID) (*ExportArchive, error) {
+			assert.Equal(t, packID, gotID)
+			return &ExportArchive{
+				Stream: stream, Filename: "Набор.linka", Size: int64(len(payload)),
+			}, nil
+		},
+	}
+	handler := NewContentHandler(service)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/packs/"+packID.String()+"/export", nil)
+	req.SetPathValue("id", packID.String())
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, handler.Export(rec, req))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/vnd.linka+zip", rec.Header().Get("Content-Type"))
+	assert.Equal(t, payload, rec.Body.Bytes())
+	assert.Equal(t, "14", rec.Header().Get("Content-Length"))
+	mediaType, params, err := mime.ParseMediaType(rec.Header().Get("Content-Disposition"))
+	require.NoError(t, err)
+	assert.Equal(t, "attachment", mediaType)
+	assert.Equal(t, "Набор.linka", params["filename"])
+	assert.True(t, stream.closed)
+}
+
+type trackedReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (r *trackedReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 func performContentVersionRequest(
 	t *testing.T,
 	handler middleware.AppHandler,
@@ -112,10 +185,12 @@ func performContentVersionRequest(
 }
 
 type fakeContentVersionService struct {
-	createVersionFn  func(context.Context, uuid.UUID) (*Version, error)
-	listVersionsFn   func(context.Context, uuid.UUID, ListInput) ([]*VersionSummary, error)
-	getVersionFn     func(context.Context, uuid.UUID, int) (*Version, error)
-	restoreVersionFn func(context.Context, uuid.UUID, int) (*RestoreResult, error)
+	exportFn           func(context.Context, uuid.UUID) (*ExportArchive, error)
+	exportAdaptationFn func(context.Context, uuid.UUID) (*ExportArchive, error)
+	createVersionFn    func(context.Context, uuid.UUID) (*Version, error)
+	listVersionsFn     func(context.Context, uuid.UUID, ListInput) ([]*VersionSummary, error)
+	getVersionFn       func(context.Context, uuid.UUID, int) (*Version, error)
+	restoreVersionFn   func(context.Context, uuid.UUID, int) (*RestoreResult, error)
 }
 
 func (f *fakeContentVersionService) SaveConfig(
@@ -124,8 +199,22 @@ func (f *fakeContentVersionService) SaveConfig(
 	return &Pack{}, nil
 }
 
-func (f *fakeContentVersionService) Export(context.Context, uuid.UUID) ([]byte, string, error) {
-	return nil, "", nil
+func (f *fakeContentVersionService) Export(
+	ctx context.Context, packID uuid.UUID,
+) (*ExportArchive, error) {
+	if f.exportFn != nil {
+		return f.exportFn(ctx, packID)
+	}
+	return nil, nil
+}
+
+func (f *fakeContentVersionService) ExportAdaptation(
+	ctx context.Context, adaptationID uuid.UUID,
+) (*ExportArchive, error) {
+	if f.exportAdaptationFn != nil {
+		return f.exportAdaptationFn(ctx, adaptationID)
+	}
+	return nil, nil
 }
 
 func (f *fakeContentVersionService) Import(
