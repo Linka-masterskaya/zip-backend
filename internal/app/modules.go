@@ -71,8 +71,9 @@ func buildModules(in *infra) (*modules, error) {
 		BcryptCost:               cfg.Auth.BcryptCost,
 		RequireEmailVerification: cfg.Auth.RequireEmailVerification,
 		CookieSecure:             cfg.Auth.CookieSecure,
+		RateLimit:                cfg.RateLimit,
 	}
-	authService := auth.NewAuthService(auth.NewAuthRepo(in.db), in.redis, in.mailer, authCfg, in.crypto)
+	authService := auth.NewAuthService(auth.NewAuthRepo(in.db), in.redis, in.redis, in.mailer, authCfg, in.crypto)
 
 	profileService := profile.NewService(
 		profile.NewRepository(in.db), in.storage, in.mailer, in.crypto, in.redis,

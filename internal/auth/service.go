@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 )
 
@@ -97,6 +100,10 @@ type cryptoService interface {
 	Decrypt(ciphertext []byte) ([]byte, error)
 }
 
+type rateLimit interface {
+	Allow(ctx context.Context, req cache.RateLimitRequest) (bool, int64, error)
+}
+
 type Config struct {
 	JWTSecret                string
 	FrontendURL              string
@@ -107,6 +114,7 @@ type Config struct {
 	BcryptCost               int
 	RequireEmailVerification bool
 	CookieSecure             bool
+	RateLimit                config.RateLimitConfig
 }
 
 type LoginResult struct {
@@ -115,20 +123,22 @@ type LoginResult struct {
 }
 
 type authService struct {
-	repo   authRepoIface
-	cache  refreshStore
-	mailer mailer.EmailSender
-	cfg    Config
-	crp    cryptoService
+	repo    authRepoIface
+	cache   refreshStore
+	rlCache rateLimit
+	mailer  mailer.EmailSender
+	cfg     Config
+	crp     cryptoService
 }
 
-func NewAuthService(repo authRepoIface, cache refreshStore, mailer mailer.EmailSender, cfg Config, crp cryptoService) *authService {
+func NewAuthService(repo authRepoIface, cache refreshStore, rlCache rateLimit, mailer mailer.EmailSender, cfg Config, crp cryptoService) *authService {
 	return &authService{
-		repo:   repo,
-		cache:  cache,
-		mailer: mailer,
-		cfg:    cfg,
-		crp:    crp,
+		repo:    repo,
+		cache:   cache,
+		rlCache: rlCache,
+		mailer:  mailer,
+		cfg:     cfg,
+		crp:     crp,
 	}
 }
 
@@ -250,7 +260,24 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 		return err
 	}
 
-	user, err := au.repo.GetUserByEmailHash(ctx, au.crp.Hash([]byte(email)))
+	emailHash := au.crp.Hash([]byte(email))
+
+	rlCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	hashKey := hex.EncodeToString(emailHash)
+	allowed, _, err := au.rlCache.Allow(rlCtx, cache.RateLimitRequest{
+		Scope: au.cfg.RateLimit.Resend.Scope, Key: hashKey,
+		Limit: au.cfg.RateLimit.Resend.Limit, WindowSize: au.cfg.RateLimit.Resend.Window,
+	})
+	if err != nil {
+		return apperr.ErrInternal.WithError(fmt.Errorf("cache.Allow: %w", err))
+	}
+	if !allowed {
+		return apperr.ErrTooManyRequests
+	}
+
+	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
 	if err != nil {
 		// Ответ одинаков для существующего и несуществующего адреса.
 		if errors.Is(err, apperr.ErrUserNotFound) {
@@ -262,51 +289,70 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 		return nil
 	}
 
-	userID, err := uuid.Parse(user.ID)
+	go au.processResend(context.WithoutCancel(ctx), user.ID, email)
+
+	return nil
+}
+
+func (au *authService) processResend(ctx context.Context, strUser string, email string) {
+	userID, err := uuid.Parse(strUser)
 	if err != nil {
-		return fmt.Errorf("authService.resendEmail: %w", err)
+		slog.ErrorContext(ctx, "authService.resendEmail",
+			"user_id", strUser,
+			logger.Err(err),
+		)
+		return
 	}
 
 	tokenRaw := make([]byte, 32)
 	if _, err := rand.Read(tokenRaw); err != nil {
-		return fmt.Errorf("authService.resendEmail: %w", err)
+		slog.ErrorContext(ctx, "authService.resendEmail",
+			"user_id", userID,
+			logger.Err(err),
+		)
+		return
 	}
 
 	hashToken := sha256.Sum256(tokenRaw)
 
 	tokenID, err := uuid.NewV7()
 	if err != nil {
-		return fmt.Errorf("authService.resendEmail: %w", err)
+		slog.ErrorContext(ctx, "authService.resendEmail",
+			"user_id", userID,
+			logger.Err(err),
+		)
+		return
 	}
 
+	dbCtx, dbCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer dbCancel()
 	err = au.repo.rotateEmailTokens(
-		ctx,
+		dbCtx,
 		tokenID,
 		userID,
 		hashToken[:],
 		time.Now().Add(au.cfg.VerifyEmailTokenTTL),
 	)
 	if err != nil {
-		return fmt.Errorf("authService.resendEmail: %w", err)
+		slog.ErrorContext(ctx, "authService.resendEmail",
+			"user_id", userID,
+			logger.Err(err),
+		)
+		return
 	}
 
-	verifyURL := au.cfg.FrontendURL +
-		"/verify-email?token=" +
-		base64.RawURLEncoding.EncodeToString(tokenRaw)
+	token := base64.RawURLEncoding.EncodeToString(tokenRaw)
 
-	err = au.mailer.Send(
-		ctx,
-		email,
-		mailer.EmailVerify,
-		mailer.EmailData{
-			Token: verifyURL,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("authService.resendEmail: %w", err)
+	mailCtx, mailCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer mailCancel()
+	if err := au.mailer.Send(mailCtx, email, mailer.EmailVerify, mailer.EmailData{
+		Token: token,
+	}); err != nil {
+		slog.ErrorContext(ctx, "authService.resendEmail",
+			"user_id", userID,
+			logger.Err(err),
+		)
 	}
-
-	return nil
 }
 
 func (au *authService) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
