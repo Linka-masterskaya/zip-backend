@@ -466,6 +466,99 @@ func TestRefresh(t *testing.T) {
 	}
 }
 
+func TestRefresh_OriginCheck(t *testing.T) {
+	const (
+		oldRefreshToken = "old-refresh-token"
+		newRefreshToken = "new-refresh-token"
+		newAccessToken  = "new-access-token"
+		frontendURL     = "https://app.example.com"
+	)
+
+	tests := []struct {
+		name       string
+		origin     string
+		referer    string
+		mockSetup  func(m *MockauthServiceIface)
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "foreign origin rejected",
+			origin:     "https://evil.example.com",
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "FORBIDDEN",
+		},
+		{
+			name:       "missing origin and referer rejected",
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "FORBIDDEN",
+		},
+		{
+			name:   "matching origin allowed",
+			origin: frontendURL,
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Refresh(gomock.Any(), oldRefreshToken).
+					Return(&LoginResult{
+						AccessToken:  newAccessToken,
+						RefreshToken: newRefreshToken,
+					}, nil)
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:    "matching referer allowed when origin absent",
+			referer: frontendURL + "/some/page",
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Refresh(gomock.Any(), oldRefreshToken).
+					Return(&LoginResult{
+						AccessToken:  newAccessToken,
+						RefreshToken: newRefreshToken,
+					}, nil)
+			},
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockauthServiceIface(ctrl)
+			tt.mockSetup(mockSvc)
+
+			h := NewHandler(mockSvc, Config{
+				RefreshTokenTTL: time.Hour,
+				CookieSecure:    false,
+				FrontendURL:     frontendURL,
+			})
+
+			wrapped := middleware.ErrorMiddleware(h.Refresh)
+
+			req := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/auth/refresh",
+				nil,
+			)
+			req.AddCookie(&http.Cookie{Name: "refresh_token", Value: oldRefreshToken})
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.referer != "" {
+				req.Header.Set("Referer", tt.referer)
+			}
+
+			rec := httptest.NewRecorder()
+			wrapped.ServeHTTP(rec, req)
+
+			assertRefreshStatusAndError(t, rec, tt.wantStatus, tt.wantCode)
+		})
+	}
+}
+
 func assertRefreshStatusAndError(
 	t *testing.T,
 	rec *httptest.ResponseRecorder,
@@ -534,8 +627,8 @@ func assertRefreshCookie(t *testing.T, got *http.Cookie, wantRefresh string) {
 	if !got.HttpOnly {
 		t.Error("refresh cookie must be HttpOnly")
 	}
-	if got.Path != "/" {
-		t.Errorf("cookie path = %q, want /", got.Path)
+	if got.Path != "/api/v1/auth" {
+		t.Errorf("cookie path = %q, want /api/v1/auth", got.Path)
 	}
 	if got.MaxAge != int(time.Hour.Seconds()) {
 		t.Errorf(
