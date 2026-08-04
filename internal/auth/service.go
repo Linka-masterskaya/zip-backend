@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,9 +17,9 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
+	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 )
 
 var (
@@ -114,7 +113,7 @@ type Config struct {
 	BcryptCost               int
 	RequireEmailVerification bool
 	CookieSecure             bool
-	RateLimit                config.RateLimitConfig
+	RateLimit                middleware.RateLimitPolicy
 }
 
 type LoginResult struct {
@@ -262,21 +261,6 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 
 	emailHash := au.crp.Hash([]byte(email))
 
-	rlCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	defer cancel()
-
-	hashKey := hex.EncodeToString(emailHash)
-	allowed, _, err := au.rlCache.Allow(rlCtx, cache.RateLimitRequest{
-		Scope: au.cfg.RateLimit.Resend.Scope, Key: hashKey,
-		Limit: au.cfg.RateLimit.Resend.Limit, WindowSize: au.cfg.RateLimit.Resend.Window,
-	})
-	if err != nil {
-		return apperr.ErrInternal.WithError(fmt.Errorf("cache.Allow: %w", err))
-	}
-	if !allowed {
-		return apperr.ErrTooManyRequests
-	}
-
 	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
 	if err != nil {
 		// Ответ одинаков для существующего и несуществующего адреса.
@@ -287,6 +271,20 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 	}
 	if user.EmailVerified {
 		return nil
+	}
+
+	rlCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	allowed, _, err := au.rlCache.Allow(rlCtx, cache.RateLimitRequest{
+		Scope: au.cfg.RateLimit.Scope, Key: user.ID,
+		Limit: au.cfg.RateLimit.Limit, WindowSize: au.cfg.RateLimit.Window,
+	})
+	if err != nil {
+		return apperr.ErrInternal.WithError(fmt.Errorf("cache.Allow: %w", err))
+	}
+	if !allowed {
+		return apperr.ErrTooManyRequests
 	}
 
 	go au.processResend(context.WithoutCancel(ctx), user.ID, email)

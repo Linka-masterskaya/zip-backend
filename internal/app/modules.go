@@ -12,6 +12,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
 	"github.com/Linka-masterskaya/zip-backend/internal/media"
+	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/picturebank"
 	"github.com/Linka-masterskaya/zip-backend/internal/profile"
@@ -32,6 +33,12 @@ type modules struct {
 // buildModules wires every domain module on top of the infrastructure.
 func buildModules(in *infra) (*modules, error) {
 	cfg := in.cfg
+
+	resendPolicy := middleware.RateLimitPolicy{
+		Scope:  cfg.RateLimit.Resend.Scope,
+		Limit:  cfg.RateLimit.Resend.Limit,
+		Window: cfg.RateLimit.Resend.Window,
+	}
 
 	packRepo := pack.NewRepository(in.db)
 	packService := pack.NewService(packRepo, in.pub)
@@ -71,7 +78,7 @@ func buildModules(in *infra) (*modules, error) {
 		BcryptCost:               cfg.Auth.BcryptCost,
 		RequireEmailVerification: cfg.Auth.RequireEmailVerification,
 		CookieSecure:             cfg.Auth.CookieSecure,
-		RateLimit:                cfg.RateLimit,
+		RateLimit:                resendPolicy,
 	}
 	authService := auth.NewAuthService(auth.NewAuthRepo(in.db), in.redis, in.redis, in.mailer, authCfg, in.crypto)
 

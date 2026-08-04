@@ -8,8 +8,8 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
+	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/google/uuid"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
@@ -612,12 +612,10 @@ func testResendConfig() Config {
 	cfg := testAuthConfig()
 	cfg.VerifyEmailTokenTTL = 24 * time.Hour
 	cfg.FrontendURL = "https://example.com"
-	cfg.RateLimit = config.RateLimitConfig{
-		Resend: config.RateLimitRule{
-			Scope:  "resend",
-			Limit:  5,
-			Window: time.Hour,
-		},
+	cfg.RateLimit = middleware.RateLimitPolicy{
+		Scope:  "resend",
+		Limit:  5,
+		Window: time.Hour,
 	}
 	return cfg
 }
@@ -676,6 +674,15 @@ func TestAuthService_ResendEmail_Success(t *testing.T) {
 func TestAuthService_ResendEmail_RateLimited(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)
+
+	userID := uuid.Must(uuid.NewV7())
+
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
+		Return(&User{
+			ID:            userID.String(),
+			EmailVerified: false,
+		}, nil)
 
 	crypto := &passwordResetCryptoFake{hash: []byte("email-hash")}
 
