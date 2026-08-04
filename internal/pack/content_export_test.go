@@ -203,6 +203,24 @@ func (r *exportContentRepository) Unassign(
 	return nil
 }
 
+func (r *exportContentRepository) ListAdaptations(
+	context.Context, uuid.UUID, uuid.UUID,
+) ([]Adaptation, error) {
+	return nil, nil
+}
+
+func (r *exportContentRepository) GetAdaptation(
+	context.Context, uuid.UUID, uuid.UUID,
+) (*Adaptation, error) {
+	return nil, nil
+}
+
+func (r *exportContentRepository) UpdateAdaptationConfig(
+	context.Context, uuid.UUID, uuid.UUID, json.RawMessage, []uuid.UUID,
+) (*Adaptation, error) {
+	return nil, nil
+}
+
 func (r *exportContentRepository) CreateVersion(
 	context.Context, uuid.UUID, uuid.UUID,
 ) (*Version, error) {
