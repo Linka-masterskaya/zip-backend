@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/media"
+	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 )
@@ -24,79 +27,253 @@ const (
 )
 
 var (
-	ErrInvalidArchive  = errors.New("invalid linka archive")
-	ErrArchiveTooLarge = errors.New("linka archive is too large")
+	ErrInvalidArchive        = errors.New("invalid linka archive")
+	ErrArchiveTooLarge       = errors.New("linka archive is too large")
+	ErrMissingMediaReference = errors.New("archive media reference is missing")
 )
 
 type archiveStorage interface {
 	GetObject(context.Context, string) (io.ReadCloser, error)
 }
 
+type archiveStream struct {
+	file *os.File
+	path string
+	size int64
+}
+
+func (a *archiveStream) Read(data []byte) (int, error) {
+	return a.file.Read(data)
+}
+
+func (a *archiveStream) Close() error {
+	closeErr := a.file.Close()
+	removeErr := os.Remove(a.path)
+	if errors.Is(removeErr, os.ErrNotExist) {
+		removeErr = nil
+	}
+	return errors.Join(closeErr, removeErr)
+}
+
+type archiveLimitWriter struct {
+	writer    io.Writer
+	remaining int64
+}
+
+func (w *archiveLimitWriter) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	if w.remaining <= 0 {
+		return 0, ErrArchiveTooLarge
+	}
+	allowed := int64(len(data))
+	if allowed > w.remaining {
+		allowed = w.remaining
+	}
+	written, err := w.writer.Write(data[:allowed])
+	w.remaining -= int64(written)
+	if err != nil {
+		return written, err
+	}
+	if written != int(allowed) {
+		return written, io.ErrShortWrite
+	}
+	if allowed < int64(len(data)) {
+		return written, ErrArchiveTooLarge
+	}
+	return written, nil
+}
+
 func buildArchive(
 	ctx context.Context,
 	config json.RawMessage,
 	files []*media.File,
-	storage archiveStorage,
+	storageClient archiveStorage,
 	pictureLoaders ...PictureLoader,
-) ([]byte, error) {
-	exportedConfig, paths, err := archiveConfig(config, files)
-	if err != nil {
-		return nil, err
-	}
+) (*archiveStream, error) {
 	var pictureLoader PictureLoader
 	if len(pictureLoaders) > 0 {
 		pictureLoader = pictureLoaders[0]
 	}
-	exportedConfig, pictures, err := archivePictures(ctx, exportedConfig, pictureLoader)
+	return buildArchiveWithLimit(
+		ctx, config, files, storageClient, pictureLoader, MaxArchiveSize,
+	)
+}
+
+func buildArchiveWithLimit(
+	ctx context.Context,
+	config json.RawMessage,
+	files []*media.File,
+	storageClient archiveStorage,
+	pictureLoader PictureLoader,
+	maxSize int64,
+) (*archiveStream, error) {
+	if maxSize <= 0 {
+		return nil, ErrArchiveTooLarge
+	}
+	archiveConfig, archiveFiles, err := prepareArchiveConfig(config, files)
 	if err != nil {
 		return nil, err
 	}
-	var buffer bytes.Buffer
-	writer := zip.NewWriter(&buffer)
-	if err = writeZipEntry(writer, "config.json", bytes.NewReader(exportedConfig)); err != nil {
-		return nil, fmt.Errorf("write archive config: %w", err)
+	temporary, err := os.CreateTemp("", "linka-export-*.linka")
+	if err != nil {
+		return nil, fmt.Errorf("create temporary archive: %w", err)
 	}
+	archive, err := writeTemporaryArchive(
+		ctx, temporary, archiveConfig, archiveFiles, storageClient, pictureLoader, maxSize,
+	)
+	if err != nil {
+		cleanupTemporaryArchive(temporary)
+		return nil, err
+	}
+	return archive, nil
+}
+
+func writeTemporaryArchive(
+	ctx context.Context,
+	temporary *os.File,
+	config *linka.Config,
+	files []*media.File,
+	storageClient archiveStorage,
+	pictureLoader PictureLoader,
+	maxSize int64,
+) (*archiveStream, error) {
+	limited := &archiveLimitWriter{writer: temporary, remaining: maxSize}
+	writer := zip.NewWriter(limited)
 	for _, file := range files {
-		if err = writeArchiveMedia(ctx, writer, file, paths[file.ID], storage); err != nil {
+		if err := writeArchiveMedia(ctx, writer, file, storageClient); err != nil {
 			return nil, err
 		}
-		if int64(buffer.Len()) > MaxArchiveSize {
-			return nil, ErrArchiveTooLarge
-		}
 	}
-	for _, picture := range pictures {
-		if err = writeZipEntry(writer, picture.name, bytes.NewReader(picture.data)); err != nil {
-			return nil, fmt.Errorf("write Pictures Bank image %s: %w", picture.name, err)
-		}
-		if int64(buffer.Len()) > MaxArchiveSize {
-			return nil, ErrArchiveTooLarge
-		}
+	if err := writeArchivePictures(ctx, writer, config, pictureLoader); err != nil {
+		return nil, err
+	}
+	exportedConfig, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("encode exported config: %w", err)
+	}
+	if err = writeZipEntry(writer, "config.json", bytes.NewReader(exportedConfig)); err != nil {
+		return nil, fmt.Errorf("write archive config: %w", err)
 	}
 	if err = writer.Close(); err != nil {
 		return nil, fmt.Errorf("close archive: %w", err)
 	}
-	if int64(buffer.Len()) > MaxArchiveSize {
+	return openTemporaryArchive(temporary, maxSize)
+}
+
+func openTemporaryArchive(temporary *os.File, maxSize int64) (*archiveStream, error) {
+	info, err := temporary.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat archive: %w", err)
+	}
+	if info.Size() > maxSize {
 		return nil, ErrArchiveTooLarge
 	}
-	return buffer.Bytes(), nil
+	if _, err = temporary.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("rewind archive: %w", err)
+	}
+	return &archiveStream{file: temporary, path: temporary.Name(), size: info.Size()}, nil
 }
 
-type externalArchivePicture struct {
-	name string
-	data []byte
+func cleanupTemporaryArchive(temporary *os.File) {
+	path := temporary.Name()
+	if closeErr := temporary.Close(); closeErr != nil {
+		slog.Warn("close incomplete archive", "path", path, "err", closeErr)
+	}
+	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		slog.Warn("remove incomplete archive", "path", path, "err", removeErr)
+	}
 }
 
-func archivePictures(
-	ctx context.Context,
+func prepareArchiveConfig(
 	config json.RawMessage,
-	loader PictureLoader,
-) ([]byte, []externalArchivePicture, error) {
+	files []*media.File,
+) (*linka.Config, []*media.File, error) {
 	var cfg linka.Config
 	if err := json.Unmarshal(config, &cfg); err != nil {
-		return nil, nil, fmt.Errorf("decode config for Pictures Bank export: %w", err)
+		return nil, nil, fmt.Errorf("decode config for export: %w", err)
 	}
+	filesByID := make(map[uuid.UUID]*media.File, len(files))
+	for _, file := range files {
+		if file != nil {
+			filesByID[file.ID] = file
+		}
+	}
+	seen := make(map[uuid.UUID]struct{})
+	archiveFiles := make([]*media.File, 0, len(filesByID))
+	for blockIndex := range cfg.Blocks {
+		for elementIndex := range cfg.Blocks[blockIndex].Elements {
+			element := &cfg.Blocks[blockIndex].Elements[elementIndex]
+			if element.MediaID == nil {
+				continue
+			}
+			file, exists := filesByID[*element.MediaID]
+			if !exists {
+				return nil, nil, fmt.Errorf("%w: media %s", ErrMissingMediaReference, *element.MediaID)
+			}
+			element.MediaURL = archiveMediaPath(file)
+			if _, exists = seen[file.ID]; !exists {
+				seen[file.ID] = struct{}{}
+				archiveFiles = append(archiveFiles, file)
+			}
+		}
+	}
+	return &cfg, archiveFiles, nil
+}
+
+func archiveMediaPath(file *media.File) string {
+	return "media/" + file.ID.String() + extensionForMIME(file.MIMEType)
+}
+
+func writeArchiveMedia(
+	ctx context.Context,
+	writer *zip.Writer,
+	file *media.File,
+	storageClient archiveStorage,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if storageClient == nil || file.SizeBytes < 0 || file.MinIOKey == "" {
+		return fmt.Errorf("%w: media %s", ErrMissingMediaReference, file.ID)
+	}
+	reader, err := storageClient.GetObject(ctx, file.MinIOKey)
+	if errors.Is(err, storage.ErrObjectNotFound) {
+		return fmt.Errorf("%w: media %s", ErrMissingMediaReference, file.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("open media %s: %w", file.ID, err)
+	}
+	entry, err := writer.Create(archiveMediaPath(file))
+	if err != nil {
+		createErr := fmt.Errorf("create media entry %s: %w", file.ID, err)
+		if closeErr := reader.Close(); closeErr != nil {
+			return errors.Join(createErr, fmt.Errorf("close media %s: %w", file.ID, closeErr))
+		}
+		return createErr
+	}
+	written, copyErr := io.Copy(entry, io.LimitReader(reader, file.SizeBytes+1))
+	closeErr := reader.Close()
+	if copyErr != nil {
+		return fmt.Errorf("write media %s: %w", file.ID, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close media %s: %w", file.ID, closeErr)
+	}
+	if written != file.SizeBytes {
+		return fmt.Errorf("%w: media %s has inconsistent size", ErrMissingMediaReference, file.ID)
+	}
+	return nil
+}
+
+func writeArchivePictures(
+	ctx context.Context,
+	writer *zip.Writer,
+	cfg *linka.Config,
+	loader PictureLoader,
+) error {
 	paths := make(map[uuid.UUID]string)
-	pictures := make([]externalArchivePicture, 0)
 	for blockIndex := range cfg.Blocks {
 		for elementIndex := range cfg.Blocks[blockIndex].Elements {
 			element := &cfg.Blocks[blockIndex].Elements[elementIndex]
@@ -105,78 +282,26 @@ func archivePictures(
 				continue
 			}
 			pictureID := *element.SourcePictureID
-			if path, ok := paths[pictureID]; ok {
-				element.MediaURL = path
-				continue
+			path, exists := paths[pictureID]
+			if !exists {
+				if loader == nil {
+					return fmt.Errorf("%w: picture %s", ErrMissingMediaReference, pictureID)
+				}
+				data, mimeType, err := loader(ctx, pictureID)
+				if err != nil {
+					return fmt.Errorf("load Pictures Bank image %s: %w", pictureID, err)
+				}
+				if len(data) == 0 {
+					return fmt.Errorf("%w: picture %s", ErrMissingMediaReference, pictureID)
+				}
+				path = "media/picture-" + pictureID.String() + extensionForMIME(mimeType)
+				if err = writeZipEntry(writer, path, bytes.NewReader(data)); err != nil {
+					return fmt.Errorf("write Pictures Bank image %s: %w", path, err)
+				}
+				paths[pictureID] = path
 			}
-			if loader == nil {
-				return nil, nil, errors.New("pictures bank loader is required for export")
-			}
-			data, mimeType, err := loader(ctx, pictureID)
-			if err != nil {
-				return nil, nil, fmt.Errorf("load Pictures Bank image %s: %w", pictureID, err)
-			}
-			path := "media/picture-" + pictureID.String() + extensionForMIME(mimeType)
-			paths[pictureID] = path
 			element.MediaURL = path
-			pictures = append(pictures, externalArchivePicture{name: path, data: data})
 		}
-	}
-	exported, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encode Pictures Bank export config: %w", err)
-	}
-	return exported, pictures, nil
-}
-
-func archiveConfig(
-	config json.RawMessage,
-	files []*media.File,
-) ([]byte, map[uuid.UUID]string, error) {
-	var cfg linka.Config
-	if err := json.Unmarshal(config, &cfg); err != nil {
-		return nil, nil, fmt.Errorf("decode config for export: %w", err)
-	}
-	paths := make(map[uuid.UUID]string, len(files))
-	for _, file := range files {
-		paths[file.ID] = "media/" + file.ID.String() + extensionForMIME(file.MIMEType)
-	}
-	for blockIndex := range cfg.Blocks {
-		for elementIndex := range cfg.Blocks[blockIndex].Elements {
-			element := &cfg.Blocks[blockIndex].Elements[elementIndex]
-			if element.MediaID != nil {
-				element.MediaURL = paths[*element.MediaID]
-			}
-		}
-	}
-	exportedConfig, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encode exported config: %w", err)
-	}
-	return exportedConfig, paths, nil
-}
-
-func writeArchiveMedia(
-	ctx context.Context,
-	writer *zip.Writer,
-	file *media.File,
-	name string,
-	storage archiveStorage,
-) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	reader, err := storage.GetObject(ctx, file.MinIOKey)
-	if err != nil {
-		return fmt.Errorf("open media %s: %w", file.ID, err)
-	}
-	writeErr := writeZipEntry(writer, name, io.LimitReader(reader, file.SizeBytes+1))
-	closeErr := reader.Close()
-	if writeErr != nil {
-		return fmt.Errorf("write media %s: %w", file.ID, writeErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close media %s: %w", file.ID, closeErr)
 	}
 	return nil
 }
