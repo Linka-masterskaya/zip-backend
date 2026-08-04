@@ -56,6 +56,10 @@ func (f *passwordResetCryptoFake) Decrypt(_ []byte) ([]byte, error) {
 	return nil, nil
 }
 
+func (f *passwordResetCryptoFake) Encrypt(data []byte) ([]byte, error) {
+	return data, nil
+}
+
 func testPasswordResetConfig() Config {
 	cfg := testAuthConfig()
 	cfg.ResetPasswordTokenTTL = time.Hour

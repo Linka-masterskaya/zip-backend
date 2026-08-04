@@ -44,6 +44,34 @@ func (m *MockauthRepoIface) EXPECT() *MockauthRepoIfaceMockRecorder {
 	return m.recorder
 }
 
+// CreateAuthCred mocks base method.
+func (m *MockauthRepoIface) CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateAuthCred", ctx, params)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateAuthCred indicates an expected call of CreateAuthCred.
+func (mr *MockauthRepoIfaceMockRecorder) CreateAuthCred(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAuthCred", reflect.TypeOf((*MockauthRepoIface)(nil).CreateAuthCred), ctx, params)
+}
+
+// CreateOrganization mocks base method.
+func (m *MockauthRepoIface) CreateOrganization(ctx context.Context, params CreateOrganizationParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateOrganization", ctx, params)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateOrganization indicates an expected call of CreateOrganization.
+func (mr *MockauthRepoIfaceMockRecorder) CreateOrganization(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateOrganization", reflect.TypeOf((*MockauthRepoIface)(nil).CreateOrganization), ctx, params)
+}
+
 // CreatePasswordResetToken mocks base method.
 func (m *MockauthRepoIface) CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error) {
 	m.ctrl.T.Helper()
@@ -57,6 +85,49 @@ func (m *MockauthRepoIface) CreatePasswordResetToken(ctx context.Context, userID
 func (mr *MockauthRepoIfaceMockRecorder) CreatePasswordResetToken(ctx, userID, ttl any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePasswordResetToken", reflect.TypeOf((*MockauthRepoIface)(nil).CreatePasswordResetToken), ctx, userID, ttl)
+}
+
+// CreateUser mocks base method.
+func (m *MockauthRepoIface) CreateUser(ctx context.Context, params CreateUserParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateUser", ctx, params)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateUser indicates an expected call of CreateUser.
+func (mr *MockauthRepoIfaceMockRecorder) CreateUser(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateUser", reflect.TypeOf((*MockauthRepoIface)(nil).CreateUser), ctx, params)
+}
+
+// CreateVerifyToken mocks base method.
+func (m *MockauthRepoIface) CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateVerifyToken", ctx, params)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateVerifyToken indicates an expected call of CreateVerifyToken.
+func (mr *MockauthRepoIfaceMockRecorder) CreateVerifyToken(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateVerifyToken", reflect.TypeOf((*MockauthRepoIface)(nil).CreateVerifyToken), ctx, params)
+}
+
+// EmailExists mocks base method.
+func (m *MockauthRepoIface) EmailExists(ctx context.Context, emailHash []byte) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EmailExists", ctx, emailHash)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// EmailExists indicates an expected call of EmailExists.
+func (mr *MockauthRepoIfaceMockRecorder) EmailExists(ctx, emailHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmailExists", reflect.TypeOf((*MockauthRepoIface)(nil).EmailExists), ctx, emailHash)
 }
 
 // GetUserByEmailHash mocks base method.
@@ -353,6 +424,21 @@ func (m *MockcryptoService) Decrypt(ciphertext []byte) ([]byte, error) {
 func (mr *MockcryptoServiceMockRecorder) Decrypt(ciphertext any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Decrypt", reflect.TypeOf((*MockcryptoService)(nil).Decrypt), ciphertext)
+}
+
+// Encrypt mocks base method.
+func (m *MockcryptoService) Encrypt(plaintext []byte) ([]byte, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Encrypt", plaintext)
+	ret0, _ := ret[0].([]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Encrypt indicates an expected call of Encrypt.
+func (mr *MockcryptoServiceMockRecorder) Encrypt(plaintext any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Encrypt", reflect.TypeOf((*MockcryptoService)(nil).Encrypt), plaintext)
 }
 
 // Hash mocks base method.

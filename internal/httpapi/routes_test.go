@@ -112,6 +112,7 @@ func TestRegisterAuthRoutesPatterns(t *testing.T) {
 	m := &recordingMux{}
 	rl := RateLimits{
 		Login:        passthrough,
+		Register:     passthrough,
 		Refresh:      passthrough,
 		Forgot:       passthrough,
 		Reset:        passthrough,
@@ -123,6 +124,7 @@ func TestRegisterAuthRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/auth/login",
 		"POST /api/v1/auth/refresh",
+		"POST /api/v1/auth/register",
 		"POST /api/v1/auth/logout",
 		"POST /api/v1/auth/password/forgot",
 		"POST /api/v1/auth/password/reset",

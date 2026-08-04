@@ -10,6 +10,7 @@ func TestNewRateLimitsPopulatesEveryLimiter(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Auth.PackRateLimit = 60
 	cfg.Auth.LoginRateLimit = 5
+	cfg.Auth.RegisterRateLimit = 5
 	cfg.Auth.RefreshRateLimit = 30
 	cfg.Auth.ForgotRateLimit = 3
 	cfg.Auth.ResetRateLimit = 3
@@ -25,6 +26,7 @@ func TestNewRateLimitsPopulatesEveryLimiter(t *testing.T) {
 		"Packs":               rl.Packs,
 		"Pictures":            rl.Pictures,
 		"Login":               rl.Login,
+		"Register":            rl.Register,
 		"Refresh":             rl.Refresh,
 		"Forgot":              rl.Forgot,
 		"Reset":               rl.Reset,

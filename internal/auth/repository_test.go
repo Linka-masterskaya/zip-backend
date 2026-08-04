@@ -52,7 +52,7 @@ func ApplyMigrations(pool *pgxpool.Pool, migrationsDir string) error {
 func truncateAll(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE verify_tokens, auth_cred, auth_identities, students, users CASCADE`)
+		`TRUNCATE verify_tokens, auth_cred, auth_identities, students, users, organizations CASCADE`)
 	require.NoError(t, err)
 }
 
