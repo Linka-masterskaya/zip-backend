@@ -237,6 +237,9 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
 
 // Logout revokes the refresh token family and clears the cookie.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) error {
+	if err := h.checkOrigin(r); err != nil {
+		return err
+	}
 	if cookie, err := r.Cookie("refresh_token"); err == nil {
 		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
 			return err

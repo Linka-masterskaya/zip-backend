@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -461,6 +462,12 @@ func validateConfig(cfg *Config) error {
 	// App validation
 	if cfg.App.Env == "" {
 		return fmt.Errorf("app.env is required")
+	}
+	if cfg.App.FrontendURL == "" {
+		return fmt.Errorf("app.frontend_url is required")
+	}
+	if u, err := url.Parse(cfg.App.FrontendURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("app.frontend_url must be an absolute URL (scheme and host)")
 	}
 
 	// DB validation
