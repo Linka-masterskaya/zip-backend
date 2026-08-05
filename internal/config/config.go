@@ -153,8 +153,6 @@ type JWTConfig struct {
 
 type RateLimitConfig struct {
 	Resend RateLimitRule `mapstructure:"resend"`
-	Login  RateLimitRule `mapstructure:"login"`
-	Verify RateLimitRule `mapstructure:"verify"`
 }
 
 // RateLimitRule describes one rate-limit configuration.

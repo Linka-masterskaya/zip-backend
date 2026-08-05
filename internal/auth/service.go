@@ -295,7 +295,7 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 func (au *authService) processResend(ctx context.Context, strUser string, email string) {
 	userID, err := uuid.Parse(strUser)
 	if err != nil {
-		slog.ErrorContext(ctx, "authService.resendEmail",
+		slog.ErrorContext(ctx, "authService.processResend",
 			"user_id", strUser,
 			logger.Err(err),
 		)
@@ -304,7 +304,7 @@ func (au *authService) processResend(ctx context.Context, strUser string, email 
 
 	tokenRaw := make([]byte, 32)
 	if _, err := rand.Read(tokenRaw); err != nil {
-		slog.ErrorContext(ctx, "authService.resendEmail",
+		slog.ErrorContext(ctx, "authService.processResend",
 			"user_id", userID,
 			logger.Err(err),
 		)
@@ -315,7 +315,7 @@ func (au *authService) processResend(ctx context.Context, strUser string, email 
 
 	tokenID, err := uuid.NewV7()
 	if err != nil {
-		slog.ErrorContext(ctx, "authService.resendEmail",
+		slog.ErrorContext(ctx, "authService.processResend",
 			"user_id", userID,
 			logger.Err(err),
 		)
@@ -332,7 +332,7 @@ func (au *authService) processResend(ctx context.Context, strUser string, email 
 		time.Now().Add(au.cfg.VerifyEmailTokenTTL),
 	)
 	if err != nil {
-		slog.ErrorContext(ctx, "authService.resendEmail",
+		slog.ErrorContext(ctx, "authService.processResend",
 			"user_id", userID,
 			logger.Err(err),
 		)
@@ -346,7 +346,7 @@ func (au *authService) processResend(ctx context.Context, strUser string, email 
 	if err := au.mailer.Send(mailCtx, email, mailer.EmailVerify, mailer.EmailData{
 		Token: token,
 	}); err != nil {
-		slog.ErrorContext(ctx, "authService.resendEmail",
+		slog.ErrorContext(ctx, "authService.processResend",
 			"user_id", userID,
 			logger.Err(err),
 		)

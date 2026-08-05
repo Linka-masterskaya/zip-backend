@@ -21,9 +21,6 @@ type RateLimits struct {
 	VerifyResend        Middleware
 	ProfileEmailChange  Middleware
 	ProfileEmailConfirm Middleware
-
-	// ResendPolicy is applied per user on top of the IP-based VerifyResend limit.
-	ResendPolicy middleware.RateLimitPolicy
 }
 
 // NewRateLimits builds all API rate limiters from configuration.
