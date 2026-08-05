@@ -153,8 +153,6 @@ type JWTConfig struct {
 
 type RateLimitConfig struct {
 	Resend RateLimitRule `mapstructure:"resend"`
-	Login  RateLimitRule `mapstructure:"login"`
-	Verify RateLimitRule `mapstructure:"verify"`
 }
 
 // RateLimitRule describes one rate-limit configuration.
@@ -341,6 +339,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("redis.max_retries", 3)
 	v.SetDefault("redis.min_retry_backoff", "8ms")
 	v.SetDefault("redis.max_retry_backoff", "512ms")
+	v.SetDefault("rate_limit.resend.scope", "resend")
+	v.SetDefault("rate_limit.resend.limit", 5)
+	v.SetDefault("rate_limit.resend.window", "1h")
 
 	// NATS defaults
 	v.SetDefault("nats.connection.url", "nats://localhost:4222")

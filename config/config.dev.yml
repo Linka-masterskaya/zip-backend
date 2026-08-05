@@ -133,14 +133,6 @@ rate_limit:
     scope: "resend"
     limit: 500
     window: 1h
-  login:
-    scope: "login"
-    limit: 10
-    window: 5m
-  verify:
-    scope: "verify_ip"
-    limit: 20
-    window: 1m
 
 cors:
   allow_origins:
