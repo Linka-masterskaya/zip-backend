@@ -39,10 +39,9 @@ type LLMChunk struct {
 
 // TTSJob is a text-to-speech synthesis job.
 type TTSJob struct {
-	PackID string `json:"pack_id"`
-	CardID string `json:"card_id"`
-	Text   string `json:"text"`
-	Voice  string `json:"voice"`
+	JobId string `json:"job_id"`
+	Text  string `json:"text"`
+	Voice string `json:"voice"`
 }
 
 // TTSResult is the result of a TTS job. Currently unused: the worker writes

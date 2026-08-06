@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/auth"
+	"github.com/Linka-masterskaya/zip-backend/internal/broker"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
@@ -18,6 +19,9 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/picturebank"
 	"github.com/Linka-masterskaya/zip-backend/internal/profile"
 	"github.com/Linka-masterskaya/zip-backend/internal/student"
+	"github.com/Linka-masterskaya/zip-backend/internal/tts"
+	"github.com/Linka-masterskaya/zip-backend/internal/ttsapi"
+	"github.com/Linka-masterskaya/zip-backend/internal/worker"
 )
 
 // Час — компромисс: retention измеряется днями, поэтому чаще незачем, а реже
@@ -25,15 +29,18 @@ import (
 const unverifiedCleanupInterval = time.Hour
 
 type modules struct {
-	packs    httpapi.PackHandlers
-	media    httpapi.MediaHandlers
-	folders  httpapi.FolderHandlers
-	students httpapi.StudentHandlers
-	auth     httpapi.AuthHandlers
-	profile  httpapi.ProfileHandlers
-	pictures *picturebank.Handler
-	checker  *health.Checker
-	cleaner  *auth.RegistrationCleaner
+	packs       httpapi.PackHandlers
+	media       httpapi.MediaHandlers
+	folders     httpapi.FolderHandlers
+	students    httpapi.StudentHandlers
+	auth        httpapi.AuthHandlers
+	profile     httpapi.ProfileHandlers
+	pictures    *picturebank.Handler
+	checker     *health.Checker
+	cleaner     *auth.RegistrationCleaner
+	tts         httpapi.TTSHandlers
+	ttsWorker   *worker.TTS
+	ttsConsumer *broker.Consumer
 }
 
 // buildModules wires every domain module on top of the infrastructure.
@@ -110,6 +117,15 @@ func buildModules(in *infra) (*modules, error) {
 		return nil, fmt.Errorf("health checker init: %w", err)
 	}
 
+	ttsClient := ttsapi.NewClient(cfg.TTS.ServiceURL, cfg.TTS.Timeout)
+	ttsRepo := tts.NewRepository(in.db)
+	ttsService := tts.NewService(ttsRepo, in.pub, ttsClient, tts.ServiceConfig{
+		MaxTextLen: cfg.TTS.MaxTextLen,
+		MimeType:   cfg.TTS.MimeType,
+	})
+	ttsWorker := worker.NewTTS(ttsClient, in.storage, ttsRepo)
+	ttsConsumer := broker.NewConsumer(in.js, cfg.NATS.Stream.Name, cfg.NATS.Consumers)
+
 	return &modules{
 		packs: httpapi.PackHandlers{
 			Pack:    pack.NewHandler(packService),
@@ -134,5 +150,10 @@ func buildModules(in *infra) (*modules, error) {
 		pictures: picturebank.NewHandler(picturesService, cfg.PicturesBank.CacheTTL),
 		checker:  checker,
 		cleaner:  registrationCleaner,
+		tts: httpapi.TTSHandlers{
+			TTS: tts.NewHandler(ttsService, cfg.TTS.MaxBodySize),
+		},
+		ttsWorker:   ttsWorker,
+		ttsConsumer: ttsConsumer,
 	}, nil
 }

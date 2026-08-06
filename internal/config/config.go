@@ -30,6 +30,7 @@ type Config struct {
 	Crypto       CryptoConfig       `mapstructure:"crypto"`
 	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
 	Server       ServerConfig       `mapstructure:"server"`
+	TTS          TTSConfig          `mapstructure:"ttsapi"`
 }
 
 // MigrationConfig contains only the settings required by the migration binary.
@@ -248,6 +249,15 @@ type CORSConfig struct {
 	MaxAge           int      `mapstructure:"max_age"`
 }
 
+type TTSConfig struct {
+	ServiceURL  string        `mapstructure:"service_url"`
+	Timeout     time.Duration `mapstructure:"timeout"`
+	RateLimit   int           `mapstructure:"rate_limit"`
+	MaxTextLen  int           `mapstructure:"max_text_len"`
+	MaxBodySize int64         `mapstructure:"max_body_size"`
+	MimeType    string        `mapstructure:"mime_type"`
+}
+
 // Load reads application settings from a configuration file and applies
 // environment overrides. Feature flags are deliberately owned by the file.
 func Load(path string) (*Config, error) {
@@ -447,6 +457,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("profile.email_change_rate_limit", 3)
 	v.SetDefault("profile.email_confirm_rate_limit", 10)
 
+	// TTSApi defaults
+	v.SetDefault("ttsapi.timeout", "30s")
+	v.SetDefault("ttsapi.max_text_len", 5000)
+	v.SetDefault("ttsapi.max_body_size", 65536)
+	v.SetDefault("ttsapi.mime_type", "audio/mpeg")
+
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})
 	v.SetDefault("cors.allow_methods", []string{
@@ -517,6 +533,11 @@ func validateConfig(cfg *Config) error {
 	if err := validateCryptoCongig(&cfg.Crypto); err != nil {
 		return err
 	}
+
+	// TTSapi validation
+	if cfg.TTS.ServiceURL == "" {
+		return fmt.Errorf("ttsapi.service_url is required")
+	}
 	return nil
 }
 
@@ -568,5 +589,6 @@ func validateCryptoCongig(cfg *CryptoConfig) error {
 		cfg.AESKey = aesKey
 		cfg.HMACKey = hmacKey
 	}
+
 	return nil
 }
