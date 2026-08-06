@@ -2,36 +2,24 @@
 package middleware
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 )
 
 // AppHandler описывает сигнатуру стандартной функции-хендлера, возвращающей ошибку.
 type AppHandler func(w http.ResponseWriter, r *http.Request) error
-
-type ctxKeyRequestID struct{}
-
-var requestIDKey = ctxKeyRequestID{}
-
-// GetRequestID извлекает уникальный ID запроса из контекста выполнения.
-func GetRequestID(ctx context.Context) string {
-	if id, ok := ctx.Value(requestIDKey).(string); ok {
-		return id
-	}
-	return ""
-}
 
 // RecoveryMiddleware перехватывает panic и возвращает внутреннюю ошибку сервера.
 func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				reqID := GetRequestID(r.Context())
+				reqID := authctx.RequestIDFromCtx(r.Context())
 
 				slog.Error("panic recovered",
 					"panic", rec,
@@ -50,7 +38,7 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 func ErrorMiddleware(next AppHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := next(w, r); err != nil {
-			reqID := GetRequestID(r.Context())
+			reqID := authctx.RequestIDFromCtx(r.Context())
 			var appErr *apperr.AppError
 
 			if !errors.As(err, &appErr) {

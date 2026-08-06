@@ -1,10 +1,10 @@
 package middleware
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/google/uuid"
 )
 
@@ -16,7 +16,7 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 			reqID = uuid.New().String()
 		}
 
-		ctx := context.WithValue(r.Context(), requestIDKey, reqID)
+		ctx := authctx.SetRequestIDToCtx(r.Context(), reqID)
 		r = r.WithContext(ctx)
 
 		w.Header().Set("X-Request-Id", reqID)

@@ -12,6 +12,7 @@ type ctxKey int
 const (
 	userIDKey ctxKey = iota
 	userRoleKey
+	requestIDKey
 )
 
 func SetUserIDToCtx(ctx context.Context, userID uuid.UUID) context.Context {
@@ -38,4 +39,17 @@ func RoleFromCtx(ctx context.Context) (string, error) {
 	}
 
 	return userRole, nil
+}
+
+func SetRequestIDToCtx(ctx context.Context, requestID string) context.Context {
+	return context.WithValue(ctx, requestIDKey, requestID)
+}
+
+func RequestIDFromCtx(ctx context.Context) string {
+	requestID, ok := ctx.Value(requestIDKey).(string)
+	if !ok {
+		return ""
+	}
+
+	return requestID
 }
