@@ -39,36 +39,59 @@ func run(ctx context.Context) error {
 	}
 	logger.Init(cfg.App.Env)
 
-	oldCrypto, newCrypto, err := loadCryptoPair()
+	mode, err := loadRotationMode()
 	if err != nil {
 		return err
 	}
-	mode := strings.ToLower(envOrDefault("ROTATION_MODE", "check"))
-	if mode != "check" && mode != "apply" {
-		return fmt.Errorf("ROTATION_MODE must be check or apply")
-	}
-	if mode == "apply" && os.Getenv("ROTATION_CONFIRM") != applyConfirmation {
-		return fmt.Errorf("ROTATION_CONFIRM must equal %s for apply mode", applyConfirmation)
+	oldCrypto, newCrypto, err := loadCryptoPair()
+	if err != nil {
+		return err
 	}
 
 	conn, err := pgx.Connect(ctx, cfg.DB.URL)
 	if err != nil {
 		return fmt.Errorf("connect to postgres: %w", err)
 	}
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			slog.Error("close postgres connection failed", "err", closeErr)
-		}
-	}()
+	defer closeConnection(ctx, conn)
 
+	return executeRotation(ctx, conn, mode, oldCrypto, newCrypto)
+}
+
+func loadRotationMode() (string, error) {
+	mode := strings.ToLower(envOrDefault("ROTATION_MODE", "check"))
+	if mode != "check" && mode != "apply" {
+		return "", fmt.Errorf("ROTATION_MODE must be check or apply")
+	}
+	if mode == "apply" && os.Getenv("ROTATION_CONFIRM") != applyConfirmation {
+		return "", fmt.Errorf("ROTATION_CONFIRM must equal %s for apply mode", applyConfirmation)
+	}
+	return mode, nil
+}
+
+func closeConnection(ctx context.Context, conn *pgx.Conn) {
+	if err := conn.Close(ctx); err != nil {
+		slog.Error("close postgres connection failed", "err", err)
+	}
+}
+
+func executeRotation(
+	ctx context.Context,
+	conn *pgx.Conn,
+	mode string,
+	oldCrypto *cryptox.Cryptox,
+	newCrypto *cryptox.Cryptox,
+) error {
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin rotation transaction: %w", err)
 	}
-	committed := false
+	finalized := false
 	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+		if finalized {
+			return
+		}
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			slog.Error("rollback crypto key rotation failed", "err", rollbackErr)
 		}
 	}()
 
@@ -81,35 +104,54 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("inspect persisted email data: %w", err)
 	}
 	logReport("crypto key inspection", inspection)
+
 	if mode == "check" {
+		if err := tx.Rollback(ctx); err != nil {
+			return fmt.Errorf("rollback check transaction: %w", err)
+		}
+		finalized = true
 		slog.Info("check completed; transaction rolled back without changes")
 		return nil
 	}
 
-	rotated, report, err := keyrotation.Rotate(records, oldCrypto, newCrypto)
+	report, err := rotateAndVerify(ctx, tx, records, oldCrypto, newCrypto)
 	if err != nil {
-		return fmt.Errorf("prepare rotated data: %w", err)
-	}
-	if err := saveRecords(ctx, tx, rotated); err != nil {
 		return err
-	}
-	persisted, err := loadRecords(ctx, tx)
-	if err != nil {
-		return fmt.Errorf("reload rotated data: %w", err)
-	}
-	verified, err := keyrotation.Inspect(persisted, newCrypto, newCrypto)
-	if err != nil {
-		return fmt.Errorf("verify persisted rotation: %w", err)
-	}
-	if verified.AESNew != verified.Records || verified.HMACOld != 0 {
-		return fmt.Errorf("verify persisted rotation: not all records use the new keys")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit rotation: %w", err)
 	}
-	committed = true
+	finalized = true
 	logReport("crypto key rotation committed", report)
 	return nil
+}
+
+func rotateAndVerify(
+	ctx context.Context,
+	tx pgx.Tx,
+	records []keyrotation.Record,
+	oldCrypto *cryptox.Cryptox,
+	newCrypto *cryptox.Cryptox,
+) (keyrotation.Report, error) {
+	rotated, report, err := keyrotation.Rotate(records, oldCrypto, newCrypto)
+	if err != nil {
+		return keyrotation.Report{}, fmt.Errorf("prepare rotated data: %w", err)
+	}
+	if err := saveRecords(ctx, tx, rotated); err != nil {
+		return keyrotation.Report{}, err
+	}
+	persisted, err := loadRecords(ctx, tx)
+	if err != nil {
+		return keyrotation.Report{}, fmt.Errorf("reload rotated data: %w", err)
+	}
+	verified, err := keyrotation.Inspect(persisted, newCrypto, newCrypto)
+	if err != nil {
+		return keyrotation.Report{}, fmt.Errorf("verify persisted rotation: %w", err)
+	}
+	if verified.AESNew != verified.Records || verified.HMACOld != 0 {
+		return keyrotation.Report{}, fmt.Errorf("verify persisted rotation: not all records use the new keys")
+	}
+	return report, nil
 }
 
 func loadCryptoPair() (*cryptox.Cryptox, *cryptox.Cryptox, error) {
