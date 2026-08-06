@@ -1,7 +1,6 @@
 package pack
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,7 +19,8 @@ const archiveMultipartOverhead = int64(128 * 1024)
 
 type contentService interface {
 	SaveConfig(context.Context, uuid.UUID, json.RawMessage) (*Pack, error)
-	Export(context.Context, uuid.UUID) ([]byte, string, error)
+	Export(context.Context, uuid.UUID) (*ExportArchive, error)
+	ExportAdaptation(context.Context, uuid.UUID) (*ExportArchive, error)
 	Import(context.Context, string, uuid.UUID, []byte) (*Pack, error)
 	Assign(context.Context, uuid.UUID, []uuid.UUID) ([]Adaptation, error)
 	Unassign(context.Context, uuid.UUID, uuid.UUID) error
@@ -68,17 +68,38 @@ func (h *ContentHandler) Export(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	data, name, err := h.service.Export(r.Context(), packID)
+	archive, err := h.service.Export(r.Context(), packID)
 	if err != nil {
 		return err
 	}
+	return writeExportArchive(w, archive)
+}
+
+func (h *ContentHandler) ExportAdaptation(w http.ResponseWriter, r *http.Request) error {
+	adaptationID, err := pathUUID(r)
+	if err != nil {
+		return err
+	}
+	archive, err := h.service.ExportAdaptation(r.Context(), adaptationID)
+	if err != nil {
+		return err
+	}
+	return writeExportArchive(w, archive)
+}
+
+func writeExportArchive(w http.ResponseWriter, archive *ExportArchive) error {
+	defer func() {
+		if closeErr := archive.Stream.Close(); closeErr != nil {
+			slog.Warn("close exported archive", "err", closeErr)
+		}
+	}()
 	w.Header().Set("Content-Type", "application/vnd.linka+zip")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
-		"filename": name,
+		"filename": archive.Filename,
 	}))
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Set("Content-Length", strconv.FormatInt(archive.Size, 10))
 	w.WriteHeader(http.StatusOK)
-	_, err = io.Copy(w, bytes.NewReader(data))
+	_, err := io.Copy(w, archive.Stream)
 	return err
 }
 

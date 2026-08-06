@@ -248,6 +248,28 @@ const archiveMediaQuery = `
 	WHERE mu.source_type = 'pack' AND mu.source_id = $1
 	ORDER BY m.id`
 
+const adaptationArchiveQuery = `
+	SELECT pa.config, p.title
+	FROM pack_adaptations pa
+	JOIN packs p ON p.id = pa.pack_id
+	JOIN students s ON s.id = pa.student_id
+	JOIN users u ON u.id = $1
+	WHERE pa.id = $2
+	  AND pa.created_by = u.id
+	  AND p.owner_id = u.id
+	  AND p.org_id = u.org_id
+	  AND s.defectologist_id = u.id
+	  AND s.deleted_at IS NULL
+	  AND u.deleted_at IS NULL`
+
+const adaptationArchiveMediaQuery = `
+	SELECT m.id, m.org_id, m.uploader_id, m.sha256, m.mime_type,
+	       m.size_bytes, m.minio_key, m.created_at
+	FROM media_usages mu
+	JOIN media_files m ON m.id = mu.media_id
+	WHERE mu.source_type = 'pack_adaptation' AND mu.source_id = $1
+	ORDER BY m.id`
+
 const lockPackConfigQuery = `
 	SELECT p.org_id, p.config
 	FROM packs p

@@ -70,6 +70,7 @@ func newRegisterTestService(mailerFake *registerMailerFake) *authService {
 	return NewAuthService(
 		NewAuthRepo(testPool),
 		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
 		mailerFake,
 		cfg,
 		registerCryptoFake{},

@@ -49,6 +49,7 @@ func TestRegisterPackRoutesPatterns(t *testing.T) {
 		"DELETE /api/v1/packs/{id}/publication",
 		"PUT /api/v1/packs/{id}/config",
 		"GET /api/v1/packs/{id}/export",
+		"GET /api/v1/adaptations/{id}/export",
 		"POST /api/v1/packs/import",
 		"POST /api/v1/packs/{id}/students",
 		"DELETE /api/v1/packs/{id}/students/{student_id}",

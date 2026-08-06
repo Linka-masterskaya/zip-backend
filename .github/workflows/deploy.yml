@@ -78,6 +78,7 @@ jobs:
         env:
           CI_APP_ENV: prod
           CI_CONFIG_PATH: config/config.prod.yml
+          CI_CORS_ALLOW_ORIGINS: ${{ vars.CORS_ALLOW_ORIGINS }}
           CI_APP_FRONTEND_URL: ${{ vars.APP_FRONTEND_URL }}
           CI_VERSION: ${{ needs.build-and-push.outputs.version }}
           CI_DB_URL: ${{ secrets.DB_URL }}

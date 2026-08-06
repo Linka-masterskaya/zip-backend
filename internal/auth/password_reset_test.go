@@ -83,6 +83,7 @@ func TestAuthService_ForgotPassword_InvalidEmail(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
 		&passwordResetMailerFake{},
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -112,6 +113,7 @@ func TestAuthService_ForgotPassword_UserNotFoundIsSuccess(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
 		mailer,
 		testPasswordResetConfig(),
 		crypto,
@@ -145,6 +147,7 @@ func TestAuthService_ForgotPassword_SendsResetEmail(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
 		fakeMailer,
 		cfg,
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -188,6 +191,7 @@ func TestAuthService_ForgotPassword_MailerErrorIsSuccess(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
 		fakeMailer,
 		cfg,
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -207,6 +211,7 @@ func TestAuthService_ResetPassword_InvalidInput(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
 		nil,
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -240,6 +245,7 @@ func TestAuthService_ResetPassword_InvalidToken(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
 		nil,
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -267,6 +273,7 @@ func TestAuthService_ResetPassword_UpdatesPasswordAndRevokesSessions(t *testing.
 	svc := NewAuthService(
 		repo,
 		cacheStore,
+		&fakeRateLimiter{allowed: true},
 		nil,
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -300,6 +307,7 @@ func TestAuthService_ResetPassword_ReturnsInternalErrorWhenRevokeFails(t *testin
 	svc := NewAuthService(
 		repo,
 		cacheStore,
+		&fakeRateLimiter{allowed: true},
 		nil,
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},

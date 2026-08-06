@@ -492,6 +492,60 @@ func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) 
 	assert.Zero(t, adaptationCount)
 }
 
+func TestRepositoryAdaptationArchiveUsesSnapshotMediaAndChecksAccess(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "adaptation export org")
+	_, foreignID, _ := seedPackOwner(t, pool, "foreign adaptation export org")
+	studentID, _ := seedPackStudentFolder(t, pool, ownerID, "Export Student")
+	mediaID := uuid.New()
+	_, err := pool.Exec(t.Context(), `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key
+		)
+		VALUES ($1, $2, $3, $4, 'image/png', 4, $5)`,
+		mediaID, orgID, ownerID, "adaptation-media-sha", "media/"+mediaID.String(),
+	)
+	require.NoError(t, err)
+	configWithMedia := []byte(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{
+			"id":"block","type":"grid",
+			"elements":[{"id":"image","kind":"image","media_id":"` + mediaID.String() + `"}]
+		}]
+	}`)
+	created, err := repo.Create(t.Context(), ownerID, CreateInput{
+		Title: "Adapted pack", FolderID: folderID, Config: configWithMedia,
+	})
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack', $2)`, mediaID, created.ID)
+	require.NoError(t, err)
+	assigned, err := repo.Assign(t.Context(), ownerID, created.ID, []uuid.UUID{studentID})
+	require.NoError(t, err)
+	require.Len(t, assigned, 1)
+
+	emptyConfig := []byte(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[]
+	}`)
+	_, err = repo.SaveConfig(t.Context(), ownerID, created.ID, emptyConfig, nil)
+	require.NoError(t, err)
+
+	data, files, err := repo.AdaptationArchiveData(t.Context(), ownerID, assigned[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Adapted pack", data.Title)
+	assert.JSONEq(t, string(configWithMedia), string(data.Config))
+	require.Len(t, files, 1)
+	assert.Equal(t, mediaID, files[0].ID)
+
+	_, _, err = repo.AdaptationArchiveData(t.Context(), foreignID, assigned[0].ID)
+	assert.ErrorIs(t, err, ErrAdaptationNotFound)
+}
+
 func TestRestoreVersionRejectsSnapshotInvalidUnderCurrentSchema(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)

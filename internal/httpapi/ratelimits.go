@@ -22,9 +22,6 @@ type RateLimits struct {
 	VerifyResend        Middleware
 	ProfileEmailChange  Middleware
 	ProfileEmailConfirm Middleware
-
-	// ResendPolicy is applied per user on top of the IP-based VerifyResend limit.
-	ResendPolicy middleware.RateLimitPolicy
 }
 
 // NewRateLimits builds all API rate limiters from configuration.
@@ -46,10 +43,5 @@ func NewRateLimits(c *cache.Client, cfg *config.Config) RateLimits {
 		VerifyResend:        limit("verify-resend", int64(cfg.Auth.VerifyResendRateLimit)),
 		ProfileEmailChange:  limit("profile-email-change", int64(cfg.Profile.EmailChangeRateLimit)),
 		ProfileEmailConfirm: limit("profile-email-confirm", int64(cfg.Profile.EmailConfirmRateLimit)),
-		ResendPolicy: middleware.RateLimitPolicy{
-			Scope:  cfg.RateLimit.Resend.Scope,
-			Limit:  cfg.RateLimit.Resend.Limit,
-			Window: cfg.RateLimit.Resend.Window,
-		},
 	}
 }

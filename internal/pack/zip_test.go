@@ -5,10 +5,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"testing"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/media"
+	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -47,11 +53,18 @@ func TestBuildAndParseArchiveRoundTrip(t *testing.T) {
 	file := &media.File{
 		ID: mediaID, MIMEType: "image/png", SizeBytes: 3, MinIOKey: "object",
 	}
-	data, err := buildArchive(
+	archive, err := buildArchive(
 		context.Background(), config, []*media.File{file},
 		fakeArchiveStorage{objects: map[string][]byte{"object": {1, 2, 3}}},
 	)
 	require.NoError(t, err)
+	path := archive.path
+	data := readArchive(t, archive)
+	assert.EqualValues(t, len(data), archive.size)
+	require.NoError(t, archive.Close())
+	_, err = os.Stat(path)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
 	parsed, err := parseArchive(data)
 	require.NoError(t, err)
 	assert.Equal(t, []byte{1, 2, 3}, parsed.Files["media/"+mediaID.String()+".png"])
@@ -59,6 +72,58 @@ func TestBuildAndParseArchiveRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(parsed.Config, &exported))
 	assert.Equal(t, "media/"+mediaID.String()+".png", exported.Blocks[0].Elements[0].MediaURL)
 	assert.Equal(t, mediaID, *exported.Blocks[0].Elements[0].MediaID)
+}
+
+func TestBuildArchiveRejectsMissingMediaMetadata(t *testing.T) {
+	mediaID := uuid.New()
+	config := archiveConfigWithMediaID(mediaID)
+	_, err := buildArchive(context.Background(), config, nil, fakeArchiveStorage{})
+	require.ErrorIs(t, err, ErrMissingMediaReference)
+}
+
+func TestBuildArchiveRejectsMissingStorageObject(t *testing.T) {
+	temporaryDir := t.TempDir()
+	t.Setenv("TMPDIR", temporaryDir)
+	mediaID := uuid.New()
+	file := &media.File{
+		ID: mediaID, MIMEType: "image/png", SizeBytes: 3, MinIOKey: "missing",
+	}
+	_, err := buildArchive(
+		context.Background(), archiveConfigWithMediaID(mediaID), []*media.File{file},
+		fakeArchiveStorage{objects: map[string][]byte{}},
+	)
+	require.ErrorIs(t, err, ErrMissingMediaReference)
+	entries, readErr := os.ReadDir(temporaryDir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries)
+}
+
+func TestBuildArchiveEnforcesFinalZIPLimit(t *testing.T) {
+	temporaryDir := t.TempDir()
+	t.Setenv("TMPDIR", temporaryDir)
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[]
+	}`)
+
+	_, err := buildArchiveWithLimit(
+		context.Background(), config, nil, nil, nil, 64,
+	)
+
+	require.ErrorIs(t, err, ErrArchiveTooLarge)
+	entries, readErr := os.ReadDir(temporaryDir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries)
+}
+
+func TestArchiveLimitWriterRejectsOverflow(t *testing.T) {
+	var target bytes.Buffer
+	writer := &archiveLimitWriter{writer: &target, remaining: 3}
+	written, err := writer.Write([]byte{1, 2, 3, 4})
+	assert.Equal(t, 3, written)
+	require.ErrorIs(t, err, ErrArchiveTooLarge)
+	assert.Equal(t, []byte{1, 2, 3}, target.Bytes())
 }
 
 func TestValidateAndMediaIDsRequiresStoredReference(t *testing.T) {
@@ -95,7 +160,7 @@ func TestBuildArchiveResolvesPicturesBankReferenceWithoutLocalStorage(t *testing
 			"id":"e","kind":"image","source_picture_id":"` + pictureID.String() + `"
 		}]}]
 	}`)
-	data, err := buildArchive(
+	archive, err := buildArchive(
 		context.Background(), config, nil, fakeArchiveStorage{},
 		func(_ context.Context, id uuid.UUID) ([]byte, string, error) {
 			assert.Equal(t, pictureID, id)
@@ -103,12 +168,44 @@ func TestBuildArchiveResolvesPicturesBankReferenceWithoutLocalStorage(t *testing
 		},
 	)
 	require.NoError(t, err)
+	data := readArchive(t, archive)
+	require.NoError(t, archive.Close())
 	parsed, err := parseArchive(data)
 	require.NoError(t, err)
 	path := "media/picture-" + pictureID.String() + ".png"
 	assert.Equal(t, []byte{1, 2, 3}, parsed.Files[path])
 	assert.Contains(t, string(parsed.Config), path)
 	assert.Contains(t, string(parsed.Config), pictureID.String())
+}
+
+func TestBuildArchiveRejectsMissingPicturesBankReference(t *testing.T) {
+	pictureID := uuid.New()
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{"id":"b","type":"grid","elements":[{
+			"id":"e","kind":"image","source_picture_id":"` + pictureID.String() + `"
+		}]}]
+	}`)
+	_, err := buildArchive(context.Background(), config, nil, fakeArchiveStorage{})
+	require.ErrorIs(t, err, ErrMissingMediaReference)
+}
+
+func archiveConfigWithMediaID(mediaID uuid.UUID) json.RawMessage {
+	return json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{"id":"b","type":"grid","elements":[{
+			"id":"e","kind":"image","media_id":"` + mediaID.String() + `"
+		}]}]
+	}`)
+}
+
+func readArchive(t *testing.T, archive io.Reader) []byte {
+	t.Helper()
+	data, err := io.ReadAll(archive)
+	require.NoError(t, err)
+	return data
 }
 
 func testZIP(t *testing.T, entries map[string][]byte) []byte {
@@ -127,8 +224,23 @@ func testZIP(t *testing.T, entries map[string][]byte) []byte {
 
 type fakeArchiveStorage struct {
 	objects map[string][]byte
+	err     error
 }
 
 func (s fakeArchiveStorage) GetObject(_ context.Context, key string) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(s.objects[key])), nil
+	if s.err != nil {
+		return nil, s.err
+	}
+	data, exists := s.objects[key]
+	if !exists {
+		return nil, storage.ErrObjectNotFound
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func TestContentErrorMapsMissingMediaToConflict(t *testing.T) {
+	err := contentError(fmt.Errorf("export failed: %w", ErrMissingMediaReference))
+	var appErr *apperr.AppError
+	require.True(t, errors.As(err, &appErr))
+	assert.Equal(t, http.StatusConflict, appErr.HTTPStatus)
 }
