@@ -350,7 +350,11 @@ func (h *OAuthHandler) fetchUserInfo(ctx context.Context, token *oauth2.Token) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch user info: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			slog.Error("failed to close yandex api response body", "error", closeErr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("yandex API error: %s", resp.Status)

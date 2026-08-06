@@ -101,7 +101,16 @@ func run() error {
 
 	oauthHandler := auth.NewOAuthHandler(authService, deps.redis, oauthCfg, deps.cfg.App.FrontendURL)
 
-	checker, err := health.NewChecker(deps.db, deps.redis, deps.nc, deps.storage)
+	checker, err := health.NewChecker(
+		deps.db,
+		deps.redis,
+		deps.nc,
+		deps.storage,
+		health.PicturesBank{
+			Local: deps.cfg.FeatureFlags.LocalBank,
+			URL:   deps.cfg.PicturesBank.URL,
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("health checker init: %w", err)
 	}
@@ -243,7 +252,7 @@ func run() error {
 		middleware.RecoveryMiddleware,
 		middleware.RequestIDMiddleware,
 		middleware.Metrics,
-		middleware.CORSMiddleware(deps.cfg.App.FrontendURL),
+		middleware.CORSMiddleware([]string{deps.cfg.App.FrontendURL}),
 		middleware.SecurityHeaders,
 	)
 
