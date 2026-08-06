@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,7 +276,7 @@ func TestAuthService_Login_EmailNotVerified(t *testing.T) {
 
 func testAuthConfig() Config {
 	return Config{
-		JWTSecret:       "01234567890123456789012345678901",
+		JWTSecret:       strings.Repeat("j", 40),
 		AccessTokenTTL:  time.Minute,
 		RefreshTokenTTL: time.Hour,
 	}

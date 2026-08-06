@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-const validToken = "0123456789012345678901234567890123456789012" // 43 chars
+var validToken = strings.Repeat("t", 43)
 
 func TestVerifyEmail(t *testing.T) {
 	tests := []struct {

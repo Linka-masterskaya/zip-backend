@@ -52,6 +52,9 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Validate deployment scripts
+        run: bash scripts/deploy-env-test.sh
+
       - name: Run tests with race detector
         run: go test ./... -race -count=1
 
@@ -71,6 +74,25 @@ jobs:
       - name: Run end-to-end tests with race detector
         run: go test -tags=e2e ./e2e ./internal/picturebank -race -count=1
 
+  rotation-integration:
+    name: Crypto Rotation Integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run database key-rotation test
+        run: >-
+          go test ./cmd/rotate-crypto
+          -run '^TestDatabaseRotationAndRollbackPreserveReadableData$'
+          -race -count=1
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -87,6 +109,129 @@ jobs:
       - name: Build
         run: go build -v ./cmd/...
 
+  secret-scan:
+    name: Secret Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GITLEAKS_IMAGE: >-
+        ghcr.io/gitleaks/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9
+    steps:
+      - name: Checkout complete pull request history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan current pull request tree
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          scan_dir=$(mktemp -d)
+          trap 'rm -rf "$scan_dir"' EXIT
+          git archive --format=tar "$HEAD_SHA" | tar -xf - -C "$scan_dir"
+          docker run --rm \
+            -v "$scan_dir:/repo:ro" \
+            -v "$GITHUB_WORKSPACE/.gitleaks.toml:/gitleaks.toml:ro" \
+            "$GITLEAKS_IMAGE" \
+            dir --source=/repo --config=/gitleaks.toml \
+            --redact --no-banner
+
+      - name: Scan every commit introduced by the pull request
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          [ -n "$merge_base" ] || {
+            echo "Unable to determine the pull-request merge base" >&2
+            exit 1
+          }
+
+          history_dir=$(mktemp -d)
+          trap 'rm -rf "$history_dir"' EXIT
+          commit_count=0
+          while IFS= read -r commit; do
+            [ -n "$commit" ] || continue
+            commit_count=$((commit_count + 1))
+            tree_dir="$history_dir/tree"
+            rm -rf "$tree_dir"
+            mkdir -p "$tree_dir"
+            git archive --format=tar "$commit" | tar -xf - -C "$tree_dir"
+            docker run --rm \
+              -v "$tree_dir:/repo:ro" \
+              -v "$GITHUB_WORKSPACE/.gitleaks.toml:/gitleaks.toml:ro" \
+              "$GITLEAKS_IMAGE" \
+              dir --source=/repo --config=/gitleaks.toml \
+              --redact --no-banner
+          done < <(git rev-list --reverse "${merge_base}..${HEAD_SHA}")
+
+          if [ "$commit_count" -eq 0 ]; then
+            echo "No pull-request commits were found between base and head" >&2
+            exit 1
+          fi
+
+      - name: Verify scanner rejects a generated credential
+        run: |
+          set -euo pipefail
+          scan_dir=$(mktemp -d)
+          trap 'rm -rf "$scan_dir"' EXIT
+          suffix='Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0UvWxYz'
+          printf 'GITHUB_TOKEN=ghp_%s\n' "$suffix" > "$scan_dir/fixture.env"
+          if docker run --rm \
+            -v "$scan_dir:/scan:ro" \
+            -v "$GITHUB_WORKSPACE/.gitleaks.toml:/gitleaks.toml:ro" \
+            "$GITLEAKS_IMAGE" \
+            dir --source=/scan --config=/gitleaks.toml \
+            --redact --no-banner >/dev/null 2>&1; then
+            echo "Gitleaks negative control was not detected" >&2
+            exit 1
+          fi
+
+      - name: Verify history scan catches a secret removed later
+        run: |
+          set -euo pipefail
+          test_repo=$(mktemp -d)
+          scan_root=$(mktemp -d)
+          trap 'rm -rf "$test_repo" "$scan_root"' EXIT
+
+          git -C "$test_repo" init -q
+          git -C "$test_repo" config user.name "gitleaks-history-test"
+          git -C "$test_repo" config user.email "gitleaks-history-test@example.invalid"
+          suffix='Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0UvWxYz'
+          printf 'GITHUB_TOKEN=ghp_%s\n' "$suffix" > "$test_repo/fixture.env"
+          git -C "$test_repo" add fixture.env
+          git -C "$test_repo" commit -qm "add generated credential"
+          rm "$test_repo/fixture.env"
+          git -C "$test_repo" add -u
+          git -C "$test_repo" commit -qm "remove generated credential"
+
+          detected=false
+          while IFS= read -r commit; do
+            tree_dir="$scan_root/tree"
+            rm -rf "$tree_dir"
+            mkdir -p "$tree_dir"
+            git -C "$test_repo" archive --format=tar "$commit" | tar -xf - -C "$tree_dir"
+            if ! docker run --rm \
+              -v "$tree_dir:/scan:ro" \
+              -v "$GITHUB_WORKSPACE/.gitleaks.toml:/gitleaks.toml:ro" \
+              "$GITLEAKS_IMAGE" \
+              dir --source=/scan --config=/gitleaks.toml \
+              --redact --no-banner >/dev/null 2>&1; then
+              detected=true
+              break
+            fi
+          done < <(git -C "$test_repo" rev-list --reverse HEAD)
+
+          [ "$detected" = true ] || {
+            echo "Gitleaks history control missed a credential removed in a later commit" >&2
+            exit 1
+          }
+
   trivy:
     name: Security Scan (Trivy)
     runs-on: ubuntu-latest
@@ -101,3 +246,25 @@ jobs:
           severity: "HIGH,CRITICAL"
           exit-code: 1
           ignore-unfixed: true
+
+  required-pr-checks:
+    name: Required PR checks
+    if: always()
+    needs: [lint, test, e2e, rotation-integration, build, secret-scan, trivy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every PR check
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          ROTATION_RESULT: ${{ needs.rotation-integration.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
+          TRIVY_RESULT: ${{ needs.trivy.result }}
+        run: |
+          for result in \
+            "$LINT_RESULT" "$TEST_RESULT" "$E2E_RESULT" \
+            "$ROTATION_RESULT" "$BUILD_RESULT" "$SECRET_SCAN_RESULT" "$TRIVY_RESULT"; do
+            [ "$result" = "success" ] || exit 1
+          done

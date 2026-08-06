@@ -6,12 +6,13 @@ on:
 
 env:
   REGISTRY: ghcr.io
-    
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta_server.outputs.version }}
+      server_digest: ${{ steps.build_server.outputs.digest }}
     concurrency:
       group: ${{ github.workflow }}-build-${{ github.ref }}
       cancel-in-progress: true
@@ -44,6 +45,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Server
+        id: build_server
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
@@ -58,6 +60,13 @@ jobs:
           build-args: |
             VERSION=${{ github.sha }}
 
+      - name: Publish immutable rotation image reference
+        env:
+          SERVER_DIGEST: ${{ steps.build_server.outputs.digest }}
+        run: |
+          printf '### Immutable server image\n\n`ghcr.io/linka-masterskaya/zip-backend/server@%s`\n' \
+            "$SERVER_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -69,15 +78,26 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-deploy-${{ github.ref }}
       cancel-in-progress: false
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Audit active secret fingerprints
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CRYPTO_AES_KEY: ${{ secrets.CRYPTO_AES_KEY }}
+          CRYPTO_HMAC_KEY: ${{ secrets.CRYPTO_HMAC_KEY }}
+        run: >-
+          bash scripts/audit-secret-fingerprints.sh
+          JWT_SECRET CRYPTO_AES_KEY CRYPTO_HMAC_KEY
+
       - name: Render deployment environment
         env:
           CI_APP_ENV: prod
+          CI_APP_PORT: "8080"
           CI_CONFIG_PATH: config/config.prod.yml
+          CI_APP_PUBLIC_URL: ${{ vars.APP_PUBLIC_URL }}
           CI_APP_FRONTEND_URL: ${{ vars.APP_FRONTEND_URL }}
           CI_VERSION: ${{ needs.build-and-push.outputs.version }}
           CI_DB_URL: ${{ secrets.DB_URL }}
@@ -87,32 +107,42 @@ jobs:
           CI_REDIS_URL: ${{ secrets.REDIS_URL }}
           CI_REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
           CI_JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CI_JWT_ACCESS_TTL: "15m"
+          CI_JWT_REFRESH_TTL: "720h"
           CI_CRYPTO_AES_KEY: ${{ secrets.CRYPTO_AES_KEY }}
           CI_CRYPTO_HMAC_KEY: ${{ secrets.CRYPTO_HMAC_KEY }}
           CI_MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           CI_MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
           CI_MINIO_ENDPOINT: ${{ vars.CADDY_DOMAIN_NAME }}
+          CI_MINIO_BUCKET: ${{ vars.MINIO_BUCKET }}
           CI_MINIO_USE_SSL: "true"
+          CI_MINIO_TIMEOUT: "15s"
           CI_NATS_CONNECTION_URL: "nats://nats:4222"
           CI_CADDY_DOMAIN_NAME: ${{ vars.CADDY_DOMAIN_NAME }}
           CI_CADDY_LETSENCRYPT_EMAIL: ${{ vars.CADDY_LETSENCRYPT_EMAIL }}
           CI_YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
           CI_YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
           CI_YANDEX_REDIRECT_URL: ${{ vars.YANDEX_REDIRECT_URL }}
-          CI_YANDEX_IAM_TOKEN: ${{ secrets.YANDEX_IAM_TOKEN }}
-          CI_YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
+          CI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CI_OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          CI_OPENAI_ORG_ID: ${{ secrets.OPENAI_ORG_ID }}
+          CI_PICTURES_BANK_URL: ${{ vars.PICTURES_BANK_URL }}
           CI_SMTP_HOST: ${{ vars.SMTP_HOST }}
+          CI_SMTP_PORT: ${{ vars.SMTP_PORT }}
           CI_SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           CI_SMTP_FROM_EMAIL: ${{ vars.SMTP_FROM_EMAIL }}
           CI_SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          CI_SMTP_TLS: ${{ vars.SMTP_TLS }}
+          CI_SMTP_TIMEOUT: "10s"
+          CI_SMTP_REQUIRE_FROM_MATCH: "true"
+          CI_AUTH_RESET_PASSWORD_TOKEN_TTL: "1h"
+          CI_AUTH_BCRYPT_COST: "12"
+          CI_AUTH_REFRESH_RATE_LIMIT: "10"
           CI_GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           CI_GRAFANA_ROOT_URL: ${{ vars.GRAFANA_ROOT_URL }}
         run: |
-          pip3 install dump-env
-          dump-env \
-            -t .env.example \
-            -p 'CI_' > .env
-          chmod 600 .env
+          bash scripts/render-deploy-env.sh .env.example .env CI_
+          bash scripts/validate-deploy-env.sh .env
 
       - name: Prepare server directories
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5

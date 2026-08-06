@@ -1,0 +1,16 @@
+title = "zip-backend gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact documented non-production fixture values"
+regexes = [
+  '''^dev-only-jwt-secret-do-not-use-in-production-2026$''',
+  '''^ZGV2LW9ubHktYWVzLWtleS1ub3QtZm9yLXByb2QhISE=$''',
+  '''^ZGV2LW9ubHktaG1hYy1rZXktbm90LWZvci1wcm9kISE=$''',
+  '''^linka-dev-minio$''',
+  '''^linka-dev-minio-secret$''',
+  '''^dev-only-smtp-password$''',
+  '''^dev-only-grafana-admin$'''
+]
