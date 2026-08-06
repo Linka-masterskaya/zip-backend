@@ -67,6 +67,11 @@ type refreshStore interface {
 		ttl time.Duration,
 	) error
 	RevokeAllSessions(ctx context.Context, userID string) error
+	GetRefresh(ctx context.Context, jti string) (*cache.RefreshRecord, error)
+	RevokeFamily(ctx context.Context, fid string) error
+	IsFamilyRevoked(ctx context.Context, fid string) (bool, error)
+	IsSessionRevoked(ctx context.Context, rec cache.RefreshRecord) (bool, error)
+	RotateRefresh(ctx context.Context, req cache.RotateRefreshRequest) error
 }
 
 type cryptoService interface {
@@ -179,6 +184,127 @@ func (au *authService) Login(
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 	}, nil
+}
+
+// validateRefreshToken проверяет refresh токен и возвращает claims и запись из кэша.
+func (au *authService) validateRefreshToken(refreshToken string) (*RefreshClaims, *cache.RefreshRecord, error) {
+	token, err := jwt.ParseWithClaims(refreshToken, &RefreshClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(au.cfg.JWTSecret), nil
+	})
+	if err != nil {
+		return nil, nil, apperr.ErrJWTTokenInvalid
+	}
+
+	claims, ok := token.Claims.(*RefreshClaims)
+	if !ok || !token.Valid {
+		return nil, nil, apperr.ErrJWTTokenInvalid
+	}
+
+	record, err := au.cache.GetRefresh(context.Background(), claims.ID)
+	if err != nil || record == nil {
+		return nil, nil, apperr.ErrJWTTokenInvalid
+	}
+
+	return claims, record, nil
+}
+
+// checkRefreshStatus проверяет статус refresh токена.
+func (au *authService) checkRefreshStatus(ctx context.Context, record *cache.RefreshRecord) error {
+	if record.Status == "revoked" {
+		if err := au.cache.RevokeFamily(ctx, record.FID); err != nil {
+			slog.ErrorContext(ctx, "failed to revoke family", "fid", record.FID, "error", err)
+		}
+		return apperr.ErrJWTTokenInvalid
+	}
+
+	isFamilyRevoked, err := au.cache.IsFamilyRevoked(ctx, record.FID)
+	if err != nil {
+		return apperr.ErrInternal.WithError(err)
+	}
+	if isFamilyRevoked {
+		return apperr.ErrJWTTokenInvalid
+	}
+
+	isSessionRevoked, err := au.cache.IsSessionRevoked(ctx, *record)
+	if err != nil {
+		return apperr.ErrInternal.WithError(err)
+	}
+	if isSessionRevoked {
+		return apperr.ErrJWTTokenInvalid
+	}
+
+	return nil
+}
+
+// getUserFromRefresh получает пользователя по subject из claims.
+func (au *authService) getUserFromRefresh(ctx context.Context, subject string) (*User, error) {
+	userID, err := uuid.Parse(subject)
+	if err != nil {
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+
+	user, err := au.repo.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+
+	return user, nil
+}
+
+// rotateRefreshToken выполняет ротацию refresh токена.
+func (au *authService) rotateRefreshToken(ctx context.Context, user *User, oldJTI, fid string) (*LoginResult, error) {
+	newJTI := uuid.NewString()
+
+	req := cache.RotateRefreshRequest{
+		OldJTI: oldJTI,
+		NewJTI: newJTI,
+		NewRecord: cache.RefreshRecord{
+			FID:    fid,
+			Status: "active",
+		},
+		TTL: au.cfg.RefreshTokenTTL,
+	}
+
+	if err := au.cache.RotateRefresh(ctx, req); err != nil {
+		return nil, apperr.ErrInternal.WithError(err)
+	}
+
+	newRefreshToken, err := au.generateRefreshToken(user, newJTI)
+	if err != nil {
+		return nil, fmt.Errorf("generate new refresh token: %w", err)
+	}
+
+	accessToken, err := au.generateAccessToken(user)
+	if err != nil {
+		return nil, fmt.Errorf("generate access token: %w", err)
+	}
+
+	return &LoginResult{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+	}, nil
+}
+
+// Refresh выполняет ротацию refresh токена.
+func (au *authService) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
+	claims, record, err := au.validateRefreshToken(refreshToken)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := au.checkRefreshStatus(ctx, record); err != nil {
+		return nil, err
+	}
+
+	user, err := au.getUserFromRefresh(ctx, claims.Subject)
+	if err != nil {
+		return nil, err
+	}
+
+	return au.rotateRefreshToken(ctx, user, claims.ID, record.FID)
 }
 
 func (au *authService) verifyEmail(
@@ -318,7 +444,7 @@ func (au *authService) GenerateOAuthJWT(user *User, cred *UserCred) (string, err
 	return tokenString, nil
 }
 
-// UpsertUser creates or updates user from OAuth provider
+// UpsertUser creates or updates user from OAuth provider.
 func (au *authService) UpsertUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
 	identity, err := au.repo.FindIdentityByProviderUID(ctx, "yandex", yandexID)
 	if err != nil {
@@ -345,7 +471,7 @@ func (au *authService) UpsertUser(ctx context.Context, email, name, yandexID str
 	return au.createOAuthUser(ctx, email, name, yandexID)
 }
 
-// handleExistingIdentity processes existing identity
+// handleExistingIdentity processes existing identity.
 func (au *authService) handleExistingIdentity(ctx context.Context, identity *UserIdentity, name string) (*User, *UserCred, error) {
 	user, err := au.repo.GetUserByID(ctx, identity.UserID)
 	if err != nil {
@@ -370,7 +496,7 @@ func (au *authService) handleExistingIdentity(ctx context.Context, identity *Use
 	return user, cred, nil
 }
 
-// createOAuthUser creates new user from OAuth provider
+// createOAuthUser creates new user from OAuth provider.
 func (au *authService) createOAuthUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
 	tx, err := au.repo.beginTx(ctx)
 	if err != nil {
@@ -439,7 +565,7 @@ func (au *authService) createOAuthUser(ctx context.Context, email, name, yandexI
 	return user, cred, nil
 }
 
-// SendVerificationEmail sends email verification for OAuth user
+// SendVerificationEmail sends email verification for OAuth user.
 func (au *authService) SendVerificationEmail(ctx context.Context, userID uuid.UUID) error {
 	cred, err := au.repo.GetAuthCredByUserID(ctx, userID)
 	if err != nil {
