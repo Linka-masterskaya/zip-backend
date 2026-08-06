@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -258,6 +259,10 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 	cfg.FeatureFlags.LocalBank = localBank
+
+	if envOrigins := os.Getenv("CORS_ALLOW_ORIGINS"); envOrigins != "" {
+		cfg.CORS.AllowOrigins = strings.Split(envOrigins, ",")
+	}
 
 	// Validate required fields
 	if err := validateConfig(&cfg); err != nil {
