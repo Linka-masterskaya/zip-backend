@@ -20,6 +20,7 @@ type authServiceIface interface {
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
 	resendEmail(ctx context.Context, email string) error
+	Register(ctx context.Context, req RegisterRequest) error
 }
 
 // Handler serves authentication HTTP endpoints.
@@ -66,6 +67,12 @@ type ResendEmailRequest struct {
 type ResetPasswordRequest struct {
 	Token       string `json:"token"`
 	NewPassword string `json:"new_password"`
+}
+
+// RegisterRequest описывает тело запроса на регистрацию по email.
+type RegisterRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) error {
@@ -248,5 +255,28 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) error {
 	})
 
 	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
+	}
+	if err := ValidatePassword(req.Password); err != nil {
+		return err
+	}
+
+	err := h.svc.Register(r.Context(), req)
+	if err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusCreated)
+
 	return nil
 }
