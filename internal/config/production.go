@@ -12,14 +12,14 @@ import (
 )
 
 const (
-	DevJWTSecret        = "dev-only-jwt-secret-do-not-use-in-production-2026"
+	DevJWTSecret        = "dev-only-jwt-secret-do-not-use-in-production-2026" //nolint:gosec // Documented development fixture rejected in production.
 	DevAESKeyBase64     = "ZGV2LW9ubHktYWVzLWtleS1ub3QtZm9yLXByb2QhISE="
 	DevHMACKeyBase64    = "ZGV2LW9ubHktaG1hYy1rZXktbm90LWZvci1wcm9kISE="
 	DevMinIOAccessKey   = "linka-dev-minio"
-	DevMinIOSecretKey   = "linka-dev-minio-secret"
+	DevMinIOSecretKey   = "linka-dev-minio-secret" //nolint:gosec // Documented development fixture rejected in production.
 	DevPostgresPassword = "linka"
 	DevRedisPassword    = "pass"
-	DevSMTPPassword     = "dev-only-smtp-password"
+	DevSMTPPassword     = "dev-only-smtp-password" //nolint:gosec // Documented development fixture rejected in production.
 )
 
 var leakedCredentialFingerprints = map[string]map[string]struct{}{
