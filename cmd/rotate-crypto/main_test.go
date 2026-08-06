@@ -181,3 +181,50 @@ func TestLoadCryptoPairAllowsRotatingAwayFromHistoricalRawMaterial(t *testing.T)
 		t.Fatal("crypto clients were not created")
 	}
 }
+
+func TestLoadRotationMode(t *testing.T) {
+	t.Run("defaults to check", func(t *testing.T) {
+		t.Setenv("ROTATION_MODE", "")
+		t.Setenv("ROTATION_CONFIRM", "")
+
+		mode, err := loadRotationMode()
+		if err != nil {
+			t.Fatalf("default mode was rejected: %v", err)
+		}
+		if mode != "check" {
+			t.Fatalf("expected check mode, got %q", mode)
+		}
+	})
+
+	t.Run("apply requires confirmation", func(t *testing.T) {
+		t.Setenv("ROTATION_MODE", "apply")
+		t.Setenv("ROTATION_CONFIRM", "")
+
+		_, err := loadRotationMode()
+		if err == nil || !strings.Contains(err.Error(), "ROTATION_CONFIRM") {
+			t.Fatalf("apply without confirmation was not rejected: %v", err)
+		}
+	})
+
+	t.Run("accepts confirmed apply", func(t *testing.T) {
+		t.Setenv("ROTATION_MODE", " APPLY ")
+		t.Setenv("ROTATION_CONFIRM", applyConfirmation)
+
+		mode, err := loadRotationMode()
+		if err != nil {
+			t.Fatalf("confirmed apply mode was rejected: %v", err)
+		}
+		if mode != "apply" {
+			t.Fatalf("expected apply mode, got %q", mode)
+		}
+	})
+
+	t.Run("rejects unsupported mode", func(t *testing.T) {
+		t.Setenv("ROTATION_MODE", "rotate")
+
+		_, err := loadRotationMode()
+		if err == nil || !strings.Contains(err.Error(), "check or apply") {
+			t.Fatalf("unsupported mode was not rejected: %v", err)
+		}
+	})
+}
