@@ -460,14 +460,8 @@ func setDefaults(v *viper.Viper) {
 // validateConfig validates required configuration fields.
 func validateConfig(cfg *Config) error {
 	// App validation
-	if cfg.App.Env == "" {
-		return fmt.Errorf("app.env is required")
-	}
-	if cfg.App.FrontendURL == "" {
-		return fmt.Errorf("app.frontend_url is required")
-	}
-	if u, err := url.Parse(cfg.App.FrontendURL); err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("app.frontend_url must be an absolute URL (scheme and host)")
+	if err := validateAppConfig(&cfg.App); err != nil {
+		return err
 	}
 
 	// DB validation
@@ -481,43 +475,78 @@ func validateConfig(cfg *Config) error {
 	}
 
 	// MinIO validation
-	if cfg.MinIO.Endpoint == "" {
-		return fmt.Errorf("minio.endpoint is required")
-	}
-	if cfg.MinIO.AccessKey == "" {
-		return fmt.Errorf("minio.access_key is required")
-	}
-	if cfg.MinIO.SecretKey == "" {
-		return fmt.Errorf("minio.secret_key is required")
-	}
-	if cfg.MinIO.Bucket == "" {
-		return fmt.Errorf("minio.bucket is required")
+	if err := validateMinioConfig(&cfg.MinIO); err != nil {
+		return err
 	}
 
 	// JWT validation
-	if cfg.JWT.Secret == "" {
-		return fmt.Errorf("jwt.secret is required")
-	}
-	if len(cfg.JWT.Secret) < 32 {
-		return fmt.Errorf("jwt.secret must be at least 32 characters")
+	if err := validateJWTConfig(&cfg.JWT); err != nil {
+		return err
 	}
 
-	aes, err := base64.StdEncoding.DecodeString(cfg.Crypto.AESKeyRaw)
+	// Crypto validation
+	if err := validateCryptoCongig(&cfg.Crypto); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAppConfig(cfg *AppConfig) error {
+	if cfg.Env == "" {
+		return fmt.Errorf("app.env is required")
+	}
+	if cfg.FrontendURL == "" {
+		return fmt.Errorf("app.frontend_url is required")
+	}
+	if u, err := url.Parse(cfg.FrontendURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("app.frontend_url must be an absolute URL (scheme and host)")
+	}
+	return nil
+}
+
+func validateMinioConfig(cfg *MinIOConfig) error {
+	if cfg.Endpoint == "" {
+		return fmt.Errorf("minio.endpoint is required")
+	}
+	if cfg.AccessKey == "" {
+		return fmt.Errorf("minio.access_key is required")
+	}
+	if cfg.SecretKey == "" {
+		return fmt.Errorf("minio.secret_key is required")
+	}
+	if cfg.Bucket == "" {
+		return fmt.Errorf("minio.bucket is required")
+	}
+	return nil
+}
+
+func validateJWTConfig(cfg *JWTConfig) error {
+	if cfg.Secret == "" {
+		return fmt.Errorf("jwt.secret is required")
+	}
+	if len(cfg.Secret) < 32 {
+		return fmt.Errorf("jwt.secret must be at least 32 characters")
+	}
+	return nil
+}
+
+func validateCryptoCongig(cfg *CryptoConfig) error {
+	aes, err := base64.StdEncoding.DecodeString(cfg.AESKeyRaw)
 	if err != nil {
 		return fmt.Errorf("crypto.aes_key: invalid base64: %w", err)
 	}
 	if len(aes) != 32 {
 		return fmt.Errorf("crypto.aes_key: must be 32 bytes, got %d", len(aes))
 	}
-	cfg.Crypto.AESKey = aes
+	cfg.AESKey = aes
 
-	hmacKey, err := base64.StdEncoding.DecodeString(cfg.Crypto.HMACKeyRaw)
+	hmacKey, err := base64.StdEncoding.DecodeString(cfg.HMACKeyRaw)
 	if err != nil {
 		return fmt.Errorf("crypto.hmac_key: invalid base64: %w", err)
 	}
 	if len(hmacKey) < 32 {
 		return fmt.Errorf("crypto.hmac_key: must be at least 32 bytes, got %d", len(hmacKey))
 	}
-	cfg.Crypto.HMACKey = hmacKey
+	cfg.HMACKey = hmacKey
 	return nil
 }
