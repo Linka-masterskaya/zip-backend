@@ -98,20 +98,6 @@ func (mr *MockauthServiceIfaceMockRecorder) Refresh(ctx, refreshToken any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refresh", reflect.TypeOf((*MockauthServiceIface)(nil).Refresh), ctx, refreshToken)
 }
 
-// Register mocks base method.
-func (m *MockauthServiceIface) Register(ctx context.Context, req RegisterRequest) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Register", ctx, req)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Register indicates an expected call of Register.
-func (mr *MockauthServiceIfaceMockRecorder) Register(ctx, req any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Register", reflect.TypeOf((*MockauthServiceIface)(nil).Register), ctx, req)
-}
-
 // ResetPassword mocks base method.
 func (m *MockauthServiceIface) ResetPassword(ctx context.Context, token, newPassword string) error {
 	m.ctrl.T.Helper()

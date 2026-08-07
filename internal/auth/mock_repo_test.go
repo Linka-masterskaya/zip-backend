@@ -58,18 +58,32 @@ func (mr *MockauthRepoIfaceMockRecorder) CreateAuthCred(ctx, params any) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAuthCred", reflect.TypeOf((*MockauthRepoIface)(nil).CreateAuthCred), ctx, params)
 }
 
-// CreateOrganization mocks base method.
-func (m *MockauthRepoIface) CreateOrganization(ctx context.Context, params CreateOrganizationParams) error {
+// CreateIdentity mocks base method.
+func (m *MockauthRepoIface) CreateIdentity(ctx context.Context, identity *UserIdentity) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateOrganization", ctx, params)
+	ret := m.ctrl.Call(m, "CreateIdentity", ctx, identity)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// CreateOrganization indicates an expected call of CreateOrganization.
-func (mr *MockauthRepoIfaceMockRecorder) CreateOrganization(ctx, params any) *gomock.Call {
+// CreateIdentity indicates an expected call of CreateIdentity.
+func (mr *MockauthRepoIfaceMockRecorder) CreateIdentity(ctx, identity any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateOrganization", reflect.TypeOf((*MockauthRepoIface)(nil).CreateOrganization), ctx, params)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateIdentity", reflect.TypeOf((*MockauthRepoIface)(nil).CreateIdentity), ctx, identity)
+}
+
+// CreateOAuthUser mocks base method.
+func (m *MockauthRepoIface) CreateOAuthUser(ctx context.Context, params CreateUserParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateOAuthUser", ctx, params)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateOAuthUser indicates an expected call of CreateOAuthUser.
+func (mr *MockauthRepoIfaceMockRecorder) CreateOAuthUser(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateOAuthUser", reflect.TypeOf((*MockauthRepoIface)(nil).CreateOAuthUser), ctx, params)
 }
 
 // CreatePasswordResetToken mocks base method.
@@ -87,47 +101,34 @@ func (mr *MockauthRepoIfaceMockRecorder) CreatePasswordResetToken(ctx, userID, t
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePasswordResetToken", reflect.TypeOf((*MockauthRepoIface)(nil).CreatePasswordResetToken), ctx, userID, ttl)
 }
 
-// CreateUser mocks base method.
-func (m *MockauthRepoIface) CreateUser(ctx context.Context, params CreateUserParams) error {
+// FindIdentityByProviderUID mocks base method.
+func (m *MockauthRepoIface) FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateUser", ctx, params)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// CreateUser indicates an expected call of CreateUser.
-func (mr *MockauthRepoIfaceMockRecorder) CreateUser(ctx, params any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateUser", reflect.TypeOf((*MockauthRepoIface)(nil).CreateUser), ctx, params)
-}
-
-// CreateVerifyToken mocks base method.
-func (m *MockauthRepoIface) CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateVerifyToken", ctx, params)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// CreateVerifyToken indicates an expected call of CreateVerifyToken.
-func (mr *MockauthRepoIfaceMockRecorder) CreateVerifyToken(ctx, params any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateVerifyToken", reflect.TypeOf((*MockauthRepoIface)(nil).CreateVerifyToken), ctx, params)
-}
-
-// EmailExists mocks base method.
-func (m *MockauthRepoIface) EmailExists(ctx context.Context, emailHash []byte) (bool, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EmailExists", ctx, emailHash)
-	ret0, _ := ret[0].(bool)
+	ret := m.ctrl.Call(m, "FindIdentityByProviderUID", ctx, provider, providerUID)
+	ret0, _ := ret[0].(*UserIdentity)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// EmailExists indicates an expected call of EmailExists.
-func (mr *MockauthRepoIfaceMockRecorder) EmailExists(ctx, emailHash any) *gomock.Call {
+// FindIdentityByProviderUID indicates an expected call of FindIdentityByProviderUID.
+func (mr *MockauthRepoIfaceMockRecorder) FindIdentityByProviderUID(ctx, provider, providerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmailExists", reflect.TypeOf((*MockauthRepoIface)(nil).EmailExists), ctx, emailHash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindIdentityByProviderUID", reflect.TypeOf((*MockauthRepoIface)(nil).FindIdentityByProviderUID), ctx, provider, providerUID)
+}
+
+// GetAuthCredByUserID mocks base method.
+func (m *MockauthRepoIface) GetAuthCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAuthCredByUserID", ctx, userID)
+	ret0, _ := ret[0].(*UserCred)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAuthCredByUserID indicates an expected call of GetAuthCredByUserID.
+func (mr *MockauthRepoIfaceMockRecorder) GetAuthCredByUserID(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAuthCredByUserID", reflect.TypeOf((*MockauthRepoIface)(nil).GetAuthCredByUserID), ctx, userID)
 }
 
 // GetUserByEmailHash mocks base method.
@@ -161,10 +162,10 @@ func (mr *MockauthRepoIfaceMockRecorder) GetUserByID(ctx, userID any) *gomock.Ca
 }
 
 // ResetPasswordByToken mocks base method.
-func (m *MockauthRepoIface) ResetPasswordByToken(ctx context.Context, token, passwordHash string) (string, error) {
+func (m *MockauthRepoIface) ResetPasswordByToken(ctx context.Context, token, passwordHash string) (uuid.UUID, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ResetPasswordByToken", ctx, token, passwordHash)
-	ret0, _ := ret[0].(string)
+	ret0, _ := ret[0].(uuid.UUID)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -173,6 +174,20 @@ func (m *MockauthRepoIface) ResetPasswordByToken(ctx context.Context, token, pas
 func (mr *MockauthRepoIfaceMockRecorder) ResetPasswordByToken(ctx, token, passwordHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetPasswordByToken", reflect.TypeOf((*MockauthRepoIface)(nil).ResetPasswordByToken), ctx, token, passwordHash)
+}
+
+// UpdateUserName mocks base method.
+func (m *MockauthRepoIface) UpdateUserName(ctx context.Context, userID uuid.UUID, name string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateUserName", ctx, userID, name)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateUserName indicates an expected call of UpdateUserName.
+func (mr *MockauthRepoIfaceMockRecorder) UpdateUserName(ctx, userID, name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateUserName", reflect.TypeOf((*MockauthRepoIface)(nil).UpdateUserName), ctx, userID, name)
 }
 
 // beginTx mocks base method.
@@ -188,6 +203,22 @@ func (m *MockauthRepoIface) beginTx(ctx context.Context) (pgx.Tx, error) {
 func (mr *MockauthRepoIfaceMockRecorder) beginTx(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "beginTx", reflect.TypeOf((*MockauthRepoIface)(nil).beginTx), ctx)
+}
+
+// getUserContactForResend mocks base method.
+func (m *MockauthRepoIface) getUserContactForResend(ctx context.Context, userID uuid.UUID) ([]byte, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "getUserContactForResend", ctx, userID)
+	ret0, _ := ret[0].([]byte)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// getUserContactForResend indicates an expected call of getUserContactForResend.
+func (mr *MockauthRepoIfaceMockRecorder) getUserContactForResend(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getUserContactForResend", reflect.TypeOf((*MockauthRepoIface)(nil).getUserContactForResend), ctx, userID)
 }
 
 // rotateEmailTokens mocks base method.

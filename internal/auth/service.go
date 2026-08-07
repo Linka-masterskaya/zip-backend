@@ -11,28 +11,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
+	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
+
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
-
-	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/cache"
-	"github.com/Linka-masterskaya/zip-backend/internal/logger"
-	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
-	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrEmailNotVerified   = errors.New("email not verified")
+	ErrInvalidCredentials     = errors.New("invalid credentials")
+	ErrEmailNotVerified       = errors.New("email not verified")
+	ErrEmailAlreadyRegistered = errors.New("email already registered")
 )
 
-var dummyPasswordHash = []byte("$2a$12$UqfJl/B1CJ86pDCgYZuNXefHab2GHToXW1tWtfTc4Ee59.q1GMkcS")
-
-const (
-	RoleDefectologist  string = "defectologist"
-	PurposeEmailVerify string = "email_verify"
-)
+var dummyPasswordHash = []byte("$2a$10$UlCQgLZoLjUzrtYRUUlkPeh/m5L2pl9aYzDTUaZAD3R4Pd8ONSof6")
 
 // runDummyPasswordCompare performs a bcrypt comparison only to keep the
 // execution time similar for existing and non-existing users.
@@ -42,30 +38,25 @@ func runDummyPasswordCompare(password string) {
 	_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
 }
 
-//go:generate go run go.uber.org/mock/mockgen -source=service.go -destination=mock_repo_test.go -package=auth
+//go:generate mockgen -source=service.go -destination=mock_repo_test.go -package=auth
 type authRepoIface interface {
 	GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
+	GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error)
+	GetAuthCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error)
+	FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error)
+	CreateOAuthUser(ctx context.Context, params CreateUserParams) error
+	UpdateUserName(ctx context.Context, userID uuid.UUID, name string) error
+	CreateIdentity(ctx context.Context, identity *UserIdentity) error
+	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
 	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
-	ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (string, error)
-
+	ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (uuid.UUID, error)
 	beginTx(ctx context.Context) (pgx.Tx, error)
 	withTx(tx pgx.Tx) authRepoIface
 	useEmailVerifyToken(ctx context.Context, token []byte) (uuid.UUID, uuid.UUID, error)
 	verifyUser(ctx context.Context, userID uuid.UUID) error
 	verifyStudent(ctx context.Context, studentID uuid.UUID) error
-	rotateEmailTokens(
-		ctx context.Context,
-		tokenID, userID uuid.UUID,
-		hash []byte,
-		expiresAt time.Time,
-	) error
-
-	GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error)
-	EmailExists(ctx context.Context, emailHash []byte) (bool, error)
-	CreateOrganization(ctx context.Context, params CreateOrganizationParams) error
-	CreateUser(ctx context.Context, params CreateUserParams) error
-	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
-	CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error
+	getUserContactForResend(ctx context.Context, userID uuid.UUID) ([]byte, bool, error)
+	rotateEmailTokens(ctx context.Context, tokenID, userID uuid.UUID, hash []byte, expiresAt time.Time) error
 }
 
 type refreshStore interface {
@@ -75,43 +66,18 @@ type refreshStore interface {
 		rec cache.RefreshRecord,
 		ttl time.Duration,
 	) error
-
-	GetRefresh(
-		ctx context.Context,
-		jti string,
-	) (*cache.RefreshRecord, error)
-
-	RevokeFamily(
-		ctx context.Context,
-		fid string,
-	) error
-
-	IsFamilyRevoked(
-		ctx context.Context,
-		fid string,
-	) (bool, error)
-
-	IsSessionRevoked(
-		ctx context.Context,
-		rec cache.RefreshRecord,
-	) (bool, error)
-
-	RotateRefresh(
-		ctx context.Context,
-		req cache.RotateRefreshRequest,
-	) error
-
 	RevokeAllSessions(ctx context.Context, userID string) error
+	GetRefresh(ctx context.Context, jti string) (*cache.RefreshRecord, error)
+	RevokeFamily(ctx context.Context, fid string) error
+	IsFamilyRevoked(ctx context.Context, fid string) (bool, error)
+	IsSessionRevoked(ctx context.Context, rec cache.RefreshRecord) (bool, error)
+	RotateRefresh(ctx context.Context, req cache.RotateRefreshRequest) error
 }
 
 type cryptoService interface {
 	Hash(data []byte) []byte
 	Decrypt(ciphertext []byte) ([]byte, error)
 	Encrypt(plaintext []byte) ([]byte, error)
-}
-
-type rateLimit interface {
-	Allow(ctx context.Context, req cache.RateLimitRequest) (bool, int64, error)
 }
 
 type Config struct {
@@ -121,10 +87,16 @@ type Config struct {
 	RefreshTokenTTL          time.Duration
 	VerifyEmailTokenTTL      time.Duration
 	ResetPasswordTokenTTL    time.Duration
-	BcryptCost               int
 	RequireEmailVerification bool
 	CookieSecure             bool
-	RateLimit                middleware.RateLimitPolicy
+	BcryptCost               int
+	RateLimit                RateLimitPolicy
+}
+
+type RateLimitPolicy struct {
+	Scope  string
+	Limit  int64
+	Window time.Duration
 }
 
 type LoginResult struct {
@@ -133,31 +105,38 @@ type LoginResult struct {
 }
 
 type authService struct {
-	repo    authRepoIface
-	cache   refreshStore
-	rlCache rateLimit
-	mailer  mailer.EmailSender
-	cfg     Config
-	crp     cryptoService
+	repo   authRepoIface
+	cache  refreshStore
+	mailer mailer.EmailSender
+	cfg    Config
+	crp    cryptoService
 }
 
-func NewAuthService(repo authRepoIface, cache refreshStore, rlCache rateLimit, mailer mailer.EmailSender, cfg Config, crp cryptoService) *authService {
+func NewAuthService(
+	repo authRepoIface,
+	cache refreshStore,
+	mailer mailer.EmailSender,
+	cfg Config,
+	crp cryptoService,
+) *authService {
 	return &authService{
-		repo:    repo,
-		cache:   cache,
-		rlCache: rlCache,
-		mailer:  mailer,
-		cfg:     cfg,
-		crp:     crp,
+		repo:   repo,
+		cache:  cache,
+		mailer: mailer,
+		cfg:    cfg,
+		crp:    crp,
 	}
 }
 
-func (au *authService) Login(ctx context.Context, email, password string) (*LoginResult, error) {
+func (au *authService) Login(
+	ctx context.Context,
+	email, password string,
+) (*LoginResult, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	emailHash := au.crp.Hash([]byte(email))
 
 	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
-	if errors.Is(err, apperr.ErrUserNotFound) {
+	if errors.Is(err, ErrUserNotFound) {
 		runDummyPasswordCompare(password)
 		return nil, ErrInvalidCredentials
 	}
@@ -197,7 +176,6 @@ func (au *authService) Login(ctx context.Context, email, password string) (*Logi
 	rec := cache.RefreshRecord{
 		FID:    fid,
 		Status: "active",
-		UserID: user.ID,
 	}
 
 	if err := au.cache.StoreRefresh(
@@ -215,7 +193,131 @@ func (au *authService) Login(ctx context.Context, email, password string) (*Logi
 	}, nil
 }
 
-func (au *authService) verifyEmail(ctx context.Context, verifyToken string) error {
+// validateRefreshToken проверяет refresh токен и возвращает claims и запись из кэша.
+func (au *authService) validateRefreshToken(refreshToken string) (*RefreshClaims, *cache.RefreshRecord, error) {
+	token, err := jwt.ParseWithClaims(refreshToken, &RefreshClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(au.cfg.JWTSecret), nil
+	})
+	if err != nil {
+		return nil, nil, apperr.ErrJWTTokenInvalid
+	}
+
+	claims, ok := token.Claims.(*RefreshClaims)
+	if !ok || !token.Valid {
+		return nil, nil, apperr.ErrJWTTokenInvalid
+	}
+
+	record, err := au.cache.GetRefresh(context.Background(), claims.ID)
+	if err != nil || record == nil {
+		return nil, nil, apperr.ErrJWTTokenInvalid
+	}
+
+	return claims, record, nil
+}
+
+// checkRefreshStatus проверяет статус refresh токена.
+func (au *authService) checkRefreshStatus(ctx context.Context, record *cache.RefreshRecord) error {
+	if record.Status == "revoked" {
+		if err := au.cache.RevokeFamily(ctx, record.FID); err != nil {
+			slog.ErrorContext(ctx, "failed to revoke family", "fid", record.FID, "error", err)
+		}
+		return apperr.ErrJWTTokenInvalid
+	}
+
+	isFamilyRevoked, err := au.cache.IsFamilyRevoked(ctx, record.FID)
+	if err != nil {
+		return apperr.ErrInternal.WithError(err)
+	}
+	if isFamilyRevoked {
+		return apperr.ErrJWTTokenInvalid
+	}
+
+	isSessionRevoked, err := au.cache.IsSessionRevoked(ctx, *record)
+	if err != nil {
+		return apperr.ErrInternal.WithError(err)
+	}
+	if isSessionRevoked {
+		return apperr.ErrJWTTokenInvalid
+	}
+
+	return nil
+}
+
+// getUserFromRefresh получает пользователя по subject из claims.
+func (au *authService) getUserFromRefresh(ctx context.Context, subject string) (*User, error) {
+	userID, err := uuid.Parse(subject)
+	if err != nil {
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+
+	user, err := au.repo.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		return nil, apperr.ErrJWTTokenInvalid
+	}
+
+	return user, nil
+}
+
+// rotateRefreshToken выполняет ротацию refresh токена.
+func (au *authService) rotateRefreshToken(ctx context.Context, user *User, oldJTI, fid string) (*LoginResult, error) {
+	newJTI := uuid.NewString()
+
+	req := cache.RotateRefreshRequest{
+		OldJTI: oldJTI,
+		NewJTI: newJTI,
+		NewRecord: cache.RefreshRecord{
+			FID:    fid,
+			Status: "active",
+		},
+		TTL: au.cfg.RefreshTokenTTL,
+	}
+
+	if err := au.cache.RotateRefresh(ctx, req); err != nil {
+		return nil, apperr.ErrInternal.WithError(err)
+	}
+
+	newRefreshToken, err := au.generateRefreshToken(user, newJTI)
+	if err != nil {
+		return nil, fmt.Errorf("generate new refresh token: %w", err)
+	}
+
+	accessToken, err := au.generateAccessToken(user)
+	if err != nil {
+		return nil, fmt.Errorf("generate access token: %w", err)
+	}
+
+	return &LoginResult{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+	}, nil
+}
+
+// Refresh выполняет ротацию refresh токена.
+func (au *authService) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
+	claims, record, err := au.validateRefreshToken(refreshToken)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := au.checkRefreshStatus(ctx, record); err != nil {
+		return nil, err
+	}
+
+	user, err := au.getUserFromRefresh(ctx, claims.Subject)
+	if err != nil {
+		return nil, err
+	}
+
+	return au.rotateRefreshToken(ctx, user, claims.ID, record.FID)
+}
+
+func (au *authService) verifyEmail(
+	ctx context.Context,
+	verifyToken string,
+) error {
 	raw, err := base64.RawURLEncoding.DecodeString(verifyToken)
 	if err != nil {
 		return apperr.ErrVerifyTokenInvalid
@@ -261,372 +363,266 @@ func (au *authService) verifyEmail(ctx context.Context, verifyToken string) erro
 	return nil
 }
 
-// resendEmail повторно отправляет письмо верификации по адресу, а не по JWT:
-// неподтверждённый пользователь может не иметь возможности войти, и тогда
-// запросить письмо было бы нечем.
-func (au *authService) resendEmail(ctx context.Context, email string) error {
-	email = normalizeEmail(email)
-	if err := ValidateEmail(email); err != nil {
-		return err
-	}
-
-	emailHash := au.crp.Hash([]byte(email))
-
-	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
+func (au *authService) resendEmail(ctx context.Context) error {
+	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
-		// Ответ одинаков для существующего и несуществующего адреса.
-		if errors.Is(err, apperr.ErrUserNotFound) {
-			return nil
-		}
 		return err
 	}
-	if user.EmailVerified {
+
+	emailEncrypted, emailVerified, err := au.repo.getUserContactForResend(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if emailVerified {
 		return nil
 	}
 
-	rlCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	defer cancel()
-
-	allowed, _, err := au.rlCache.Allow(rlCtx, cache.RateLimitRequest{
-		Scope: au.cfg.RateLimit.Scope, Key: user.ID,
-		Limit: au.cfg.RateLimit.Limit, WindowSize: au.cfg.RateLimit.Window,
-	})
+	email, err := au.crp.Decrypt(emailEncrypted)
 	if err != nil {
-		return apperr.ErrInternal.WithError(fmt.Errorf("cache.Allow: %w", err))
-	}
-	if !allowed {
-		return apperr.ErrTooManyRequests
-	}
-
-	go au.processResend(context.WithoutCancel(ctx), user.ID, email)
-
-	return nil
-}
-
-func (au *authService) processResend(ctx context.Context, strUser string, email string) {
-	userID, err := uuid.Parse(strUser)
-	if err != nil {
-		slog.ErrorContext(ctx, "authService.processResend",
-			"user_id", strUser,
-			logger.Err(err),
-		)
-		return
+		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
 	tokenRaw := make([]byte, 32)
 	if _, err := rand.Read(tokenRaw); err != nil {
-		slog.ErrorContext(ctx, "authService.processResend",
-			"user_id", userID,
-			logger.Err(err),
-		)
-		return
+		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
 	hashToken := sha256.Sum256(tokenRaw)
 
 	tokenID, err := uuid.NewV7()
 	if err != nil {
-		slog.ErrorContext(ctx, "authService.processResend",
-			"user_id", userID,
-			logger.Err(err),
-		)
-		return
+		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
-	dbCtx, dbCancel := context.WithTimeout(ctx, 2*time.Second)
-	defer dbCancel()
 	err = au.repo.rotateEmailTokens(
-		dbCtx,
+		ctx,
 		tokenID,
 		userID,
 		hashToken[:],
 		time.Now().Add(au.cfg.VerifyEmailTokenTTL),
 	)
 	if err != nil {
-		slog.ErrorContext(ctx, "authService.processResend",
-			"user_id", userID,
-			logger.Err(err),
-		)
-		return
+		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
-	token := base64.RawURLEncoding.EncodeToString(tokenRaw)
+	verifyURL := au.cfg.FrontendURL +
+		"/verify-email?token=" +
+		base64.RawURLEncoding.EncodeToString(tokenRaw)
 
-	mailCtx, mailCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer mailCancel()
-	if err := au.mailer.Send(mailCtx, email, mailer.EmailVerify, mailer.EmailData{
-		Token: token,
-	}); err != nil {
-		slog.ErrorContext(ctx, "authService.processResend",
-			"user_id", userID,
-			logger.Err(err),
-		)
-	}
-}
-
-func (au *authService) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
-	claims, err := au.parseRefreshToken(refreshToken)
+	err = au.mailer.Send(
+		ctx,
+		string(email),
+		mailer.EmailVerify,
+		mailer.EmailData{
+			Token: verifyURL,
+		},
+	)
 	if err != nil {
-		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
-	}
-
-	rec, err := au.getActiveRefreshRecord(ctx, claims.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	user, err := au.getRefreshUser(ctx, claims.Subject)
-	if err != nil {
-		return nil, err
-	}
-
-	accessToken, err := au.generateAccessToken(user)
-	if err != nil {
-		return nil, fmt.Errorf("generate access token: %w", err)
-	}
-
-	newRefreshToken, err := au.rotateRefresh(ctx, claims.ID, rec, user)
-	if err != nil {
-		return nil, err
-	}
-
-	return &LoginResult{
-		AccessToken:  accessToken,
-		RefreshToken: newRefreshToken,
-	}, nil
-}
-
-// Logout revokes the whole refresh token family. Идемпотентен: невалидный,
-// истёкший или уже отозванный токен не считается ошибкой.
-func (au *authService) Logout(ctx context.Context, refreshToken string) error {
-	const op = "authService.Logout"
-
-	if refreshToken == "" {
-		return nil
-	}
-
-	claims, err := au.parseRefreshToken(refreshToken)
-	if err != nil {
-		return nil
-	}
-
-	rec, err := au.cache.GetRefresh(ctx, claims.ID)
-	if errors.Is(err, cache.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := au.cache.RevokeFamily(ctx, rec.FID); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
 	return nil
 }
 
-func (au *authService) getActiveRefreshRecord(
-	ctx context.Context,
-	jti string,
-) (*cache.RefreshRecord, error) {
-	rec, err := au.cache.GetRefresh(ctx, jti)
-	if errors.Is(err, cache.ErrNotFound) {
-		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
-	}
+func (au *authService) GenerateOAuthJWT(user *User, cred *UserCred) (string, error) {
+	email, err := au.crp.Decrypt(cred.EmailEncrypted)
 	if err != nil {
-		return nil, fmt.Errorf("get refresh token: %w", err)
+		return "", fmt.Errorf("decrypt email: %w", err)
 	}
 
-	if rec.Status == "revoked" {
-		if err := au.cache.RevokeFamily(ctx, rec.FID); err != nil {
-			return nil, fmt.Errorf("revoke refresh family: %w", err)
-		}
+	now := time.Now()
 
-		return nil, apperr.ErrJWTTokenInvalid
+	claims := jwt.MapClaims{
+		"sub":   user.ID,
+		"email": string(email),
+		"role":  user.Role,
+		"iss":   jwtIssuer,
+		"aud":   jwtAudience,
+		"exp":   now.Add(24 * time.Hour).Unix(),
+		"iat":   now.Unix(),
 	}
 
-	revoked, err := au.cache.IsFamilyRevoked(ctx, rec.FID)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(au.cfg.JWTSecret))
 	if err != nil {
-		return nil, fmt.Errorf("check refresh family: %w", err)
-	}
-	if revoked {
-		return nil, apperr.ErrJWTTokenInvalid
+		return "", fmt.Errorf("generate token: %w", err)
 	}
 
-	sessionRevoked, err := au.cache.IsSessionRevoked(ctx, *rec)
-	if err != nil {
-		return nil, fmt.Errorf("check refresh session: %w", err)
-	}
-	if sessionRevoked {
-		return nil, apperr.ErrJWTTokenInvalid
-	}
-
-	return rec, nil
+	return tokenString, nil
 }
 
-func (au *authService) getRefreshUser(ctx context.Context, subject string) (*User, error) {
-	userID, err := uuid.Parse(subject)
+// UpsertUser creates or updates user from OAuth provider.
+func (au *authService) UpsertUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
+	identity, err := au.repo.FindIdentityByProviderUID(ctx, "yandex", yandexID)
 	if err != nil {
-		return nil, apperr.ErrJWTTokenInvalid.WithError(err)
+		return nil, nil, fmt.Errorf("find identity: %w", err)
+	}
+	if identity != nil {
+		return au.handleExistingIdentity(ctx, identity, name)
 	}
 
-	user, err := au.repo.GetUserByID(ctx, userID)
-	if errors.Is(err, apperr.ErrUserNotFound) {
-		return nil, apperr.ErrUnauthorized
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get user by id: %w", err)
-	}
-
-	return user, nil
-}
-
-func (au *authService) rotateRefresh(
-	ctx context.Context,
-	oldJTI string,
-	rec *cache.RefreshRecord,
-	user *User,
-) (string, error) {
-	newJTI := uuid.NewString()
-
-	newRefreshToken, err := au.generateRefreshToken(user, newJTI)
-	if err != nil {
-		return "", fmt.Errorf("generate refresh token: %w", err)
-	}
-
-	req := cache.RotateRefreshRequest{
-		OldJTI: oldJTI,
-		NewJTI: newJTI,
-		NewRecord: cache.RefreshRecord{
-			FID:    rec.FID,
-			Status: "active",
-			UserID: rec.UserID,
-		},
-		TTL: au.cfg.RefreshTokenTTL,
-	}
-
-	err = au.cache.RotateRefresh(ctx, req)
-	if errors.Is(err, cache.ErrRefreshNotActive) {
-		if revokeErr := au.cache.RevokeFamily(ctx, rec.FID); revokeErr != nil {
-			return "", fmt.Errorf("revoke refresh family: %w", revokeErr)
-		}
-
-		return "", apperr.ErrJWTTokenInvalid.WithError(err)
-	}
-	if errors.Is(err, cache.ErrNotFound) || errors.Is(err, cache.ErrSessionRevoked) {
-		return "", apperr.ErrJWTTokenInvalid.WithError(err)
-	}
-	if err != nil {
-		return "", fmt.Errorf("rotate refresh: %w", err)
-	}
-
-	return newRefreshToken, nil
-}
-
-func (au *authService) createEmailVerifyToken(ctx context.Context, repo authRepoIface, userID uuid.UUID) (string, error) {
-	verifyToken := make([]byte, 32)
-
-	if _, err := rand.Read(verifyToken); err != nil {
-		return "", err
-	}
-
-	verifyTokenString := base64.RawURLEncoding.EncodeToString(verifyToken)
-	tokenHash := sha256.Sum256(verifyToken)
-
-	verifyParams := CreateVerifyTokenParams{
-		ID:        uuid.New(),
-		UserID:    userID,
-		TokenHash: tokenHash[:],
-		ExpiresAt: time.Now().Add(au.cfg.VerifyEmailTokenTTL),
-		Purpose:   PurposeEmailVerify,
-	}
-
-	if err := repo.CreateVerifyToken(ctx, verifyParams); err != nil {
-		return "", err
-	}
-
-	return verifyTokenString, nil
-}
-
-// Register регистрирует пользователя по email и паролю.
-func (au *authService) Register(ctx context.Context, req RegisterRequest) error {
-
-	email := strings.TrimSpace(strings.ToLower(req.Email))
 	emailHash := au.crp.Hash([]byte(email))
+	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return nil, nil, fmt.Errorf("get user by email: %w", err)
+	}
+	if user != nil {
+		slog.Warn("attempt to takeover existing email via yandex oauth",
+			"user_id", user.ID,
+			"yandex_id", yandexID,
+			"email_hash", fmt.Sprintf("%x", emailHash),
+		)
+		return nil, nil, ErrEmailAlreadyRegistered
+	}
 
-	exists, err := au.repo.EmailExists(ctx, emailHash)
+	return au.createOAuthUser(ctx, email, name, yandexID)
+}
+
+// handleExistingIdentity processes existing identity.
+func (au *authService) handleExistingIdentity(ctx context.Context, identity *UserIdentity, name string) (*User, *UserCred, error) {
+	user, err := au.repo.GetUserByID(ctx, identity.UserID)
 	if err != nil {
-		return fmt.Errorf("authService.Register: check email exists: %w", err)
+		return nil, nil, fmt.Errorf("get user by id: %w", err)
+	}
+	if user == nil {
+		return nil, nil, fmt.Errorf("user not found for identity")
 	}
 
-	if exists {
-		runDummyPasswordCompare(req.Password)
-		return apperr.ErrConflict.WithMessage("email already exists")
+	if err := au.repo.UpdateUserName(ctx, identity.UserID, name); err != nil {
+		return nil, nil, fmt.Errorf("update user name: %w", err)
 	}
 
-	emailEncrypted, err := au.crp.Encrypt([]byte(email))
+	cred, err := au.repo.GetAuthCredByUserID(ctx, identity.UserID)
 	if err != nil {
-		return fmt.Errorf("authService.Register: encrypt email: %w", err)
+		return nil, nil, fmt.Errorf("get auth_cred: %w", err)
+	}
+	if cred == nil {
+		return nil, nil, fmt.Errorf("auth_cred not found")
 	}
 
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), au.cfg.BcryptCost)
-	if err != nil {
-		return fmt.Errorf("authService.Register: hash password: %w", err)
-	}
+	return user, cred, nil
+}
 
+// createOAuthUser creates new user from OAuth provider.
+func (au *authService) createOAuthUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
 	tx, err := au.repo.beginTx(ctx)
 	if err != nil {
-		return fmt.Errorf("authService.Register: begin tx: %w", err)
+		return nil, nil, fmt.Errorf("begin tx: %w", err)
 	}
-
 	defer func() {
 		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			slog.Error("tx rollback failed", "err", err)
+			slog.Warn("failed to rollback transaction", "error", err)
 		}
 	}()
-
 	txRepo := au.repo.withTx(tx)
 
-	// TODO: organization.name is not null. Пока в имя организации будет подставляться default value.
-	orgParams := CreateOrganizationParams{ID: uuid.New(), Name: "Personal organization"}
-
-	if err := txRepo.CreateOrganization(ctx, orgParams); err != nil {
-		return fmt.Errorf("authService.Register: create organization: %w", err)
+	userID, err := uuid.NewV7()
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate user id: %w", err)
 	}
 
-	userParams := CreateUserParams{ID: uuid.New(), OrganizationID: orgParams.ID}
-
-	if err := txRepo.CreateUser(ctx, userParams); err != nil {
-		return fmt.Errorf("authService.Register: create user: %w", err)
+	if err := txRepo.CreateOAuthUser(ctx, CreateUserParams{
+		ID:             userID,
+		OrganizationID: nil,
+		Name:           name,
+		EmailVerified:  true,
+	}); err != nil {
+		return nil, nil, fmt.Errorf("create user: %w", err)
 	}
 
-	credParams := CreateAuthCredParams{
-		UserID:         userParams.ID,
+	emailHash := au.crp.Hash([]byte(email))
+	emailEncrypted, err := au.crp.Encrypt([]byte(email))
+	if err != nil {
+		return nil, nil, fmt.Errorf("encrypt email: %w", err)
+	}
+
+	if err := txRepo.CreateAuthCred(ctx, CreateAuthCredParams{
+		UserID:         userID,
 		EmailHash:      emailHash,
 		EmailEncrypted: emailEncrypted,
-		PasswordHash:   string(passwordHash),
-		Role:           RoleDefectologist,
+		PasswordHash:   "",
+		Role:           "defectologist",
+	}); err != nil {
+		return nil, nil, fmt.Errorf("create auth_cred: %w", err)
 	}
 
-	if err := txRepo.CreateAuthCred(ctx, credParams); err != nil {
-		return fmt.Errorf("authService.Register: create auth cred: %w", err)
-	}
-
-	verifyTokenString, err := au.createEmailVerifyToken(ctx, txRepo, userParams.ID)
-	if err != nil {
-		return fmt.Errorf("authService.Register: create verify token: %w", err)
+	if err := txRepo.CreateIdentity(ctx, &UserIdentity{
+		ID:          uuid.New(),
+		UserID:      userID,
+		Provider:    "yandex",
+		ProviderUID: yandexID,
+	}); err != nil {
+		return nil, nil, fmt.Errorf("create identity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("authService.Register: commit tx: %w", err)
+		return nil, nil, fmt.Errorf("commit tx: %w", err)
 	}
 
-	mailTemplate := mailer.EmailData{Token: verifyTokenString, Email: email}
-
-	// TODO: backlog: сделать  через NATS + метрика.
-	if err = au.mailer.Send(ctx, email, mailer.EmailVerify, mailTemplate); err != nil {
-		slog.Error("failed to send verify email", "err", err)
+	user, err := au.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get created user: %w", err)
 	}
 
+	cred, err := au.repo.GetAuthCredByUserID(ctx, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get created auth_cred: %w", err)
+	}
+
+	return user, cred, nil
+}
+
+// SendVerificationEmail sends email verification for OAuth user.
+func (au *authService) SendVerificationEmail(ctx context.Context, userID uuid.UUID) error {
+	cred, err := au.repo.GetAuthCredByUserID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get auth_cred: %w", err)
+	}
+	if cred == nil {
+		return fmt.Errorf("auth_cred not found")
+	}
+
+	email, err := au.crp.Decrypt(cred.EmailEncrypted)
+	if err != nil {
+		return fmt.Errorf("decrypt email: %w", err)
+	}
+
+	tokenRaw := make([]byte, 32)
+	if _, err := rand.Read(tokenRaw); err != nil {
+		return fmt.Errorf("generate token: %w", err)
+	}
+	tokenHash := sha256.Sum256(tokenRaw)
+
+	tokenID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("generate token id: %w", err)
+	}
+
+	if err := au.repo.rotateEmailTokens(
+		ctx,
+		tokenID,
+		userID,
+		tokenHash[:],
+		time.Now().Add(au.cfg.VerifyEmailTokenTTL),
+	); err != nil {
+		return fmt.Errorf("rotate email tokens: %w", err)
+	}
+
+	verifyURL := au.cfg.FrontendURL +
+		"/verify-email?token=" +
+		base64.RawURLEncoding.EncodeToString(tokenRaw)
+
+	if err := au.mailer.Send(
+		ctx,
+		string(email),
+		mailer.EmailVerify,
+		mailer.EmailData{
+			Token: verifyURL,
+		},
+	); err != nil {
+		return fmt.Errorf("send email: %w", err)
+	}
+
+	slog.Info("verification email sent", "user_id", userID)
 	return nil
 }
