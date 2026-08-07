@@ -790,6 +790,69 @@ paths:
         '409': { description: В config есть ссылка на отсутствующий media-файл }
         '413': { description: Архив превышает 50 MiB }
 
+  /packs/{id}/adaptations:
+    get:
+      tags: [packs]
+      summary: Получить адаптации набора для учеников
+      description: Возвращает доступные текущему пользователю снимки config, созданные для учеников этого набора
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Адаптации набора, начиная с недавно обновлённых
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PackAdaptation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден или недоступен пользователю }
+
+  /adaptations/{id}:
+    get:
+      tags: [packs]
+      summary: Получить адаптацию набора
+      description: Возвращает сохранённый для ученика снимок config
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Адаптация набора
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackAdaptation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Адаптация не найдена или недоступна пользователю }
+
+  /adaptations/{id}/config:
+    put:
+      tags: [packs]
+      summary: Полностью сохранить config адаптации
+      description: Валидирует Linka 2.0 и атомарно обновляет config адаптации и связанные media usages
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Config адаптации сохранён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackAdaptation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: Config ссылается на недоступный media-файл }
+        '404': { description: Адаптация не найдена или недоступна пользователю }
+        '413': { description: Размер config превышает допустимый лимит }
+
   /adaptations/{id}/export:
     get:
       tags: [packs]

@@ -224,7 +224,7 @@ const folderAllowedQuery = `
 		  AND u.deleted_at IS NULL
 	)`
 
-const countPackMediaQuery = `
+const countAccessibleMediaQuery = `
 	SELECT count(*) FROM media_files
 	WHERE org_id = $1 AND id = ANY($2::uuid[])`
 
@@ -303,7 +303,74 @@ const replaceAdaptationUsagesQuery = `
 	FROM media_usages
 	WHERE source_type = 'pack' AND source_id = $1`
 
-const lockAdaptationQuery = `
+const listAdaptationsQuery = `
+	SELECT pa.id, pa.pack_id, pa.student_id, pa.config,
+	       pa.created_by, pa.created_at, pa.updated_at
+	FROM pack_adaptations pa
+	JOIN packs p ON p.id = pa.pack_id
+	JOIN students s ON s.id = pa.student_id
+	JOIN users u ON u.id = $1
+	WHERE pa.pack_id = $2
+	  AND pa.created_by = u.id
+	  AND p.owner_id = u.id
+	  AND p.org_id = u.org_id
+	  AND s.defectologist_id = u.id
+	  AND s.deleted_at IS NULL
+	  AND u.deleted_at IS NULL
+	ORDER BY pa.updated_at DESC, pa.id`
+
+const getAdaptationQuery = `
+	SELECT pa.id, pa.pack_id, pa.student_id, pa.config,
+	       pa.created_by, pa.created_at, pa.updated_at
+	FROM pack_adaptations pa
+	JOIN packs p ON p.id = pa.pack_id
+	JOIN students s ON s.id = pa.student_id
+	JOIN users u ON u.id = $1
+	WHERE pa.id = $2
+	  AND pa.created_by = u.id
+	  AND p.owner_id = u.id
+	  AND p.org_id = u.org_id
+	  AND s.defectologist_id = u.id
+	  AND s.deleted_at IS NULL
+	  AND u.deleted_at IS NULL`
+
+const lockAdaptationForUpdateQuery = `
+	SELECT p.org_id
+	FROM pack_adaptations pa
+	JOIN packs p ON p.id = pa.pack_id
+	JOIN students s ON s.id = pa.student_id
+	JOIN users u ON u.id = $1
+	WHERE pa.id = $2
+	  AND pa.created_by = u.id
+	  AND p.owner_id = u.id
+	  AND p.org_id = u.org_id
+	  AND s.defectologist_id = u.id
+	  AND s.deleted_at IS NULL
+	  AND u.deleted_at IS NULL
+	FOR UPDATE OF pa`
+
+const updateAdaptationConfigQuery = `
+	UPDATE pack_adaptations
+	SET config = $2, updated_at = now()
+	WHERE id = $1
+	RETURNING id, pack_id, student_id, config, created_by, created_at, updated_at`
+
+const insertAdaptationMediaUsagesQuery = `
+	INSERT INTO media_usages (media_id, source_type, source_id)
+	SELECT unnest($1::uuid[]), 'pack_adaptation', $2`
+
+const ownedPackExistsQuery = `
+	SELECT EXISTS (
+		SELECT 1
+		FROM packs p
+		JOIN users u ON u.id = $1
+		WHERE p.id = $2
+		  AND p.owner_id = u.id
+		  AND p.org_id = u.org_id
+		  AND u.deleted_at IS NULL
+	)`
+
+const lockAdaptationForUnassignQuery = `
 	SELECT pa.id
 	FROM pack_adaptations pa
 	JOIN packs p ON p.id = pa.pack_id
