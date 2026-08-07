@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -23,14 +24,19 @@ import (
 //go:generate mockgen -source=handler.go -destination=mock_service_test.go -package=auth
 type authServiceIface interface {
 	Login(ctx context.Context, email, password string) (*LoginResult, error)
+	Refresh(ctx context.Context, refreshToken string) (*LoginResult, error)
+	Logout(ctx context.Context, refreshToken string) error
+	ForgotPassword(ctx context.Context, email string) error
+	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
-	resendEmail(ctx context.Context) error
+	resendEmail(ctx context.Context, email string) error
 }
 
 type authHandlers struct {
 	svc             authServiceIface
 	refreshTokenTTL time.Duration
 	cookieSecure    bool
+	frontendOrigin  string
 }
 
 func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
@@ -41,6 +47,7 @@ func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
 	if len(cfg) > 0 {
 		h.refreshTokenTTL = cfg[0].RefreshTokenTTL
 		h.cookieSecure = cfg[0].CookieSecure
+		h.frontendOrigin = originOf(cfg[0].FrontendURL)
 	}
 
 	return h
@@ -75,11 +82,11 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    result.RefreshToken,
-		Path:     "/",
+		Path:     "/api/v1/auth",
 		MaxAge:   int(h.refreshTokenTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -94,6 +101,109 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	return nil
+}
+
+// Refresh обрабатывает обновление refresh токена.
+func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
+	if err := h.checkOrigin(r); err != nil {
+		return err
+	}
+
+	cookie, err := r.Cookie("refresh_token")
+	if errors.Is(err, http.ErrNoCookie) {
+		return apperr.ErrUnauthorized
+	}
+	if err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	result, err := h.svc.Refresh(r.Context(), cookie.Value)
+	if err != nil {
+		return err
+	}
+
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    result.RefreshToken,
+		Path:     "/api/v1/auth",
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
+	}
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		return fmt.Errorf("encode refresh response: %w", err)
+	}
+
+	return nil
+}
+
+// Logout revokes the refresh token family and clears the cookie.
+func (h *authHandlers) Logout(w http.ResponseWriter, r *http.Request) error {
+	if err := h.checkOrigin(r); err != nil {
+		return err
+	}
+
+	if cookie, err := r.Cookie("refresh_token"); err == nil {
+		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+			return err
+		}
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/api/v1/auth",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+// checkOrigin rejects cross-site refresh requests by comparing the Origin
+// (falling back to Referer) request header against app.frontend_url. It is
+// a defense-in-depth measure against CSRF alongside the SameSite=Strict
+// refresh cookie.
+func (h *authHandlers) checkOrigin(r *http.Request) error {
+	if h.frontendOrigin == "" {
+		return nil
+	}
+
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		if referer := r.Header.Get("Referer"); referer != "" {
+			origin = originOf(referer)
+		}
+	}
+
+	if origin == "" || origin != h.frontendOrigin {
+		return apperr.ErrForbidden
+	}
+
+	return nil
+}
+
+// originOf returns the URL scheme and host,
+// which is necessary for comparison with the Origin request header.
+func originOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+
+	return u.Scheme + "://" + u.Host
 }
 
 const verifyTokenLength = 43
@@ -121,7 +231,16 @@ func (h *authHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) error
 }
 
 func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error {
-	if err := h.svc.resendEmail(r.Context()); err != nil {
+	var req ResendEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
+	}
+
+	if err := h.svc.resendEmail(r.Context(), req.Email); err != nil {
 		return err
 	}
 
@@ -129,36 +248,40 @@ func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error
 	return nil
 }
 
-func (h *authHandlers) ForgotPassword(w http.ResponseWriter, _ *http.Request) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
+func (h *authHandlers) ForgotPassword(w http.ResponseWriter, r *http.Request) error {
+	var req ForgotPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
 
-	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
-	return err
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
+	}
+
+	if err := h.svc.ForgotPassword(r.Context(), req.Email); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *authHandlers) ResetPassword(w http.ResponseWriter, _ *http.Request) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
+func (h *authHandlers) ResetPassword(w http.ResponseWriter, r *http.Request) error {
+	var req ResetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
 
-	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
-	return err
-}
+	if err := ValidatePassword(req.NewPassword); err != nil {
+		return err
+	}
 
-func (h *authHandlers) VerifyResend(w http.ResponseWriter, _ *http.Request) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
+	if err := h.svc.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
+		return err
+	}
 
-	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
-	return err
-}
-
-func (h *authHandlers) EmailConfirm(w http.ResponseWriter, _ *http.Request) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-
-	_, err := w.Write([]byte(`{"error":"Not implemented"}`))
-	return err
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (h *authHandlers) RegisterRoutes(
@@ -208,6 +331,22 @@ func (h *authHandlers) RegisterRoutes(
 	)
 }
 
+// ForgotPasswordRequest описывает тело запроса на восстановление пароля.
+type ForgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+// ResendEmailRequest описывает тело запроса на повторную отправку письма верификации.
+type ResendEmailRequest struct {
+	Email string `json:"email"`
+}
+
+// ResetPasswordRequest описывает тело запроса на установку нового пароля по токену.
+type ResetPasswordRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
 type yandexUserInfo struct {
 	ID        string `json:"id"`
 	Email     string `json:"default_email"`
@@ -215,6 +354,7 @@ type yandexUserInfo struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 }
+
 type OAuthHandler struct {
 	service     *authService
 	cache       *cache.Client
