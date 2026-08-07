@@ -67,9 +67,42 @@ func (r *Repository) ArchiveData(
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := r.pool.Query(ctx, archiveMediaQuery, packID)
+	files, err := r.archiveMedia(ctx, archiveMediaQuery, packID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("pack archive media: %w", err)
+	}
+	return packData, files, nil
+}
+
+func (r *Repository) AdaptationArchiveData(
+	ctx context.Context,
+	userID, adaptationID uuid.UUID,
+) (*adaptationArchiveData, []*media.File, error) {
+	var data adaptationArchiveData
+	err := r.pool.QueryRow(ctx, adaptationArchiveQuery, userID, adaptationID).Scan(
+		&data.Config, &data.Title,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrAdaptationNotFound
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("adaptation archive get: %w", err)
+	}
+	files, err := r.archiveMedia(ctx, adaptationArchiveMediaQuery, adaptationID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("adaptation archive media: %w", err)
+	}
+	return &data, files, nil
+}
+
+func (r *Repository) archiveMedia(
+	ctx context.Context,
+	query string,
+	sourceID uuid.UUID,
+) ([]*media.File, error) {
+	rows, err := r.pool.Query(ctx, query, sourceID)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 	files := make([]*media.File, 0)
@@ -79,14 +112,14 @@ func (r *Repository) ArchiveData(
 			&file.ID, &file.OrgID, &file.UploaderID, &file.SHA256,
 			&file.MIMEType, &file.SizeBytes, &file.MinIOKey, &file.CreatedAt,
 		); err != nil {
-			return nil, nil, fmt.Errorf("pack archive scan media: %w", err)
+			return nil, fmt.Errorf("scan media: %w", err)
 		}
 		files = append(files, &file)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("pack archive media rows: %w", err)
+		return nil, fmt.Errorf("media rows: %w", err)
 	}
-	return packData, files, nil
+	return files, nil
 }
 
 func (r *Repository) Assign(

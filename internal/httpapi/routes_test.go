@@ -49,6 +49,7 @@ func TestRegisterPackRoutesPatterns(t *testing.T) {
 		"DELETE /api/v1/packs/{id}/publication",
 		"PUT /api/v1/packs/{id}/config",
 		"GET /api/v1/packs/{id}/export",
+		"GET /api/v1/adaptations/{id}/export",
 		"POST /api/v1/packs/import",
 		"POST /api/v1/packs/{id}/students",
 		"DELETE /api/v1/packs/{id}/students/{student_id}",
@@ -112,6 +113,7 @@ func TestRegisterAuthRoutesPatterns(t *testing.T) {
 	m := &recordingMux{}
 	rl := RateLimits{
 		Login:        passthrough,
+		Register:     passthrough,
 		Refresh:      passthrough,
 		Forgot:       passthrough,
 		Reset:        passthrough,
@@ -123,6 +125,7 @@ func TestRegisterAuthRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/auth/login",
 		"POST /api/v1/auth/refresh",
+		"POST /api/v1/auth/register",
 		"POST /api/v1/auth/logout",
 		"POST /api/v1/auth/password/forgot",
 		"POST /api/v1/auth/password/reset",

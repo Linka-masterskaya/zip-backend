@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
+	"unicode"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
@@ -15,9 +17,17 @@ import (
 	"github.com/google/uuid"
 )
 
+type adaptationArchiveData struct {
+	Config json.RawMessage
+	Title  string
+}
+
 type contentRepository interface {
 	SaveConfig(context.Context, uuid.UUID, uuid.UUID, json.RawMessage, []uuid.UUID) (*Pack, error)
 	ArchiveData(context.Context, uuid.UUID, uuid.UUID) (*Pack, []*media.File, error)
+	AdaptationArchiveData(
+		context.Context, uuid.UUID, uuid.UUID,
+	) (*adaptationArchiveData, []*media.File, error)
 	Assign(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) ([]Adaptation, error)
 	Unassign(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
 	CreateVersion(context.Context, uuid.UUID, uuid.UUID) (*Version, error)
@@ -96,8 +106,16 @@ type mediaUploader interface {
 }
 
 // PictureLoader resolves a Pictures Bank reference for a self-contained export.
-// Resolved bytes are not persisted in local object storage.
+// Resolved bytes are not persisted in local object storage. Missing pictures must return
+// ErrMissingMediaReference so export can respond with HTTP 409.
 type PictureLoader func(context.Context, uuid.UUID) ([]byte, string, error)
+
+// ExportArchive is a bounded .linka stream prepared for an HTTP response.
+type ExportArchive struct {
+	Stream   io.ReadCloser
+	Filename string
+	Size     int64
+}
 
 type ContentService struct {
 	repo        contentRepository
@@ -166,20 +184,49 @@ func (s *ContentService) Unassign(
 	return contentError(s.repo.Unassign(ctx, userID, packID, studentID))
 }
 
-func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) ([]byte, string, error) {
+func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) (*ExportArchive, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	packData, files, err := s.repo.ArchiveData(ctx, userID, packID)
 	if err != nil {
-		return nil, "", contentError(err)
+		return nil, contentError(err)
 	}
-	data, err := buildArchive(ctx, packData.Config, files, s.storage, s.pictures)
+	return s.exportConfig(ctx, packData.Config, packData.Title, files)
+}
+
+func (s *ContentService) ExportAdaptation(
+	ctx context.Context,
+	adaptationID uuid.UUID,
+) (*ExportArchive, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
-		return nil, "", contentError(err)
+		return nil, err
 	}
-	return data, safeArchiveName(packData.Title), nil
+	data, files, err := s.repo.AdaptationArchiveData(ctx, userID, adaptationID)
+	if err != nil {
+		return nil, contentError(err)
+	}
+	return s.exportConfig(ctx, data.Config, data.Title+"-adaptation", files)
+}
+
+func (s *ContentService) exportConfig(
+	ctx context.Context,
+	config json.RawMessage,
+	title string,
+	files []*media.File,
+) (*ExportArchive, error) {
+	if _, err := validateAndMediaIDs(ctx, config, false); err != nil {
+		return nil, err
+	}
+	stream, err := buildArchive(ctx, config, files, s.storage, s.pictures)
+	if err != nil {
+		return nil, contentError(err)
+	}
+	return &ExportArchive{
+		Stream: stream, Filename: safeArchiveName(title), Size: stream.size,
+	}, nil
 }
 
 func (s *ContentService) Import(
@@ -300,8 +347,16 @@ func validateAndMediaIDs(ctx context.Context, config json.RawMessage, allowArchi
 }
 
 func safeArchiveName(title string) string {
-	replacer := strings.NewReplacer("/", "_", "\\", "_", "\r", "", "\n", "")
-	title = strings.TrimSpace(replacer.Replace(title))
+	title = strings.Map(func(symbol rune) rune {
+		if symbol == '/' || symbol == '\\' {
+			return '_'
+		}
+		if unicode.IsControl(symbol) {
+			return -1
+		}
+		return symbol
+	}, title)
+	title = strings.TrimSpace(title)
 	if title == "" {
 		title = "pack"
 	}
@@ -335,6 +390,8 @@ func contentError(err error) error {
 		return apperr.ErrNotFound
 	case errors.Is(err, ErrVersionNotFound):
 		return apperr.ErrNotFound.WithMessage("pack version not found")
+	case errors.Is(err, ErrAdaptationNotFound):
+		return apperr.ErrNotFound.WithMessage("pack adaptation not found")
 	case errors.Is(err, ErrFolderNotAllowed):
 		return apperr.ErrForbidden.WithMessage("folder is not accessible")
 	case errors.Is(err, ErrMediaNotAllowed):
@@ -345,6 +402,8 @@ func contentError(err error) error {
 		return apperr.ErrBadRequest.WithMessage(err.Error())
 	case errors.Is(err, ErrArchiveTooLarge):
 		return apperr.ErrPayloadTooLarge
+	case errors.Is(err, ErrMissingMediaReference):
+		return apperr.ErrConflict.WithMessage("archive media reference is missing")
 	default:
 		return err
 	}

@@ -293,12 +293,10 @@ paths:
         content: { application/json: { schema: { $ref: '#/components/schemas/RegisterRequest' } } }
       responses:
         '201':
-          description: Создан; access в теле, refresh в httpOnly cookie
-          headers:
-            Set-Cookie: { schema: { type: string }, description: "refresh_token=...; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth" }
-          content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } }
+          description: Created; user registered, verification email is sent or queued. No response body.
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/verify-email:
     post:
@@ -776,11 +774,46 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         '200':
-          description: Архив до 50 MiB
+          description: Потоковый архив до 50 MiB
+          headers:
+            Content-Disposition:
+              description: Имя файла с расширением `.linka`
+              schema: { type: string, example: 'attachment; filename="pack.linka"' }
+            Content-Length:
+              description: Размер готового ZIP в байтах
+              schema: { type: integer, format: int64 }
           content:
             application/vnd.linka+zip:
               schema: { type: string, format: binary }
+        '400': { description: Сохранённый config не проходит валидацию Linka 2.0 }
         '404': { description: Набор не найден }
+        '409': { description: В config есть ссылка на отсутствующий media-файл }
+        '413': { description: Архив превышает 50 MiB }
+
+  /adaptations/{id}/export:
+    get:
+      tags: [packs]
+      summary: Скачать адаптацию как `.linka` ZIP (`config.json` и каталог `media/`)
+      description: Экспортируется сохранённый снимок адаптации, а не текущий config исходного набора.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Потоковый архив адаптации до 50 MiB
+          headers:
+            Content-Disposition:
+              description: Имя файла с расширением `.linka`
+              schema: { type: string, example: 'attachment; filename="pack-adaptation.linka"' }
+            Content-Length:
+              description: Размер готового ZIP в байтах
+              schema: { type: integer, format: int64 }
+          content:
+            application/vnd.linka+zip:
+              schema: { type: string, format: binary }
+        '400': { description: Сохранённый config адаптации не проходит валидацию Linka 2.0 }
+        '404': { description: Адаптация не найдена или недоступна пользователю }
+        '409': { description: В config адаптации есть ссылка на отсутствующий media-файл }
         '413': { description: Архив превышает 50 MiB }
 
   /packs/{id}/students:

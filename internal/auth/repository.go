@@ -25,6 +25,32 @@ type User struct {
 	EmailVerified bool
 }
 
+type CreateOrganizationParams struct {
+	ID   uuid.UUID
+	Name string
+}
+
+type CreateUserParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+}
+
+type CreateAuthCredParams struct {
+	UserID         uuid.UUID
+	EmailHash      []byte
+	EmailEncrypted []byte
+	PasswordHash   string
+	Role           string
+}
+
+type CreateVerifyTokenParams struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	TokenHash []byte
+	ExpiresAt time.Time
+	Purpose   string
+}
+
 type DBTX interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -369,4 +395,123 @@ func (r *authRepo) rotateEmailTokens(
 	}
 
 	return nil
+}
+
+func isEmailHashUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23505" &&
+		pgErr.ConstraintName == "auth_cred_email_hash_uniq"
+}
+
+func (r *authRepo) EmailExists(ctx context.Context, emailHash []byte) (bool, error) {
+	var exists bool
+
+	query := `
+	SELECT EXISTS(
+	SELECT *
+	FROM auth_cred
+	WHERE email_hash = $1)
+	`
+
+	err := r.db.QueryRow(ctx, query, emailHash).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
+}
+
+func (r *authRepo) CreateOrganization(ctx context.Context, params CreateOrganizationParams) error {
+	query := `
+	INSERT INTO organizations(
+	id,
+	name)
+	VALUES(
+	$1,
+	$2
+	)`
+
+	_, err := r.db.Exec(ctx, query, params.ID, params.Name)
+	return err
+}
+
+func (r *authRepo) CreateUser(ctx context.Context, params CreateUserParams) error {
+	query := `
+	INSERT INTO users(
+	id,
+	org_id)
+	VALUES(
+	$1,
+	$2
+	)`
+
+	_, err := r.db.Exec(ctx, query, params.ID, params.OrganizationID)
+	return err
+}
+
+func (r *authRepo) CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error {
+	query := `
+INSERT INTO auth_cred (
+user_id,
+email_hash,
+email_encrypted,
+password_hash,
+role)
+VALUES (
+$1,
+$2,
+$3,
+$4,
+$5)`
+
+	_, err := r.db.Exec(
+		ctx,
+		query,
+		params.UserID,
+		params.EmailHash,
+		params.EmailEncrypted,
+		params.PasswordHash,
+		params.Role,
+	)
+
+	if err != nil {
+		if isEmailHashUniqueViolation(err) {
+			return apperr.ErrConflict.WithMessage("email already exists")
+		}
+
+		return fmt.Errorf("authRepo.CreateAuthCred: %w", err)
+	}
+	return nil
+
+}
+
+func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error {
+	query := `
+ INSERT INTO verify_tokens (
+ id,
+ user_id,
+ token_hash,
+ expires_at,
+ purpose
+ )
+ VALUES (
+ $1,
+ $2,
+ $3,
+ $4,
+ $5)`
+
+	_, err := r.db.Exec(
+		ctx,
+		query,
+		params.ID,
+		params.UserID,
+		params.TokenHash,
+		params.ExpiresAt,
+		params.Purpose,
+	)
+
+	return err
 }

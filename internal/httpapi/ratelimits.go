@@ -14,6 +14,7 @@ type RateLimits struct {
 	Packs               Middleware
 	Pictures            Middleware
 	Login               Middleware
+	Register            Middleware
 	Refresh             Middleware
 	Forgot              Middleware
 	Reset               Middleware
@@ -21,9 +22,6 @@ type RateLimits struct {
 	VerifyResend        Middleware
 	ProfileEmailChange  Middleware
 	ProfileEmailConfirm Middleware
-
-	// ResendPolicy is applied per user on top of the IP-based VerifyResend limit.
-	ResendPolicy middleware.RateLimitPolicy
 }
 
 // NewRateLimits builds all API rate limiters from configuration.
@@ -37,6 +35,7 @@ func NewRateLimits(c *cache.Client, cfg *config.Config) RateLimits {
 		Packs:               limit("packs_api", int64(cfg.Auth.PackRateLimit)),
 		Pictures:            limit("pictures_api", cfg.PicturesBank.InboundPerMinute),
 		Login:               limit("login", int64(cfg.Auth.LoginRateLimit)),
+		Register:            limit("register", int64(cfg.Auth.RegisterRateLimit)),
 		Refresh:             limit("refresh", int64(cfg.Auth.RefreshRateLimit)),
 		Forgot:              limit("forgot", int64(cfg.Auth.ForgotRateLimit)),
 		Reset:               limit("reset", int64(cfg.Auth.ResetRateLimit)),
@@ -44,10 +43,5 @@ func NewRateLimits(c *cache.Client, cfg *config.Config) RateLimits {
 		VerifyResend:        limit("verify-resend", int64(cfg.Auth.VerifyResendRateLimit)),
 		ProfileEmailChange:  limit("profile-email-change", int64(cfg.Profile.EmailChangeRateLimit)),
 		ProfileEmailConfirm: limit("profile-email-confirm", int64(cfg.Profile.EmailConfirmRateLimit)),
-		ResendPolicy: middleware.RateLimitPolicy{
-			Scope:  cfg.RateLimit.Resend.Scope,
-			Limit:  cfg.RateLimit.Resend.Limit,
-			Window: cfg.RateLimit.Resend.Window,
-		},
 	}
 }
