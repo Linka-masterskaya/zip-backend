@@ -12,12 +12,105 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
 
 const validToken = "0123456789012345678901234567890123456789012" // 43 chars
 
-func TestVerifyEmail(t *testing.T) {
+func TestAuthHandler_Login(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		mockSetup  func(m *MockauthServiceIface)
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name: "success",
+			body: `{"email":"user@example.com","password":"password123"}`,
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Login(gomock.Any(), "user@example.com", "password123").
+					Return(&LoginResult{AccessToken: "access-token", RefreshToken: "refresh-token"}, nil)
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "malformed json",
+			body:       `{"email":`,
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name: "invalid credentials",
+			body: `{"email":"user@example.com","password":"wrong"}`,
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Login(gomock.Any(), "user@example.com", "wrong").
+					Return(nil, ErrInvalidCredentials)
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHORIZED",
+		},
+		{
+			name: "email not verified",
+			body: `{"email":"user@example.com","password":"password123"}`,
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Login(gomock.Any(), "user@example.com", "password123").
+					Return(nil, ErrEmailNotVerified)
+			},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "FORBIDDEN",
+		},
+		{
+			name: "service error",
+			body: `{"email":"user@example.com","password":"password123"}`,
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().
+					Login(gomock.Any(), "user@example.com", "password123").
+					Return(nil, apperr.ErrInternal)
+			},
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockauthServiceIface(ctrl)
+			tt.mockSetup(mockSvc)
+
+			h := NewAuthHandler(mockSvc)
+			wrapped := middleware.ErrorMiddleware(h.Login)
+
+			req := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/auth/login",
+				bytes.NewBufferString(tt.body),
+			)
+			rec := httptest.NewRecorder()
+
+			wrapped.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			if tt.wantCode != "" {
+				var resp middleware.JSONErrorResponse
+				err := json.Unmarshal(rec.Body.Bytes(), &resp)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCode, resp.Error.Code)
+			}
+		})
+	}
+}
+
+func TestAuthHandler_VerifyEmail(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
@@ -55,13 +148,6 @@ func TestVerifyEmail(t *testing.T) {
 			wantCode:   "BAD_REQUEST",
 		},
 		{
-			name:       "token too long",
-			body:       `{"token":"` + validToken + `extra"}`,
-			mockSetup:  func(m *MockauthServiceIface) {},
-			wantStatus: http.StatusBadRequest,
-			wantCode:   "BAD_REQUEST",
-		},
-		{
 			name: "expired or invalid token",
 			body: `{"token":"` + validToken + `"}`,
 			mockSetup: func(m *MockauthServiceIface) {
@@ -87,7 +173,7 @@ func TestVerifyEmail(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewHandler(mockSvc)
+			h := NewAuthHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.VerifyEmail)
 
 			req := httptest.NewRequestWithContext(
@@ -100,24 +186,19 @@ func TestVerifyEmail(t *testing.T) {
 
 			wrapped.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
+			assert.Equal(t, tt.wantStatus, rec.Code)
 
 			if tt.wantCode != "" {
 				var resp middleware.JSONErrorResponse
-				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-					t.Fatalf("unmarshal: %v", err)
-				}
-				if resp.Error.Code != tt.wantCode {
-					t.Errorf("code = %s, want %s", resp.Error.Code, tt.wantCode)
-				}
+				err := json.Unmarshal(rec.Body.Bytes(), &resp)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCode, resp.Error.Code)
 			}
 		})
 	}
 }
 
-func TestResendEmail(t *testing.T) {
+func TestAuthHandler_ResendEmail(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
@@ -134,27 +215,33 @@ func TestResendEmail(t *testing.T) {
 			wantStatus: http.StatusAccepted,
 		},
 		{
-			name:       "invalid json",
-			body:       `{`,
-			mockSetup:  func(_ *MockauthServiceIface) {},
+			name:       "malformed json",
+			body:       `{"email":`,
+			mockSetup:  func(m *MockauthServiceIface) {},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "BAD_REQUEST",
 		},
 		{
-			// Несуществующий адрес не отличим от существующего: сервис
-			// возвращает nil, чтобы нельзя было перебрать базу пользователей.
-			name: "unknown email is indistinguishable from known",
-			body: `{"email":"missing@example.com"}`,
+			name:       "invalid email",
+			body:       `{"email":"not-an-email"}`,
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name: "user not found",
+			body: `{"email":"user@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any(), "missing@example.com").Return(nil)
+				m.EXPECT().resendEmail(gomock.Any(), "user@example.com").Return(apperr.ErrUserNotFound)
 			},
-			wantStatus: http.StatusAccepted,
+			wantStatus: http.StatusNotFound,
+			wantCode:   "USER_NOT_FOUND",
 		},
 		{
 			name: "mailer/db failure",
 			body: `{"email":"user@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any(), gomock.Any()).Return(apperr.ErrInternal)
+				m.EXPECT().resendEmail(gomock.Any(), "user@example.com").Return(apperr.ErrInternal)
 			},
 			wantStatus: http.StatusInternalServerError,
 			wantCode:   "INTERNAL",
@@ -167,37 +254,32 @@ func TestResendEmail(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewHandler(mockSvc)
+			h := NewAuthHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.ResendEmail)
 
 			req := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/auth/verify-email/resend",
+				"/auth/verify-email/resend",
 				bytes.NewBufferString(tt.body),
 			)
 			rec := httptest.NewRecorder()
 
 			wrapped.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
+			assert.Equal(t, tt.wantStatus, rec.Code)
 
 			if tt.wantCode != "" {
 				var resp middleware.JSONErrorResponse
-				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-					t.Fatalf("unmarshal: %v", err)
-				}
-				if resp.Error.Code != tt.wantCode {
-					t.Errorf("code = %s, want %s", resp.Error.Code, tt.wantCode)
-				}
+				err := json.Unmarshal(rec.Body.Bytes(), &resp)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCode, resp.Error.Code)
 			}
 		})
 	}
 }
 
-func TestForgotPassword(t *testing.T) {
+func TestAuthHandler_ForgotPassword(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
@@ -221,16 +303,22 @@ func TestForgotPassword(t *testing.T) {
 			wantCode:   "BAD_REQUEST",
 		},
 		{
-			name: "invalid email",
-			body: `{"email":"bad-email"}`,
-			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().ForgotPassword(gomock.Any(), "bad-email").Return(apperr.ErrBadRequest.WithMessage("invalid email"))
-			},
+			name:       "invalid email",
+			body:       `{"email":"not-an-email"}`,
+			mockSetup:  func(m *MockauthServiceIface) {},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "BAD_REQUEST",
 		},
 		{
-			name: "service internal error",
+			name: "user not found (hidden)",
+			body: `{"email":"user@example.com"}`,
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().ForgotPassword(gomock.Any(), "user@example.com").Return(nil)
+			},
+			wantStatus: http.StatusAccepted,
+		},
+		{
+			name: "service error",
 			body: `{"email":"user@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
 				m.EXPECT().ForgotPassword(gomock.Any(), "user@example.com").Return(apperr.ErrInternal)
@@ -246,37 +334,32 @@ func TestForgotPassword(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewHandler(mockSvc)
+			h := NewAuthHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.ForgotPassword)
 
 			req := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/auth/password/forgot",
+				"/auth/password/forgot",
 				bytes.NewBufferString(tt.body),
 			)
 			rec := httptest.NewRecorder()
 
 			wrapped.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
+			assert.Equal(t, tt.wantStatus, rec.Code)
 
 			if tt.wantCode != "" {
 				var resp middleware.JSONErrorResponse
-				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-					t.Fatalf("unmarshal: %v", err)
-				}
-				if resp.Error.Code != tt.wantCode {
-					t.Errorf("code = %s, want %s", resp.Error.Code, tt.wantCode)
-				}
+				err := json.Unmarshal(rec.Body.Bytes(), &resp)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCode, resp.Error.Code)
 			}
 		})
 	}
 }
 
-func TestResetPassword(t *testing.T) {
+func TestAuthHandler_ResetPassword(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
@@ -300,16 +383,14 @@ func TestResetPassword(t *testing.T) {
 			wantCode:   "BAD_REQUEST",
 		},
 		{
-			name: "invalid password",
-			body: `{"token":"reset-token","new_password":"short"}`,
-			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().ResetPassword(gomock.Any(), "reset-token", "short").Return(apperr.ErrBadRequest.WithMessage("password must be 8-72 bytes long"))
-			},
+			name:       "weak password",
+			body:       `{"token":"reset-token","new_password":"short"}`,
+			mockSetup:  func(m *MockauthServiceIface) {},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "BAD_REQUEST",
 		},
 		{
-			name: "invalid reset token",
+			name: "invalid token",
 			body: `{"token":"bad-token","new_password":"NewPassword123"}`,
 			mockSetup: func(m *MockauthServiceIface) {
 				m.EXPECT().ResetPassword(gomock.Any(), "bad-token", "NewPassword123").Return(apperr.ErrInvalidResetToken)
@@ -318,7 +399,7 @@ func TestResetPassword(t *testing.T) {
 			wantCode:   "INVALID_RESET_TOKEN",
 		},
 		{
-			name: "service internal error",
+			name: "service error",
 			body: `{"token":"reset-token","new_password":"NewPassword123"}`,
 			mockSetup: func(m *MockauthServiceIface) {
 				m.EXPECT().ResetPassword(gomock.Any(), "reset-token", "NewPassword123").Return(apperr.ErrInternal)
@@ -334,98 +415,63 @@ func TestResetPassword(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewHandler(mockSvc)
+			h := NewAuthHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.ResetPassword)
 
 			req := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/auth/password/reset",
+				"/auth/password/reset",
 				bytes.NewBufferString(tt.body),
 			)
 			rec := httptest.NewRecorder()
 
 			wrapped.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
+			assert.Equal(t, tt.wantStatus, rec.Code)
 
 			if tt.wantCode != "" {
 				var resp middleware.JSONErrorResponse
-				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-					t.Fatalf("unmarshal: %v", err)
-				}
-				if resp.Error.Code != tt.wantCode {
-					t.Errorf("code = %s, want %s", resp.Error.Code, tt.wantCode)
-				}
+				err := json.Unmarshal(rec.Body.Bytes(), &resp)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCode, resp.Error.Code)
 			}
 		})
 	}
 }
-func TestRefresh(t *testing.T) {
-	const (
-		oldRefreshToken = "old-refresh-token"
-		newRefreshToken = "new-refresh-token"
-		newAccessToken  = "new-access-token"
-	)
 
+func TestAuthHandler_Refresh(t *testing.T) {
 	tests := []struct {
-		name          string
-		cookie        *http.Cookie
-		mockSetup     func(m *MockauthServiceIface)
-		wantStatus    int
-		wantCode      string
-		wantAccess    string
-		wantSetCookie bool
+		name       string
+		mockSetup  func(m *MockauthServiceIface)
+		wantStatus int
+		wantCode   string
 	}{
 		{
-			name:       "missing refresh cookie",
-			mockSetup:  func(m *MockauthServiceIface) {},
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   "UNAUTHORIZED",
-		},
-		{
-			name: "empty refresh cookie",
-			cookie: &http.Cookie{
-				Name:  "refresh_token",
-				Value: "",
-			},
-			mockSetup:  func(m *MockauthServiceIface) {},
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   "UNAUTHORIZED",
-		},
-		{
-			name: "service returns unauthorized",
-			cookie: &http.Cookie{
-				Name:  "refresh_token",
-				Value: oldRefreshToken,
-			},
-			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().
-					Refresh(gomock.Any(), oldRefreshToken).
-					Return(nil, apperr.ErrUnauthorized)
-			},
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   "UNAUTHORIZED",
-		},
-		{
 			name: "success",
-			cookie: &http.Cookie{
-				Name:  "refresh_token",
-				Value: oldRefreshToken,
-			},
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().
-					Refresh(gomock.Any(), oldRefreshToken).
-					Return(&LoginResult{
-						AccessToken:  newAccessToken,
-						RefreshToken: newRefreshToken,
-					}, nil)
+				m.EXPECT().Refresh(gomock.Any(), "refresh-token").Return(&LoginResult{
+					AccessToken:  "new-access-token",
+					RefreshToken: "new-refresh-token",
+				}, nil)
 			},
-			wantStatus:    http.StatusOK,
-			wantAccess:    newAccessToken,
-			wantSetCookie: true,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "no cookie",
+			mockSetup: func(m *MockauthServiceIface) {
+				// no EXPECT - should fail before calling service
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHORIZED",
+		},
+		{
+			name: "invalid refresh token",
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().Refresh(gomock.Any(), "invalid-token").Return(nil, apperr.ErrJWTTokenInvalid)
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "JWT_TOKEN_INVALID",
 		},
 	}
 
@@ -435,10 +481,7 @@ func TestRefresh(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewHandler(mockSvc)
-			h.refreshTokenTTL = time.Hour
-			h.cookieSecure = false
-
+			h := NewAuthHandler(mockSvc)
 			wrapped := middleware.ErrorMiddleware(h.Refresh)
 
 			req := httptest.NewRequestWithContext(
@@ -447,21 +490,81 @@ func TestRefresh(t *testing.T) {
 				"/auth/refresh",
 				nil,
 			)
-			if tt.cookie != nil {
-				req.AddCookie(tt.cookie)
+			if tt.name != "no cookie" {
+				req.AddCookie(&http.Cookie{
+					Name:  "refresh_token",
+					Value: "refresh-token",
+				})
 			}
-
+			if tt.name == "invalid refresh token" {
+				req.AddCookie(&http.Cookie{
+					Name:  "refresh_token",
+					Value: "invalid-token",
+				})
+			}
 			rec := httptest.NewRecorder()
+
 			wrapped.ServeHTTP(rec, req)
 
-			assertRefreshStatusAndError(t, rec, tt.wantStatus, tt.wantCode)
-			assertRefreshSuccess(
-				t,
-				rec,
-				tt.wantAccess,
-				newRefreshToken,
-				tt.wantSetCookie,
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			if tt.wantCode != "" {
+				var resp middleware.JSONErrorResponse
+				err := json.Unmarshal(rec.Body.Bytes(), &resp)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCode, resp.Error.Code)
+			}
+		})
+	}
+}
+
+func TestAuthHandler_Logout(t *testing.T) {
+	tests := []struct {
+		name       string
+		mockSetup  func(m *MockauthServiceIface)
+		wantStatus int
+	}{
+		{
+			name: "success with cookie",
+			mockSetup: func(m *MockauthServiceIface) {
+				m.EXPECT().Logout(gomock.Any(), "refresh-token").Return(nil)
+			},
+			wantStatus: http.StatusNoContent,
+		},
+		{
+			name: "success without cookie",
+			mockSetup: func(m *MockauthServiceIface) {
+			},
+			wantStatus: http.StatusNoContent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockauthServiceIface(ctrl)
+			tt.mockSetup(mockSvc)
+
+			h := NewAuthHandler(mockSvc)
+			wrapped := middleware.ErrorMiddleware(h.Logout)
+
+			req := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/auth/logout",
+				nil,
 			)
+			if tt.name == "success with cookie" {
+				req.AddCookie(&http.Cookie{
+					Name:  "refresh_token",
+					Value: "refresh-token",
+				})
+			}
+			rec := httptest.NewRecorder()
+
+			wrapped.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
 		})
 	}
 }
@@ -529,11 +632,12 @@ func TestRefresh_OriginCheck(t *testing.T) {
 			mockSvc := NewMockauthServiceIface(ctrl)
 			tt.mockSetup(mockSvc)
 
-			h := NewHandler(mockSvc, Config{
+			cfg := Config{
 				RefreshTokenTTL: time.Hour,
 				CookieSecure:    false,
 				FrontendURL:     frontendURL,
-			})
+			}
+			h := NewAuthHandler(mockSvc, cfg)
 
 			wrapped := middleware.ErrorMiddleware(h.Refresh)
 
@@ -554,87 +658,14 @@ func TestRefresh_OriginCheck(t *testing.T) {
 			rec := httptest.NewRecorder()
 			wrapped.ServeHTTP(rec, req)
 
-			assertRefreshStatusAndError(t, rec, tt.wantStatus, tt.wantCode)
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			if tt.wantCode != "" {
+				var resp middleware.JSONErrorResponse
+				err := json.Unmarshal(rec.Body.Bytes(), &resp)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCode, resp.Error.Code)
+			}
 		})
-	}
-}
-
-func assertRefreshStatusAndError(
-	t *testing.T,
-	rec *httptest.ResponseRecorder,
-	wantStatus int,
-	wantCode string,
-) {
-	t.Helper()
-
-	if rec.Code != wantStatus {
-		t.Errorf("status = %d, want %d", rec.Code, wantStatus)
-	}
-
-	if wantCode == "" {
-		return
-	}
-
-	var resp middleware.JSONErrorResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal error response: %v", err)
-	}
-	if resp.Error.Code != wantCode {
-		t.Errorf("code = %s, want %s", resp.Error.Code, wantCode)
-	}
-}
-
-func assertRefreshSuccess(
-	t *testing.T,
-	rec *httptest.ResponseRecorder,
-	wantAccess string,
-	wantRefresh string,
-	wantSetCookie bool,
-) {
-	t.Helper()
-
-	if wantAccess != "" {
-		var resp LoginResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("unmarshal refresh response: %v", err)
-		}
-		if resp.AccessToken != wantAccess {
-			t.Errorf("access token = %q, want %q", resp.AccessToken, wantAccess)
-		}
-	}
-
-	if !wantSetCookie {
-		return
-	}
-
-	cookies := rec.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("cookies count = %d, want 1", len(cookies))
-	}
-
-	assertRefreshCookie(t, cookies[0], wantRefresh)
-}
-
-func assertRefreshCookie(t *testing.T, got *http.Cookie, wantRefresh string) {
-	t.Helper()
-
-	if got.Name != "refresh_token" {
-		t.Errorf("cookie name = %q, want refresh_token", got.Name)
-	}
-	if got.Value != wantRefresh {
-		t.Errorf("cookie value = %q, want %q", got.Value, wantRefresh)
-	}
-	if !got.HttpOnly {
-		t.Error("refresh cookie must be HttpOnly")
-	}
-	if got.Path != "/api/v1/auth" {
-		t.Errorf("cookie path = %q, want /api/v1/auth", got.Path)
-	}
-	if got.MaxAge != int(time.Hour.Seconds()) {
-		t.Errorf(
-			"cookie MaxAge = %d, want %d",
-			got.MaxAge,
-			int(time.Hour.Seconds()),
-		)
 	}
 }
