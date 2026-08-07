@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -216,6 +217,7 @@ type AuthConfig struct {
 	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
 	CookieSecure             bool          `mapstructure:"cookie_secure"`
 	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
+	RegisterRateLimit        int           `mapstructure:"register_rate_limit"`
 	RefreshRateLimit         int           `mapstructure:"refresh_rate_limit"`
 	PackRateLimit            int           `mapstructure:"pack_rate_limit"`
 	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit"`
@@ -423,6 +425,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.reset_password_token_ttl", "1h")
 	v.SetDefault("auth.bcrypt_cost", 12)
 	v.SetDefault("auth.login_rate_limit", 5)
+	v.SetDefault("auth.register_rate_limit", 5)
 	v.SetDefault("auth.refresh_rate_limit", 10)
 	v.SetDefault("auth.require_email_verification", false)
 	v.SetDefault("auth.cookie_secure", false)
@@ -472,9 +475,8 @@ func setDefaults(v *viper.Viper) {
 // validateConfig validates required configuration fields.
 func validateConfig(cfg *Config) error {
 	// App validation
-	cfg.App.Env = strings.TrimSpace(cfg.App.Env)
-	if cfg.App.Env == "" {
-		return fmt.Errorf("app.env is required")
+	if err := validateAppConfig(&cfg.App); err != nil {
+		return err
 	}
 
 	// Production validation
@@ -495,34 +497,78 @@ func validateConfig(cfg *Config) error {
 	}
 
 	// MinIO validation
-	if cfg.MinIO.Endpoint == "" {
-		return fmt.Errorf("minio.endpoint is required")
-	}
-	if cfg.MinIO.AccessKey == "" {
-		return fmt.Errorf("minio.access_key is required")
-	}
-	if cfg.MinIO.SecretKey == "" {
-		return fmt.Errorf("minio.secret_key is required")
-	}
-	if cfg.MinIO.Bucket == "" {
-		return fmt.Errorf("minio.bucket is required")
+	if err := validateMinioConfig(&cfg.MinIO); err != nil {
+		return err
 	}
 
 	// JWT validation
-	if cfg.JWT.Secret == "" {
-		return fmt.Errorf("jwt.secret is required")
-	}
-	if len(cfg.JWT.Secret) < 32 {
-		return fmt.Errorf("jwt.secret must be at least 32 characters")
+	if err := validateJWTConfig(&cfg.JWT); err != nil {
+		return err
 	}
 
-	if len(cfg.Crypto.AESKey) == 0 || len(cfg.Crypto.HMACKey) == 0 {
-		aesKey, hmacKey, err := decodeConfiguredCryptoKeys(cfg.Crypto.AESKeyRaw, cfg.Crypto.HMACKeyRaw)
-		if err != nil {
-			return err
-		}
-		cfg.Crypto.AESKey = aesKey
-		cfg.Crypto.HMACKey = hmacKey
+	// Crypto validation
+	if err := validateCryptoCongig(&cfg.Crypto); err != nil {
+		return err
 	}
+	return nil
+}
+
+func validateAppConfig(cfg *AppConfig) error {
+	if cfg.Env == "" {
+		return fmt.Errorf("app.env is required")
+	}
+	if cfg.FrontendURL == "" {
+		return fmt.Errorf("app.frontend_url is required")
+	}
+	if u, err := url.Parse(cfg.FrontendURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("app.frontend_url must be an absolute URL (scheme and host)")
+	}
+	return nil
+}
+
+func validateMinioConfig(cfg *MinIOConfig) error {
+	if cfg.Endpoint == "" {
+		return fmt.Errorf("minio.endpoint is required")
+	}
+	if cfg.AccessKey == "" {
+		return fmt.Errorf("minio.access_key is required")
+	}
+	if cfg.SecretKey == "" {
+		return fmt.Errorf("minio.secret_key is required")
+	}
+	if cfg.Bucket == "" {
+		return fmt.Errorf("minio.bucket is required")
+	}
+	return nil
+}
+
+func validateJWTConfig(cfg *JWTConfig) error {
+	if cfg.Secret == "" {
+		return fmt.Errorf("jwt.secret is required")
+	}
+	if len(cfg.Secret) < 32 {
+		return fmt.Errorf("jwt.secret must be at least 32 characters")
+	}
+	return nil
+}
+
+func validateCryptoCongig(cfg *CryptoConfig) error {
+	aes, err := base64.StdEncoding.DecodeString(cfg.AESKeyRaw)
+	if err != nil {
+		return fmt.Errorf("crypto.aes_key: invalid base64: %w", err)
+	}
+	if len(aes) != 32 {
+		return fmt.Errorf("crypto.aes_key: must be 32 bytes, got %d", len(aes))
+	}
+	cfg.AESKey = aes
+
+	hmacKey, err := base64.StdEncoding.DecodeString(cfg.HMACKeyRaw)
+	if err != nil {
+		return fmt.Errorf("crypto.hmac_key: invalid base64: %w", err)
+	}
+	if len(hmacKey) < 32 {
+		return fmt.Errorf("crypto.hmac_key: must be at least 32 bytes, got %d", len(hmacKey))
+	}
+	cfg.HMACKey = hmacKey
 	return nil
 }

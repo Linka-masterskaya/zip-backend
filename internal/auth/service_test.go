@@ -12,6 +12,10 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/google/uuid"
+	pgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -28,6 +32,11 @@ type fakeCache struct {
 	revokeCalls   int
 	revokedUserID string
 	revokeErr     error
+}
+
+type rollbackSpyTx struct {
+	rollbackCalls int
+	commitCalls   int
 }
 
 func (f *fakeCache) StoreRefresh(
@@ -61,6 +70,10 @@ func (f *fakeCrypto) Hash(_ []byte) []byte {
 
 func (f *fakeCrypto) Decrypt(_ []byte) ([]byte, error) {
 	return nil, nil
+}
+
+func (f *fakeCrypto) Encrypt(data []byte) ([]byte, error) {
+	return data, nil
 }
 
 type fakeRateLimiter struct {
@@ -607,6 +620,112 @@ func TestAuthService_Refresh_RotateError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected rotate refresh error")
 	}
+}
+
+// Register tests.
+func (tx *rollbackSpyTx) Begin(ctx context.Context) (pgx.Tx, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (tx *rollbackSpyTx) Commit(ctx context.Context) error {
+	tx.commitCalls++
+	return nil
+}
+
+func (tx *rollbackSpyTx) Rollback(ctx context.Context) error {
+	tx.rollbackCalls++
+	return nil
+}
+
+func (tx *rollbackSpyTx) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (tx *rollbackSpyTx) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	return nil
+}
+
+func (tx *rollbackSpyTx) LargeObjects() pgx.LargeObjects {
+	return pgx.LargeObjects{}
+}
+
+func (tx *rollbackSpyTx) Prepare(ctx context.Context, name string, sql string) (*pgconn.StatementDescription, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (tx *rollbackSpyTx) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, errors.New("not implemented")
+}
+
+func (tx *rollbackSpyTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (tx *rollbackSpyTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return nil
+}
+
+func (tx *rollbackSpyTx) Conn() *pgx.Conn {
+	return nil
+}
+
+func TestAuthService_Register_RollbackOnCreateUserError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+	txRepo := NewMockauthRepoIface(ctrl)
+	crypto := NewMockcryptoService(ctrl)
+
+	tx := &rollbackSpyTx{}
+
+	email := "user@example.com"
+	emailHash := []byte("email-hash")
+	createUserErr := errors.New("create user failed")
+
+	crypto.EXPECT().
+		Hash([]byte(email)).
+		Return(emailHash)
+
+	repo.EXPECT().
+		EmailExists(gomock.Any(), emailHash).
+		Return(false, nil)
+
+	crypto.EXPECT().
+		Encrypt([]byte(email)).
+		Return([]byte("encrypted-email"), nil)
+
+	repo.EXPECT().
+		beginTx(gomock.Any()).
+		Return(tx, nil)
+
+	repo.EXPECT().
+		withTx(tx).
+		Return(txRepo)
+
+	txRepo.EXPECT().
+		CreateOrganization(gomock.Any(), gomock.Any()).
+		Return(nil)
+
+	txRepo.EXPECT().
+		CreateUser(gomock.Any(), gomock.Any()).
+		Return(createUserErr)
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		&registerMailerFake{},
+		testAuthConfig(),
+		crypto,
+	)
+
+	err := svc.Register(context.Background(), RegisterRequest{
+		Email:    " user@example.com ",
+		Password: "strongpass123",
+	})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "create user")
+	assert.Equal(t, 1, tx.rollbackCalls)
+	assert.Equal(t, 0, tx.commitCalls)
 }
 
 func testResendConfig() Config {

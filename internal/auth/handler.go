@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
@@ -20,6 +21,7 @@ type authServiceIface interface {
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
 	resendEmail(ctx context.Context, email string) error
+	Register(ctx context.Context, req RegisterRequest) error
 }
 
 // Handler serves authentication HTTP endpoints.
@@ -27,6 +29,7 @@ type Handler struct {
 	svc             authServiceIface
 	refreshTokenTTL time.Duration
 	cookieSecure    bool
+	frontendOrigin  string
 }
 
 // NewHandler creates an auth HTTP handler.
@@ -38,6 +41,7 @@ func NewHandler(svc authServiceIface, cfg ...Config) *Handler {
 	if len(cfg) > 0 {
 		h.refreshTokenTTL = cfg[0].RefreshTokenTTL
 		h.cookieSecure = cfg[0].CookieSecure
+		h.frontendOrigin = originOf(cfg[0].FrontendURL)
 	}
 
 	return h
@@ -66,6 +70,12 @@ type ResendEmailRequest struct {
 type ResetPasswordRequest struct {
 	Token       string `json:"token"`
 	NewPassword string `json:"new_password"`
+}
+
+// RegisterRequest описывает тело запроса на регистрацию по email.
+type RegisterRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) error {
@@ -98,11 +108,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) error {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    result.RefreshToken,
-		Path:     "/",
+		Path:     "/api/v1/auth",
 		MaxAge:   int(h.refreshTokenTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -182,6 +192,10 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
+	if err := h.checkOrigin(r); err != nil {
+		return err
+	}
+
 	cookie, err := r.Cookie("refresh_token")
 	if errors.Is(err, http.ErrNoCookie) {
 		return apperr.ErrUnauthorized
@@ -211,11 +225,11 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    result.RefreshToken,
-		Path:     "/",
+		Path:     "/api/v1/auth",
 		MaxAge:   int(h.refreshTokenTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -230,6 +244,9 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
 
 // Logout revokes the refresh token family and clears the cookie.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) error {
+	if err := h.checkOrigin(r); err != nil {
+		return err
+	}
 	if cookie, err := r.Cookie("refresh_token"); err == nil {
 		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
 			return err
@@ -240,13 +257,70 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) error {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    "",
-		Path:     "/",
+		Path:     "/api/v1/auth",
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+// checkOrigin rejects cross-site refresh requests by comparing the Origin
+// (falling back to Referer) request header against app.frontend_url. It is
+// a defense-in-depth measure against CSRF alongside the SameSite=Strict
+// refresh cookie.
+func (h *Handler) checkOrigin(r *http.Request) error {
+	if h.frontendOrigin == "" {
+		return nil
+	}
+
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		if referer := r.Header.Get("Referer"); referer != "" {
+			origin = originOf(referer)
+		}
+	}
+
+	if origin == "" || origin != h.frontendOrigin {
+		return apperr.ErrForbidden
+	}
+
+	return nil
+}
+
+// originOf returns the URL scheme and host,
+// which is necessary for comparison with the Origin request header.
+func originOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+
+	return u.Scheme + "://" + u.Host
+}
+
+func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
+	}
+	if err := ValidatePassword(req.Password); err != nil {
+		return err
+	}
+
+	err := h.svc.Register(r.Context(), req)
+	if err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusCreated)
+
 	return nil
 }

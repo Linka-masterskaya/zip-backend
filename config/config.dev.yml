@@ -119,6 +119,7 @@ auth:
   email_change_token_ttl: 1h
   bcrypt_cost: 12
   login_rate_limit: 5
+  register_rate_limit: 5
   refresh_rate_limit: 10
   require_email_verification: false
   pack_rate_limit: 60
