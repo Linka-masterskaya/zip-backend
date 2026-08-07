@@ -300,6 +300,8 @@ func originOf(rawURL string) string {
 	}
 
 	return u.Scheme + "://" + u.Host
+}
+
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
