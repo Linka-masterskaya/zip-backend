@@ -90,6 +90,13 @@ type Config struct {
 	RequireEmailVerification bool
 	CookieSecure             bool
 	BcryptCost               int
+	RateLimit                RateLimitPolicy
+}
+
+type RateLimitPolicy struct {
+	Scope  string
+	Limit  int64
+	Window time.Duration
 }
 
 type LoginResult struct {
