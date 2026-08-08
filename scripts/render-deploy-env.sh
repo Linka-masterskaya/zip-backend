@@ -23,10 +23,12 @@ def fail(message: str) -> None:
 def compose_quote(value: str, source_key: str) -> str:
     if "\x00" in value or "\n" in value or "\r" in value:
         fail(f"{source_key} contains a forbidden control character")
-    escaped = value.replace("\\", "\\\\")
-    escaped = escaped.replace('"', '\\"')
-    escaped = escaped.replace("$", "$$")
-    return f'"{escaped}"'
+
+    # Compose treats single-quoted .env values literally. This prevents `$`
+    # interpolation while preserving backslashes and double quotes. Only an
+    # embedded single quote needs escaping in this format.
+    escaped = value.replace("'", "\\'")
+    return f"'{escaped}'"
 
 
 template = Path(sys.argv[1])

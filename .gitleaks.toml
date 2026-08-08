@@ -20,5 +20,8 @@ description = "Exact historical CI-only fixtures for commit-tree scanning"
 regexes = [
   '''^prod_minio_secret_123456789$''',
   '''^prod_jwt_secret_123456789012345678901234567890$''',
-  '''^prod_grafana_password_123456789$'''
+  '''^prod_grafana_password_123456789$''',
+  # Pre-existing synthetic JWT test fixture. Kept only so commit-tree scans
+  # of older PR commits do not fail on a non-production test value.
+  '''^10\+NIwWoxrsvQx4UyepsXSe4R2s2G\+41hft5dM4Skw0=$'''
 ]

@@ -99,6 +99,7 @@ jobs:
           CI_CONFIG_PATH: config/config.prod.yml
           CI_APP_PUBLIC_URL: ${{ vars.APP_PUBLIC_URL }}
           CI_APP_FRONTEND_URL: ${{ vars.APP_FRONTEND_URL }}
+          CI_CORS_ALLOW_ORIGINS: ${{ vars.CORS_ALLOW_ORIGINS }}
           CI_VERSION: ${{ needs.build-and-push.outputs.version }}
           CI_DB_URL: ${{ secrets.DB_URL }}
           CI_POSTGRES_USER: ${{ secrets.POSTGRES_USER }}

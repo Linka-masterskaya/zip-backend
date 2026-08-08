@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const testSecret = "10+NIwWoxrsvQx4UyepsXSe4R2s2G+41hft5dM4Skw0="
+const testSecret = "test-only-jwt-secret-aaaaaaaaaaaaaaaa"
 
 type testJWT struct {
 	sign    string
