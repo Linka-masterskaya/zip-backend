@@ -116,22 +116,17 @@ services:
     environment:
       ROUNDTRIP: ${ROUNDTRIP}
 YAML
-  docker compose --env-file "$TMP_DIR/roundtrip.env" \
-    -f "$TMP_DIR/compose.yaml" config --format json > "$TMP_DIR/compose.json"
-  EXPECTED_ROUNDTRIP="$SPECIAL_PASSWORD" python3 - "$TMP_DIR/compose.json" <<'PY'
-import json
-import os
-import sys
+  ROUNDTRIP_ACTUAL=$(
+    docker compose \
+      --env-file "$TMP_DIR/roundtrip.env" \
+      -f "$TMP_DIR/compose.yaml" \
+      run --rm --no-deps -T check \
+      sh -c 'printf "%s" "$ROUNDTRIP"'
+  )
 
-with open(sys.argv[1], encoding="utf-8") as source:
-    config = json.load(source)
-actual = config["services"]["check"]["environment"]["ROUNDTRIP"]
-expected = os.environ["EXPECTED_ROUNDTRIP"]
-if actual != expected:
-    raise SystemExit(
-        f"Docker Compose changed the rendered fixture value: expected={expected!r}, actual={actual!r}"
-    )
-PY
+  if [ "$ROUNDTRIP_ACTUAL" != "$SPECIAL_PASSWORD" ]; then
+    fail "Docker Compose changed the runtime fixture value"
+  fi
 fi
 
 # Restore ordinary valid values for mutation-based negative tests.
