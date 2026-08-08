@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,8 +27,9 @@ import (
 const (
 	e2eAuthEmail    = "refresh@example.com"
 	e2eAuthPassword = "correct-password"
-	e2eAuthSecret   = "01234567890123456789012345678901"
 )
+
+var e2eAuthSecret = strings.Repeat("e", 40)
 
 func TestE2E_RefreshTokenLifecycle(t *testing.T) {
 	pool := e2eDatabase(t)

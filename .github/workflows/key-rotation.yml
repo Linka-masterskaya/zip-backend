@@ -1,0 +1,148 @@
+name: Production key audit and rotation
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Audit active fingerprints, check database keys, or apply database rotation
+        type: choice
+        required: true
+        default: audit
+        options:
+          - audit
+          - check
+          - apply
+      maintenance_confirmed:
+        description: Application writes are stopped or maintenance mode is active
+        type: boolean
+        required: true
+        default: false
+      backup_confirmed:
+        description: A verified PostgreSQL backup exists
+        type: boolean
+        required: true
+        default: false
+      confirmation:
+        description: Enter ROTATE_CRYPTO_KEYS only for apply
+        type: string
+        required: false
+      rotation_image:
+        description: Immutable server image containing rotate-crypto (ghcr.io/.../server@sha256:...)
+        type: string
+        required: false
+
+jobs:
+  production-key-operation:
+    name: Production key operation
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: production-key-rotation
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Audit active GitHub Environment secrets
+        env:
+          OPERATION: ${{ inputs.operation }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CRYPTO_AES_KEY: ${{ secrets.CRYPTO_AES_KEY }}
+          CRYPTO_HMAC_KEY: ${{ secrets.CRYPTO_HMAC_KEY }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$OPERATION" != "audit" ]; then
+            args+=(--report-only)
+          fi
+          bash scripts/audit-secret-fingerprints.sh "${args[@]}" \
+            JWT_SECRET CRYPTO_AES_KEY CRYPTO_HMAC_KEY
+
+      - name: Validate requested database operation
+        if: inputs.operation != 'audit'
+        env:
+          OPERATION: ${{ inputs.operation }}
+          MAINTENANCE_CONFIRMED: ${{ inputs.maintenance_confirmed }}
+          BACKUP_CONFIRMED: ${{ inputs.backup_confirmed }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ROTATION_IMAGE: ${{ inputs.rotation_image }}
+          OLD_AES_KEY: ${{ secrets.ROTATION_OLD_AES_KEY }}
+          OLD_HMAC_KEY: ${{ secrets.ROTATION_OLD_HMAC_KEY }}
+          NEW_AES_KEY: ${{ secrets.ROTATION_NEW_AES_KEY }}
+          NEW_HMAC_KEY: ${{ secrets.ROTATION_NEW_HMAC_KEY }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$ROTATION_IMAGE" | grep -Eq '^ghcr\.io/linka-masterskaya/zip-backend/server@sha256:[0-9a-f]{64}$'; then
+            echo "rotation_image must be the immutable GHCR server image digest" >&2
+            exit 1
+          fi
+          for value in "$OLD_AES_KEY" "$OLD_HMAC_KEY" "$NEW_AES_KEY" "$NEW_HMAC_KEY"; do
+            [ -n "$value" ] || { echo "rotation secrets are not configured" >&2; exit 1; }
+          done
+          if [ "$OPERATION" = "apply" ]; then
+            [ "$MAINTENANCE_CONFIRMED" = "true" ] || { echo "maintenance confirmation is required" >&2; exit 1; }
+            [ "$BACKUP_CONFIRMED" = "true" ] || { echo "backup confirmation is required" >&2; exit 1; }
+            [ "$CONFIRMATION" = "ROTATE_CRYPTO_KEYS" ] || { echo "invalid apply confirmation" >&2; exit 1; }
+          fi
+
+      - name: Run database-backed key operation
+        if: inputs.operation != 'audit'
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          ROTATION_MODE: ${{ inputs.operation }}
+          ROTATION_CONFIRM: ${{ inputs.confirmation }}
+          ROTATION_IMAGE: ${{ inputs.rotation_image }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          ROTATION_OLD_AES_KEY: ${{ secrets.ROTATION_OLD_AES_KEY }}
+          ROTATION_OLD_HMAC_KEY: ${{ secrets.ROTATION_OLD_HMAC_KEY }}
+          ROTATION_NEW_AES_KEY: ${{ secrets.ROTATION_NEW_AES_KEY }}
+          ROTATION_NEW_HMAC_KEY: ${{ secrets.ROTATION_NEW_HMAC_KEY }}
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          envs: ROTATION_MODE,ROTATION_CONFIRM,ROTATION_IMAGE,REGISTRY_USERNAME,REGISTRY_TOKEN,ROTATION_OLD_AES_KEY,ROTATION_OLD_HMAC_KEY,ROTATION_NEW_AES_KEY,ROTATION_NEW_HMAC_KEY
+          script: |
+            set -eu
+            cd ~/zip-backend
+
+            if ! printf '%s' "$ROTATION_IMAGE" | grep -Eq '^ghcr\.io/linka-masterskaya/zip-backend/server@sha256:[0-9a-f]{64}$'; then
+              echo "invalid immutable rotation image reference" >&2
+              exit 1
+            fi
+
+            override_file=$(mktemp)
+            trap 'rm -f "$override_file"' EXIT HUP INT TERM
+            {
+              printf 'services:\n'
+              printf '  zip-backend:\n'
+              printf '    image: %s\n' "$ROTATION_IMAGE"
+            } > "$override_file"
+            chmod 600 "$override_file"
+
+            printf '%s' "$REGISTRY_TOKEN" | \
+              docker login ghcr.io -u "$REGISTRY_USERNAME" --password-stdin >/dev/null
+            docker pull "$ROTATION_IMAGE"
+            docker compose \
+              --project-directory "$PWD" \
+              -f docker-compose.server.yaml \
+              -f "$override_file" \
+              config >/dev/null
+            docker compose \
+              --project-directory "$PWD" \
+              -f docker-compose.server.yaml \
+              -f "$override_file" \
+              run --rm --no-deps \
+              --entrypoint ./rotate-crypto \
+              -e ROTATION_MODE \
+              -e ROTATION_CONFIRM \
+              -e ROTATION_OLD_AES_KEY \
+              -e ROTATION_OLD_HMAC_KEY \
+              -e ROTATION_NEW_AES_KEY \
+              -e ROTATION_NEW_HMAC_KEY \
+              zip-backend
