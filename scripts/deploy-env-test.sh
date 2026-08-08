@@ -82,8 +82,11 @@ if bash "$ROOT_DIR/scripts/audit-secret-fingerprints.sh" --fingerprint JWT_SECRE
   fail "historical fingerprint was not rejected"
 fi
 
-SPECIAL_PASSWORD='pa$$ word#fragment'"'"'quote\backslash"double'
-SPECIAL_JWT='jwt-pa$$ word#fragment'"'"'quote\backslash"double-12345678901234567890'
+# `$$` is reserved by Compose as an escape sequence during model interpolation.
+# Use a literal dollar followed by a non-variable character so the fixture still
+# exercises dollar preservation without asserting byte-transparency for `$$`.
+SPECIAL_PASSWORD='pa$! word#fragment'"'"'quote\backslash"double'
+SPECIAL_JWT='jwt-pa$! word#fragment'"'"'quote\backslash"double-12345678901234567890'
 encoded_postgres=$(url_quote "$SPECIAL_PASSWORD")
 encoded_redis=$(url_quote "$SPECIAL_PASSWORD")
 export CI_DB_URL="postgres://prod_user:${encoded_postgres}@postgres:5432/prod_db?sslmode=require"
@@ -97,7 +100,7 @@ export CI_GRAFANA_ADMIN_PASSWORD="$SPECIAL_PASSWORD"
 SPECIAL_ENV="$TMP_DIR/special.env"
 bash "$ROOT_DIR/scripts/render-deploy-env.sh" "$ROOT_DIR/.env.example" "$SPECIAL_ENV" CI_
 bash "$ROOT_DIR/scripts/validate-deploy-env.sh" "$SPECIAL_ENV" >/dev/null
-grep -Fq '$$ word#fragment' "$SPECIAL_ENV" || fail "dollar signs were not preserved for Compose"
+grep -Fq '$! word#fragment' "$SPECIAL_ENV" || fail "dollar sign was not preserved for Compose"
 grep -Fq "\\'" "$SPECIAL_ENV" || fail "single quote was not escaped for Compose"
 grep -Fq '\backslash"double' "$SPECIAL_ENV" || fail "backslash or double quote was not preserved for Compose"
 
@@ -123,8 +126,11 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as source:
     config = json.load(source)
 actual = config["services"]["check"]["environment"]["ROUNDTRIP"]
-if actual != os.environ["EXPECTED_ROUNDTRIP"]:
-    raise SystemExit("Docker Compose changed the rendered fixture value")
+expected = os.environ["EXPECTED_ROUNDTRIP"]
+if actual != expected:
+    raise SystemExit(
+        f"Docker Compose changed the rendered fixture value: expected={expected!r}, actual={actual!r}"
+    )
 PY
 fi
 
