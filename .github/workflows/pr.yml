@@ -135,8 +135,8 @@ jobs:
             -v "$scan_dir:/repo:ro" \
             -v "$GITHUB_WORKSPACE/.gitleaks.toml:/gitleaks.toml:ro" \
             "$GITLEAKS_IMAGE" \
-            dir --source=/repo --config=/gitleaks.toml \
-            --redact --no-banner
+            dir --config=/gitleaks.toml \
+            --redact --no-banner /repo
 
       - name: Scan every commit introduced by the pull request
         env:
@@ -166,8 +166,8 @@ jobs:
               -v "$tree_dir:/repo:ro" \
               -v "$GITHUB_WORKSPACE/.gitleaks.toml:/gitleaks.toml:ro" \
               "$GITLEAKS_IMAGE" \
-              dir --source=/repo --config=/gitleaks.toml \
-              --redact --no-banner
+              dir --config=/gitleaks.toml \
+              --redact --no-banner /repo
           done < <(git rev-list --reverse "${merge_base}..${HEAD_SHA}")
 
           if [ "$commit_count" -eq 0 ]; then
@@ -186,8 +186,8 @@ jobs:
             -v "$scan_dir:/scan:ro" \
             -v "$GITHUB_WORKSPACE/.gitleaks.toml:/gitleaks.toml:ro" \
             "$GITLEAKS_IMAGE" \
-            dir --source=/scan --config=/gitleaks.toml \
-            --redact --no-banner >/dev/null 2>&1; then
+            dir --config=/gitleaks.toml \
+            --redact --no-banner /scan >/dev/null 2>&1; then
             echo "Gitleaks negative control was not detected" >&2
             exit 1
           fi
@@ -220,8 +220,8 @@ jobs:
               -v "$tree_dir:/scan:ro" \
               -v "$GITHUB_WORKSPACE/.gitleaks.toml:/gitleaks.toml:ro" \
               "$GITLEAKS_IMAGE" \
-              dir --source=/scan --config=/gitleaks.toml \
-              --redact --no-banner >/dev/null 2>&1; then
+              dir --config=/gitleaks.toml \
+              --redact --no-banner /scan >/dev/null 2>&1; then
               detected=true
               break
             fi

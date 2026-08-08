@@ -475,6 +475,7 @@ func setDefaults(v *viper.Viper) {
 // validateConfig validates required configuration fields.
 func validateConfig(cfg *Config) error {
 	// App validation
+	cfg.App.Env = strings.TrimSpace(cfg.App.Env)
 	if err := validateAppConfig(&cfg.App); err != nil {
 		return err
 	}
@@ -553,22 +554,13 @@ func validateJWTConfig(cfg *JWTConfig) error {
 }
 
 func validateCryptoCongig(cfg *CryptoConfig) error {
-	aes, err := base64.StdEncoding.DecodeString(cfg.AESKeyRaw)
-	if err != nil {
-		return fmt.Errorf("crypto.aes_key: invalid base64: %w", err)
+	if len(cfg.AESKey) == 0 || len(cfg.HMACKey) == 0 {
+		aesKey, hmacKey, err := decodeConfiguredCryptoKeys(cfg.AESKeyRaw, cfg.HMACKeyRaw)
+		if err != nil {
+			return err
+		}
+		cfg.AESKey = aesKey
+		cfg.HMACKey = hmacKey
 	}
-	if len(aes) != 32 {
-		return fmt.Errorf("crypto.aes_key: must be 32 bytes, got %d", len(aes))
-	}
-	cfg.AESKey = aes
-
-	hmacKey, err := base64.StdEncoding.DecodeString(cfg.HMACKeyRaw)
-	if err != nil {
-		return fmt.Errorf("crypto.hmac_key: invalid base64: %w", err)
-	}
-	if len(hmacKey) < 32 {
-		return fmt.Errorf("crypto.hmac_key: must be at least 32 bytes, got %d", len(hmacKey))
-	}
-	cfg.HMACKey = hmacKey
 	return nil
 }

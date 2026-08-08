@@ -73,6 +73,10 @@ def decode_double_quoted(raw: str, line_number: int) -> tuple[str, str]:
         if char == '"':
             return "".join(chars), raw[index + 1 :]
         if char == "$":
+            if index + 1 < len(raw) and raw[index + 1] == "$":
+                chars.append("$")
+                index += 2
+                continue
             fail(f"line {line_number} contains unescaped Compose interpolation")
         if char != "\\":
             chars.append(char)

@@ -97,7 +97,7 @@ export CI_GRAFANA_ADMIN_PASSWORD="$SPECIAL_PASSWORD"
 SPECIAL_ENV="$TMP_DIR/special.env"
 bash "$ROOT_DIR/scripts/render-deploy-env.sh" "$ROOT_DIR/.env.example" "$SPECIAL_ENV" CI_
 bash "$ROOT_DIR/scripts/validate-deploy-env.sh" "$SPECIAL_ENV" >/dev/null
-grep -Fq '\$\$ word#fragment' "$SPECIAL_ENV" || fail "dollar signs were not escaped for Compose"
+grep -Fq '$$$$ word#fragment' "$SPECIAL_ENV" || fail "dollar signs were not escaped for Compose"
 grep -Fq '\\backslash\"double' "$SPECIAL_ENV" || fail "backslash or quote was not escaped for Compose"
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then

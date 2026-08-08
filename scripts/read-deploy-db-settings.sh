@@ -23,6 +23,12 @@ def decode_rendered_value(raw: str, line_number: int) -> str:
     index = 1
     while index < len(value) - 1:
         char = value[index]
+        if char == "$":
+            if index + 1 < len(value) - 1 and value[index + 1] == "$":
+                chars.append("$")
+                index += 2
+                continue
+            fail(f"line {line_number} contains unescaped Compose interpolation")
         if char != "\\":
             chars.append(char)
             index += 1

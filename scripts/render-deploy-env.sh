@@ -25,7 +25,7 @@ def compose_quote(value: str, source_key: str) -> str:
         fail(f"{source_key} contains a forbidden control character")
     escaped = value.replace("\\", "\\\\")
     escaped = escaped.replace('"', '\\"')
-    escaped = escaped.replace("$", "\\$")
+    escaped = escaped.replace("$", "$$")
     return f'"{escaped}"'
 
 
