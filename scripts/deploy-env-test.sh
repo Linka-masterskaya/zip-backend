@@ -43,8 +43,8 @@ export CI_REDIS_URL='redis://:prod%40redis%3Apassword_123456@redis:6379/0'
 export CI_REDIS_PASSWORD='prod@redis:password_123456'
 export CI_MINIO_ENDPOINT=minio:9000
 export CI_MINIO_ACCESS_KEY=prod_minio_access_123456
-export CI_MINIO_SECRET_KEY=prod_minio_secret_123456789
-export CI_JWT_SECRET=prod_jwt_secret_123456789012345678901234567890
+export CI_MINIO_SECRET_KEY=test-only-minio-secret-aaaaaaaa
+export CI_JWT_SECRET=test-only-jwt-secret-aaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export CI_CRYPTO_AES_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
 export CI_CRYPTO_HMAC_KEY=YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJi
 export CI_SMTP_HOST=smtp.yandex.ru
@@ -52,7 +52,7 @@ export CI_SMTP_USERNAME=noreply@example.com
 export CI_SMTP_PASSWORD=prod_smtp_password_123456789
 export CI_SMTP_FROM_EMAIL=noreply@example.com
 export CI_SMTP_REQUIRE_FROM_MATCH=true
-export CI_GRAFANA_ADMIN_PASSWORD=prod_grafana_password_123456789
+export CI_GRAFANA_ADMIN_PASSWORD=test-only-grafana-password-aaaaaaaa
 export CI_CADDY_DOMAIN_NAME=example.com
 export CI_CADDY_LETSENCRYPT_EMAIL=admin@example.com
 
@@ -61,7 +61,7 @@ bash "$ROOT_DIR/scripts/render-deploy-env.sh" "$ROOT_DIR/.env.example" "$VALID_E
 bash "$ROOT_DIR/scripts/validate-deploy-env.sh" "$VALID_ENV" >/dev/null
 [ "$(stat -c '%a' "$VALID_ENV")" = "600" ] || fail "rendered file permissions are not 0600"
 ! grep -Fq 'dev-only-jwt-secret' "$VALID_ENV" || fail "renderer retained a development JWT fixture"
-grep -Eq '^JWT_SECRET=".*"$' "$VALID_ENV" || fail "renderer did not quote values"
+grep -Eq "^JWT_SECRET='.*'$" "$VALID_ENV" || fail "renderer did not quote values"
 mapfile -t db_settings < <(bash "$ROOT_DIR/scripts/read-deploy-db-settings.sh" "$VALID_ENV")
 [ "${db_settings[0]}" = "$CI_POSTGRES_USER" ] || fail "POSTGRES_USER reader changed the value"
 [ "${db_settings[1]}" = "$CI_POSTGRES_DB" ] || fail "POSTGRES_DB reader changed the value"
@@ -97,8 +97,9 @@ export CI_GRAFANA_ADMIN_PASSWORD="$SPECIAL_PASSWORD"
 SPECIAL_ENV="$TMP_DIR/special.env"
 bash "$ROOT_DIR/scripts/render-deploy-env.sh" "$ROOT_DIR/.env.example" "$SPECIAL_ENV" CI_
 bash "$ROOT_DIR/scripts/validate-deploy-env.sh" "$SPECIAL_ENV" >/dev/null
-grep -Fq '$$$$ word#fragment' "$SPECIAL_ENV" || fail "dollar signs were not escaped for Compose"
-grep -Fq '\\backslash\"double' "$SPECIAL_ENV" || fail "backslash or quote was not escaped for Compose"
+grep -Fq '$$ word#fragment' "$SPECIAL_ENV" || fail "dollar signs were not preserved for Compose"
+grep -Fq "\\'" "$SPECIAL_ENV" || fail "single quote was not escaped for Compose"
+grep -Fq '\backslash"double' "$SPECIAL_ENV" || fail "backslash or double quote was not preserved for Compose"
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   printf 'ROUNDTRIP=\n' > "$TMP_DIR/roundtrip.template"
@@ -132,9 +133,9 @@ export CI_DB_URL='postgres://prod_user:prod%40db%3Apassword_123456@postgres:5432
 export CI_POSTGRES_PASSWORD='prod@db:password_123456'
 export CI_REDIS_URL='redis://:prod%40redis%3Apassword_123456@redis:6379/0'
 export CI_REDIS_PASSWORD='prod@redis:password_123456'
-export CI_JWT_SECRET=prod_jwt_secret_123456789012345678901234567890
+export CI_JWT_SECRET=test-only-jwt-secret-aaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export CI_SMTP_PASSWORD=prod_smtp_password_123456789
-export CI_GRAFANA_ADMIN_PASSWORD=prod_grafana_password_123456789
+export CI_GRAFANA_ADMIN_PASSWORD=test-only-grafana-password-aaaaaaaa
 bash "$ROOT_DIR/scripts/render-deploy-env.sh" "$ROOT_DIR/.env.example" "$VALID_ENV" CI_
 
 

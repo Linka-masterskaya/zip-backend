@@ -14,3 +14,11 @@ regexes = [
   '''^dev-only-smtp-password$''',
   '''^dev-only-grafana-admin$'''
 ]
+
+[[allowlists]]
+description = "Exact historical CI-only fixtures for commit-tree scanning"
+regexes = [
+  '''^prod_minio_secret_123456789$''',
+  '''^prod_jwt_secret_123456789012345678901234567890$''',
+  '''^prod_grafana_password_123456789$'''
+]

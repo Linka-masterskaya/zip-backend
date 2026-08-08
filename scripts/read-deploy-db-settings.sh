@@ -17,9 +17,27 @@ def fail(message: str) -> None:
 
 def decode_rendered_value(raw: str, line_number: int) -> str:
     value = raw.strip()
-    if len(value) < 2 or not value.startswith('"') or not value.endswith('"'):
+    if len(value) < 2:
         fail(f"line {line_number} is not in rendered quoted format")
-    chars: list[str] = []
+
+    if value.startswith("'") and value.endswith("'"):
+        chars: list[str] = []
+        index = 1
+        while index < len(value) - 1:
+            char = value[index]
+            if char == "\\" and index + 1 < len(value) - 1 and value[index + 1] == "'":
+                chars.append("'")
+                index += 2
+                continue
+            chars.append(char)
+            index += 1
+        return "".join(chars)
+
+    if not value.startswith('"') or not value.endswith('"'):
+        fail(f"line {line_number} is not in rendered quoted format")
+
+    # Backward-compatible decoder for previously rendered double-quoted files.
+    chars = []
     index = 1
     while index < len(value) - 1:
         char = value[index]

@@ -11,7 +11,7 @@ import (
 type Kind string
 
 const (
-	AuthCredential Kind = "auth_cred"
+	AuthCredential Kind = "auth_cred" //nolint:gosec // Record discriminator, not a credential value.
 	Student        Kind = "students"
 )
 
