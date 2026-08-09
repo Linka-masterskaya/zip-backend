@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
@@ -23,7 +24,8 @@ type modules struct {
 	media    httpapi.MediaHandlers
 	folders  httpapi.FolderHandlers
 	students httpapi.StudentHandlers
-	auth     any
+	auth     auth.AuthHandlerInterface
+	oauth    *auth.OAuthHandler
 	profile  httpapi.ProfileHandlers
 	pictures *picturebank.Handler
 	checker  *health.Checker
@@ -80,17 +82,30 @@ func buildModules(in *infra) (*modules, error) {
 		RateLimit:                resendPolicy,
 	}
 
-	// Исправлено: убрали лишний аргумент in.redis (было 6, стало 5)
 	authService := auth.NewAuthService(
 		auth.NewAuthRepo(in.db),
-		in.redis, // cache
+		in.redis,
 		in.mailer,
 		authCfg,
 		in.crypto,
 	)
 
-	// Создаем auth handler через NewAuthHandler
 	authHandler := auth.NewAuthHandler(authService, authCfg)
+
+	var oauthHandler *auth.OAuthHandler
+	if cfg.Yandex.ClientID != "" && cfg.Yandex.ClientSecret != "" {
+		oauthCfg := &oauth2.Config{
+			ClientID:     cfg.Yandex.ClientID,
+			ClientSecret: cfg.Yandex.ClientSecret,
+			RedirectURL:  cfg.App.FrontendURL + "/api/v1/auth/yandex/callback",
+			Scopes:       []string{"default"},
+			Endpoint: oauth2.Endpoint{
+				AuthURL:  "https://oauth.yandex.ru/authorize",
+				TokenURL: "https://oauth.yandex.ru/token",
+			},
+		}
+		oauthHandler = auth.NewOAuthHandler(authService, in.redis, oauthCfg, cfg.App.FrontendURL)
+	}
 
 	profileService := profile.NewService(
 		profile.NewRepository(in.db), in.storage, in.mailer, in.crypto, in.redis,
@@ -123,7 +138,8 @@ func buildModules(in *infra) (*modules, error) {
 		students: httpapi.StudentHandlers{
 			Student: student.NewHandler(student.NewService(studentRepo, in.crypto)),
 		},
-		auth: authHandler, // используем созданный handler
+		auth:  authHandler,
+		oauth: oauthHandler,
 		profile: httpapi.ProfileHandlers{
 			Profile:        profile.NewHandler(profileService),
 			ChangePassword: profile.NewChangePasswordHandler(changePasswordService),

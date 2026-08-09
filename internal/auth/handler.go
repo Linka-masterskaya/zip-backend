@@ -30,7 +30,11 @@ type authServiceIface interface {
 	Register(ctx context.Context, req RegisterRequest) error
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
-	resendEmail(ctx context.Context) error
+	resendEmail(ctx context.Context, email string) error
+}
+
+type AuthHandlerInterface interface {
+	RegisterRoutes(mux *http.ServeMux, authMW *middleware.AuthMW, cacheClient *cache.Client, cfg *config.Config)
 }
 
 type authHandlers struct {
@@ -268,7 +272,7 @@ func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 
-	if err := h.svc.resendEmail(r.Context()); err != nil {
+	if err := h.svc.resendEmail(r.Context(), req.Email); err != nil {
 		return err
 	}
 
@@ -312,18 +316,21 @@ func (h *authHandlers) ResetPassword(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
+// RegisterRoutes регистрирует все auth эндпоинты.
 func (h *authHandlers) RegisterRoutes(
 	mux *http.ServeMux,
 	authMW *middleware.AuthMW,
 	cacheClient *cache.Client,
 	cfg *config.Config,
 ) {
-	verifyEmailIPLimit := middleware.RateLimit(
-		cacheClient,
-		"email-confirm",
-		int64(cfg.Auth.EmailConfirmRateLimit),
-		time.Minute,
-		cfg.App.TrustedProxies,
+	mux.Handle("POST /api/v1/auth/register", middleware.ErrorMiddleware(h.Register))
+	mux.Handle("POST /api/v1/auth/login", middleware.ErrorMiddleware(h.Login))
+	mux.Handle("POST /api/v1/auth/refresh", middleware.ErrorMiddleware(h.Refresh))
+	mux.Handle("POST /api/v1/auth/forgot-password", middleware.ErrorMiddleware(h.ForgotPassword))
+	mux.Handle("POST /api/v1/auth/reset-password", middleware.ErrorMiddleware(h.ResetPassword))
+
+	mux.Handle("POST /api/v1/auth/logout",
+		middleware.ErrorMiddleware(authMW.AuthMiddleware(h.Logout)),
 	)
 
 	verifyResendIPLimit := middleware.RateLimit(
@@ -334,27 +341,22 @@ func (h *authHandlers) RegisterRoutes(
 		cfg.App.TrustedProxies,
 	)
 
-	resendPolicy := middleware.RateLimitPolicy{
-		Scope:  cfg.RateLimit.Resend.Scope,
-		Limit:  cfg.RateLimit.Resend.Limit,
-		Window: cfg.RateLimit.Resend.Window,
-	}
-
-	mux.Handle(
-		"POST /api/v1/auth/email-confirm",
-		verifyEmailIPLimit(
-			middleware.ErrorMiddleware(h.VerifyEmail),
+	mux.Handle("POST /api/v1/auth/verify-resend",
+		verifyResendIPLimit(
+			middleware.ErrorMiddleware(h.ResendEmail),
 		),
 	)
 
-	// ResendEmail is public (no auth middleware) so unverified users can request a new email.
-	mux.Handle(
-		"POST /api/v1/auth/verify-resend",
-		verifyResendIPLimit(
-			middleware.ErrorMiddleware(
-				middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
-			),
-		),
+	verifyEmailIPLimit := middleware.RateLimit(
+		cacheClient,
+		"email-confirm",
+		int64(cfg.Auth.EmailConfirmRateLimit),
+		time.Minute,
+		cfg.App.TrustedProxies,
+	)
+
+	mux.Handle("POST /api/v1/auth/email-confirm",
+		verifyEmailIPLimit(middleware.ErrorMiddleware(h.VerifyEmail)),
 	)
 }
 
@@ -386,13 +388,31 @@ type OAuthHandler struct {
 	frontendURL string
 }
 
-func NewOAuthHandler(service *authService, cache *cache.Client, oauthCfg *oauth2.Config, frontendURL string) *OAuthHandler {
+// NewOAuthHandler создает OAuthHandler отдельно.
+// Возвращает nil, если oauthCfg == nil.
+func NewOAuthHandler(
+	service *authService,
+	cache *cache.Client,
+	oauthCfg *oauth2.Config,
+	frontendURL string,
+) *OAuthHandler {
+	if oauthCfg == nil {
+		return nil
+	}
 	return &OAuthHandler{
 		service:     service,
 		cache:       cache,
 		oauthCfg:    oauthCfg,
 		frontendURL: frontendURL,
 	}
+}
+
+func (h *OAuthHandler) RegisterOAuthRoutes(mux *http.ServeMux) {
+	if h == nil {
+		return
+	}
+	mux.HandleFunc("GET /api/v1/auth/yandex/login", h.YandexLogin)
+	mux.HandleFunc("GET /api/v1/auth/yandex/callback", h.YandexCallback)
 }
 
 func (h *OAuthHandler) YandexLogin(w http.ResponseWriter, r *http.Request) {

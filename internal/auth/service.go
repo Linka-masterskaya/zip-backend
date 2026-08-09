@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 
@@ -363,25 +362,35 @@ func (au *authService) verifyEmail(
 	return nil
 }
 
-func (au *authService) resendEmail(ctx context.Context) error {
-	userID, err := authctx.UserIDFromCtx(ctx)
+func (au *authService) resendEmail(ctx context.Context, email string) error {
+	// Ищем пользователя по email
+	emailHash := au.crp.Hash([]byte(email))
+	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
 	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil // не раскрываем существование email
+		}
 		return err
+	}
+	if user.EmailVerified {
+		return nil // уже верифицирован
 	}
 
-	emailEncrypted, emailVerified, err := au.repo.getUserContactForResend(ctx, userID)
+	// Получаем email для отправки
+	cred, err := au.repo.GetAuthCredByUserID(ctx, uuid.MustParse(user.ID))
 	if err != nil {
 		return err
 	}
-	if emailVerified {
+	if cred == nil {
 		return nil
 	}
 
-	email, err := au.crp.Decrypt(emailEncrypted)
+	emailDecrypted, err := au.crp.Decrypt(cred.EmailEncrypted)
 	if err != nil {
 		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
+	// Генерируем новый токен
 	tokenRaw := make([]byte, 32)
 	if _, err := rand.Read(tokenRaw); err != nil {
 		return fmt.Errorf("authService.resendEmail: %w", err)
@@ -397,7 +406,7 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	err = au.repo.rotateEmailTokens(
 		ctx,
 		tokenID,
-		userID,
+		uuid.MustParse(user.ID),
 		hashToken[:],
 		time.Now().Add(au.cfg.VerifyEmailTokenTTL),
 	)
@@ -409,15 +418,14 @@ func (au *authService) resendEmail(ctx context.Context) error {
 		"/verify-email?token=" +
 		base64.RawURLEncoding.EncodeToString(tokenRaw)
 
-	err = au.mailer.Send(
+	if err := au.mailer.Send(
 		ctx,
-		string(email),
+		string(emailDecrypted),
 		mailer.EmailVerify,
 		mailer.EmailData{
 			Token: verifyURL,
 		},
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
@@ -440,7 +448,7 @@ func (au *authService) GenerateOAuthJWT(user *User, cred *UserCred) (string, err
 		"role":  user.Role,
 		"iss":   jwtIssuer,
 		"aud":   jwtAudience,
-		"exp":   now.Add(24 * time.Hour).Unix(),
+		"exp":   now.Add(au.cfg.AccessTokenTTL).Unix(),
 		"iat":   now.Unix(),
 	}
 
