@@ -175,6 +175,7 @@ func (au *authService) Login(
 	rec := cache.RefreshRecord{
 		FID:    fid,
 		Status: "active",
+		UserID: user.ID,
 	}
 
 	if err := au.cache.StoreRefresh(
@@ -270,6 +271,7 @@ func (au *authService) rotateRefreshToken(ctx context.Context, user *User, oldJT
 		NewRecord: cache.RefreshRecord{
 			FID:    fid,
 			Status: "active",
+			UserID: user.ID,
 		},
 		TTL: au.cfg.RefreshTokenTTL,
 	}
