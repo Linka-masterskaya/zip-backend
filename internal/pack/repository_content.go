@@ -127,7 +127,16 @@ func (r *Repository) ListAdaptations(
 	ctx context.Context,
 	userID, packID uuid.UUID,
 ) ([]Adaptation, error) {
-	rows, err := r.pool.Query(ctx, listAdaptationsQuery, userID, packID)
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptations list begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	rows, err := tx.Query(ctx, listAdaptationsQuery, userID, packID)
 	if err != nil {
 		return nil, fmt.Errorf("pack adaptations list: %w", err)
 	}
@@ -146,12 +155,15 @@ func (r *Repository) ListAdaptations(
 	}
 	if len(result) == 0 {
 		var exists bool
-		if err = r.pool.QueryRow(ctx, ownedPackExistsQuery, userID, packID).Scan(&exists); err != nil {
+		if err = tx.QueryRow(ctx, ownedPackExistsQuery, userID, packID).Scan(&exists); err != nil {
 			return nil, fmt.Errorf("pack adaptations access: %w", err)
 		}
 		if !exists {
 			return nil, ErrPackNotFound
 		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("pack adaptations list commit: %w", err)
 	}
 	return result, nil
 }
