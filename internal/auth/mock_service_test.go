@@ -11,8 +11,12 @@ package auth
 
 import (
 	context "context"
+	http "net/http"
 	reflect "reflect"
 
+	cache "github.com/Linka-masterskaya/zip-backend/internal/cache"
+	config "github.com/Linka-masterskaya/zip-backend/internal/config"
+	middleware "github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -127,17 +131,17 @@ func (mr *MockauthServiceIfaceMockRecorder) ResetPassword(ctx, token, newPasswor
 }
 
 // resendEmail mocks base method.
-func (m *MockauthServiceIface) resendEmail(ctx context.Context) error {
+func (m *MockauthServiceIface) resendEmail(ctx context.Context, email string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "resendEmail", ctx)
+	ret := m.ctrl.Call(m, "resendEmail", ctx, email)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // resendEmail indicates an expected call of resendEmail.
-func (mr *MockauthServiceIfaceMockRecorder) resendEmail(ctx any) *gomock.Call {
+func (mr *MockauthServiceIfaceMockRecorder) resendEmail(ctx, email any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resendEmail", reflect.TypeOf((*MockauthServiceIface)(nil).resendEmail), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resendEmail", reflect.TypeOf((*MockauthServiceIface)(nil).resendEmail), ctx, email)
 }
 
 // verifyEmail mocks base method.
@@ -152,4 +156,40 @@ func (m *MockauthServiceIface) verifyEmail(ctx context.Context, verifyToken stri
 func (mr *MockauthServiceIfaceMockRecorder) verifyEmail(ctx, verifyToken any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "verifyEmail", reflect.TypeOf((*MockauthServiceIface)(nil).verifyEmail), ctx, verifyToken)
+}
+
+// MockAuthHandlerInterface is a mock of AuthHandlerInterface interface.
+type MockAuthHandlerInterface struct {
+	ctrl     *gomock.Controller
+	recorder *MockAuthHandlerInterfaceMockRecorder
+	isgomock struct{}
+}
+
+// MockAuthHandlerInterfaceMockRecorder is the mock recorder for MockAuthHandlerInterface.
+type MockAuthHandlerInterfaceMockRecorder struct {
+	mock *MockAuthHandlerInterface
+}
+
+// NewMockAuthHandlerInterface creates a new mock instance.
+func NewMockAuthHandlerInterface(ctrl *gomock.Controller) *MockAuthHandlerInterface {
+	mock := &MockAuthHandlerInterface{ctrl: ctrl}
+	mock.recorder = &MockAuthHandlerInterfaceMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockAuthHandlerInterface) EXPECT() *MockAuthHandlerInterfaceMockRecorder {
+	return m.recorder
+}
+
+// RegisterRoutes mocks base method.
+func (m *MockAuthHandlerInterface) RegisterRoutes(mux *http.ServeMux, authMW *middleware.AuthMW, cacheClient *cache.Client, cfg *config.Config) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "RegisterRoutes", mux, authMW, cacheClient, cfg)
+}
+
+// RegisterRoutes indicates an expected call of RegisterRoutes.
+func (mr *MockAuthHandlerInterfaceMockRecorder) RegisterRoutes(mux, authMW, cacheClient, cfg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RegisterRoutes", reflect.TypeOf((*MockAuthHandlerInterface)(nil).RegisterRoutes), mux, authMW, cacheClient, cfg)
 }
