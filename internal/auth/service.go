@@ -424,6 +424,8 @@ func (au *authService) resendEmail(ctx context.Context) error {
 	return nil
 }
 
+// GenerateOAuthJWT generates a JWT for OAuth users.
+// The access token is intentionally returned in the API response.
 func (au *authService) GenerateOAuthJWT(user *User, cred *UserCred) (string, error) {
 	email, err := au.crp.Decrypt(cred.EmailEncrypted)
 	if err != nil {
@@ -443,6 +445,7 @@ func (au *authService) GenerateOAuthJWT(user *User, cred *UserCred) (string, err
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "access" // Required by the auth middleware
 	tokenString, err := token.SignedString([]byte(au.cfg.JWTSecret))
 	if err != nil {
 		return "", fmt.Errorf("generate token: %w", err)
@@ -451,7 +454,130 @@ func (au *authService) GenerateOAuthJWT(user *User, cred *UserCred) (string, err
 	return tokenString, nil
 }
 
-// UpsertUser creates or updates user from OAuth provider.
+// Register creates a new user account.
+func (au *authService) Register(ctx context.Context, req RegisterRequest) error {
+	email := normalizeEmail(req.Email)
+	if err := ValidateEmail(email); err != nil {
+		return err
+	}
+	if err := ValidatePassword(req.Password); err != nil {
+		return err
+	}
+
+	emailHash := au.crp.Hash([]byte(email))
+
+	// Check if user already exists
+	existingUser, err := au.repo.GetUserByEmailHash(ctx, emailHash)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return fmt.Errorf("check user exists: %w", err)
+	}
+	if existingUser != nil {
+		return apperr.ErrConflict.WithMessage("email already registered")
+	}
+
+	// Begin transaction
+	tx, err := au.repo.beginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.Error("tx rollback failed", "err", err)
+		}
+	}()
+
+	txRepo := au.repo.withTx(tx)
+
+	// Generate user ID
+	userID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("generate user id: %w", err)
+	}
+
+	// Hash password
+	passwordHash, err := hashPassword(req.Password, au.cfg.BcryptCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	// Encrypt email
+	emailEncrypted, err := au.crp.Encrypt([]byte(email))
+	if err != nil {
+		return fmt.Errorf("encrypt email: %w", err)
+	}
+
+	// Create user
+	if err := txRepo.CreateOAuthUser(ctx, CreateUserParams{
+		ID:             userID,
+		OrganizationID: nil,
+		Name:           email,
+		EmailVerified:  false,
+	}); err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+
+	if err := txRepo.CreateAuthCred(ctx, CreateAuthCredParams{
+		UserID:         userID,
+		EmailHash:      emailHash,
+		EmailEncrypted: emailEncrypted,
+		PasswordHash:   passwordHash,
+		Role:           "defectologist",
+	}); err != nil {
+		return fmt.Errorf("create auth_cred: %w", err)
+	}
+
+	tokenRaw := make([]byte, 32)
+	if _, err := rand.Read(tokenRaw); err != nil {
+		return fmt.Errorf("generate token: %w", err)
+	}
+	tokenHash := sha256.Sum256(tokenRaw)
+
+	tokenID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("generate token id: %w", err)
+	}
+
+	if err := txRepo.rotateEmailTokens(
+		ctx,
+		tokenID,
+		userID,
+		tokenHash[:],
+		time.Now().Add(au.cfg.VerifyEmailTokenTTL),
+	); err != nil {
+		return fmt.Errorf("create verify token: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+
+	// Send verification email asynchronously
+	go au.sendVerificationEmail(context.WithoutCancel(ctx), userID, email, tokenRaw)
+
+	return nil
+}
+
+func (au *authService) sendVerificationEmail(ctx context.Context, userID uuid.UUID, email string, tokenRaw []byte) {
+	if au.mailer == nil {
+		slog.ErrorContext(ctx, "mailer is not configured", "user_id", userID)
+		return
+	}
+
+	verifyURL := au.cfg.FrontendURL +
+		"/verify-email?token=" +
+		base64.RawURLEncoding.EncodeToString(tokenRaw)
+
+	if err := au.mailer.Send(ctx, email, mailer.EmailVerify, mailer.EmailData{
+		Token: verifyURL,
+		Email: email,
+	}); err != nil {
+		slog.ErrorContext(ctx, "failed to send verification email",
+			"user_id", userID,
+			"error", err,
+		)
+	}
+}
+
 func (au *authService) UpsertUser(ctx context.Context, email, name, yandexID string) (*User, *UserCred, error) {
 	identity, err := au.repo.FindIdentityByProviderUID(ctx, "yandex", yandexID)
 	if err != nil {

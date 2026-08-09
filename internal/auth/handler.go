@@ -27,6 +27,7 @@ type authServiceIface interface {
 	Refresh(ctx context.Context, refreshToken string) (*LoginResult, error)
 	Logout(ctx context.Context, refreshToken string) error
 	ForgotPassword(ctx context.Context, email string) error
+	Register(ctx context.Context, req RegisterRequest) error
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
 	resendEmail(ctx context.Context) error
@@ -53,6 +54,11 @@ func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
 	return h
 }
 
+type RegisterRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -60,6 +66,28 @@ type LoginRequest struct {
 
 type LoginResponse struct {
 	AccessToken string `json:"access_token"`
+}
+
+// Register handles user registration.
+func (h *authHandlers) Register(w http.ResponseWriter, r *http.Request) error {
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithError(err)
+	}
+
+	if err := ValidateEmail(req.Email); err != nil {
+		return err
+	}
+	if err := ValidatePassword(req.Password); err != nil {
+		return err
+	}
+
+	if err := h.svc.Register(r.Context(), req); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	return nil
 }
 
 func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
@@ -77,6 +105,7 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 	case err != nil:
 		return err
 	}
+
 	//nolint:gosec // Secure is configured separately for local and production environments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
@@ -101,7 +130,7 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// Refresh обрабатывает обновление refresh токена.
+// Refresh handles refresh token rotation.
 func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
 	if err := h.checkOrigin(r); err != nil {
 		return err
@@ -137,6 +166,7 @@ func (h *authHandlers) Refresh(w http.ResponseWriter, r *http.Request) error {
 		AccessToken: result.AccessToken,
 	}
 
+	//nolint:gosec // The access token is intentionally returned in the API response.
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		return fmt.Errorf("encode refresh response: %w", err)
 	}
@@ -317,29 +347,25 @@ func (h *authHandlers) RegisterRoutes(
 		),
 	)
 
+	// ResendEmail is public (no auth middleware) so unverified users can request a new email.
 	mux.Handle(
 		"POST /api/v1/auth/verify-resend",
 		verifyResendIPLimit(
 			middleware.ErrorMiddleware(
-				authMW.AuthMiddleware(
-					middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
-				),
+				middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
 			),
 		),
 	)
 }
 
-// ForgotPasswordRequest описывает тело запроса на восстановление пароля.
 type ForgotPasswordRequest struct {
 	Email string `json:"email"`
 }
 
-// ResendEmailRequest описывает тело запроса на повторную отправку письма верификации.
 type ResendEmailRequest struct {
 	Email string `json:"email"`
 }
 
-// ResetPasswordRequest описывает тело запроса на установку нового пароля по токену.
 type ResetPasswordRequest struct {
 	Token       string `json:"token"`
 	NewPassword string `json:"new_password"`
