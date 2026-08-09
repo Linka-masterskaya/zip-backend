@@ -36,6 +36,7 @@ func (au *authService) generateAccessToken(user *User) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "access"
 	tokenString, err := token.SignedString([]byte(au.cfg.JWTSecret))
 	if err != nil {
 		return "", fmt.Errorf("generate access token: %w", err)

@@ -626,3 +626,23 @@ func (au *authService) SendVerificationEmail(ctx context.Context, userID uuid.UU
 	slog.Info("verification email sent", "user_id", userID)
 	return nil
 }
+
+// Logout revokes the refresh token family. Идемпотентен: невалидный,
+// истёкший или уже отозванный токен не считается ошибкой.
+func (au *authService) Logout(ctx context.Context, refreshToken string) error {
+	if refreshToken == "" {
+		return nil
+	}
+
+	claims, record, err := au.validateRefreshToken(refreshToken)
+	if err != nil {
+		return nil
+	}
+	_ = claims
+
+	if err := au.cache.RevokeFamily(ctx, record.FID); err != nil {
+		return fmt.Errorf("authService.Logout: %w", err)
+	}
+
+	return nil
+}

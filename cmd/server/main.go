@@ -119,8 +119,6 @@ func run() error {
 	loginRateLimit := middleware.RateLimit(deps.redis, "login", int64(deps.cfg.Auth.LoginRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	forgotRateLimit := middleware.RateLimit(deps.redis, "forgot", int64(deps.cfg.Auth.ForgotRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	resetRateLimit := middleware.RateLimit(deps.redis, "reset", int64(deps.cfg.Auth.ResetRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	verifyResendRateLimit := middleware.RateLimit(deps.redis, "verify-resend", int64(deps.cfg.Auth.VerifyResendRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
-	emailConfirmRateLimit := middleware.RateLimit(deps.redis, "email-confirm", int64(deps.cfg.Auth.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	profileEmailChangeRateLimit := middleware.RateLimit(deps.redis, "profile-email-change", int64(deps.cfg.Profile.EmailChangeRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 	profileEmailConfirmRateLimit := middleware.RateLimit(deps.redis, "profile-email-confirm", int64(deps.cfg.Profile.EmailConfirmRateLimit), 1*time.Minute, deps.cfg.App.TrustedProxies)
 
@@ -131,7 +129,6 @@ func run() error {
 	mainMux.HandleFunc("GET /api/v1/auth/yandex/login", oauthHandler.YandexLogin)
 	mainMux.HandleFunc("GET /api/v1/auth/yandex/callback", oauthHandler.YandexCallback)
 
-	// -------- Auth routes (login, forgot, reset и т.д.) --------
 	authHandler := auth.NewAuthHandler(authService, authCfg)
 
 	mainMux.Handle(
@@ -152,20 +149,6 @@ func run() error {
 		"POST /auth/reset",
 		resetRateLimit(
 			middleware.ErrorMiddleware(authHandler.ResetPassword),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /auth/verify-resend",
-		verifyResendRateLimit(
-			middleware.ErrorMiddleware(authHandler.VerifyResend),
-		),
-	)
-
-	mainMux.Handle(
-		"POST /auth/email-confirm",
-		emailConfirmRateLimit(
-			middleware.ErrorMiddleware(authHandler.EmailConfirm),
 		),
 	)
 
@@ -236,6 +219,7 @@ func run() error {
 		),
 	)
 
+	// -------- Change password routes --------
 	changePasswordRepo := profile.NewChangePasswordRepo(deps.db)
 	changePasswordService := profile.NewChangePasswordService(changePasswordRepo, deps.redis)
 	changePasswordHandler := profile.NewChangePasswordHandler(changePasswordService)
@@ -247,6 +231,7 @@ func run() error {
 		),
 	)
 
+	// -------- Middleware chain --------
 	wrappedHandler := middleware.Chain(
 		mainMux,
 		middleware.RecoveryMiddleware,

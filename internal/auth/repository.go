@@ -259,7 +259,6 @@ func (r *authRepo) getUserContactForResend(
 	return emailEncrypted, emailVerified, nil
 }
 
-// GetUserByID retrieves user by ID
 func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
 	query := `
 		SELECT
@@ -294,7 +293,6 @@ func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, er
 	return &user, nil
 }
 
-// GetAuthCredByUserID retrieves auth_cred by user ID
 func (r *authRepo) GetAuthCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error) {
 	query := `
 		SELECT user_id, email_hash, email_encrypted, password_hash, role
@@ -320,7 +318,6 @@ func (r *authRepo) GetAuthCredByUserID(ctx context.Context, userID uuid.UUID) (*
 	return &cred, nil
 }
 
-// FindIdentityByProviderUID finds identity by provider and provider_uid
 func (r *authRepo) FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error) {
 	query := `
 		SELECT id, user_id, provider, provider_uid, created_at
@@ -346,7 +343,6 @@ func (r *authRepo) FindIdentityByProviderUID(ctx context.Context, provider, prov
 	return &identity, nil
 }
 
-// CreateOAuthUser creates user for OAuth (without password)
 func (r *authRepo) CreateOAuthUser(ctx context.Context, params CreateUserParams) error {
 	query := `
 		INSERT INTO users (id, org_id, display_name, email_verified)
@@ -368,7 +364,6 @@ func (r *authRepo) CreateOAuthUser(ctx context.Context, params CreateUserParams)
 	return nil
 }
 
-// UpdateUserName updates user's display name
 func (r *authRepo) UpdateUserName(ctx context.Context, userID uuid.UUID, name string) error {
 	query := `
 		UPDATE users
@@ -384,7 +379,6 @@ func (r *authRepo) UpdateUserName(ctx context.Context, userID uuid.UUID, name st
 	return nil
 }
 
-// CreateIdentity creates new auth identity
 func (r *authRepo) CreateIdentity(ctx context.Context, identity *UserIdentity) error {
 	query := `
         INSERT INTO auth_identities (id, user_id, provider, provider_uid)
@@ -402,7 +396,6 @@ func (r *authRepo) CreateIdentity(ctx context.Context, identity *UserIdentity) e
 	return nil
 }
 
-// CreateAuthCred creates auth_cred for user
 func (r *authRepo) CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error {
 	query := `
 		INSERT INTO auth_cred (user_id, email_hash, email_encrypted, password_hash, role)

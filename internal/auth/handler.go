@@ -29,7 +29,7 @@ type authServiceIface interface {
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token string, newPassword string) error
 	verifyEmail(ctx context.Context, verifyToken string) error
-	resendEmail(ctx context.Context, email string) error
+	resendEmail(ctx context.Context) error
 }
 
 type authHandlers struct {
@@ -77,7 +77,6 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 	case err != nil:
 		return err
 	}
-
 	//nolint:gosec // Secure is configured separately for local and production environments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
@@ -88,14 +87,13 @@ func (h *authHandlers) Login(w http.ResponseWriter, r *http.Request) error {
 		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
-
 	w.Header().Set("Content-Type", "application/json")
-
+	// The access token is intentionally returned in the API response.
+	//nolint:gosec
 	resp := LoginResponse{
 		AccessToken: result.AccessToken,
 	}
-
-	//nolint:gosec // The access token is intentionally returned in the response.
+	//nolint:gosec // The access token is intentionally returned in the API response.
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		return fmt.Errorf("encode login response: %w", err)
 	}
@@ -240,7 +238,7 @@ func (h *authHandlers) ResendEmail(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 
-	if err := h.svc.resendEmail(r.Context(), req.Email); err != nil {
+	if err := h.svc.resendEmail(r.Context()); err != nil {
 		return err
 	}
 

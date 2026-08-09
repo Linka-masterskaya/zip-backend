@@ -326,7 +326,6 @@ func TestAuthService_Login_EmailNotVerified(t *testing.T) {
 	}
 }
 
-// Тесты для Refresh используют MockrefreshStore, который уже имеет все необходимые методы
 func TestAuthService_Refresh_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)
