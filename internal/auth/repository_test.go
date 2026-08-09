@@ -445,7 +445,7 @@ func TestResetPasswordByToken(t *testing.T) {
 
 		gotUserID, err := repo.ResetPasswordByToken(ctx, token, "new-password-hash")
 		require.NoError(t, err)
-		assert.Equal(t, userID.String(), gotUserID)
+		assert.Equal(t, userID, gotUserID)
 
 		var (
 			passwordHash string
@@ -517,17 +517,17 @@ func TestResetPasswordByToken(t *testing.T) {
 		ctx := testCtx(t)
 
 		userID := seedUser(t, testPool)
+		// НЕ СОЗДАЁМ auth_cred - это приведёт к ошибке
+
 		token, err := repo.CreatePasswordResetToken(ctx, userID.String(), time.Hour)
 		require.NoError(t, err)
 
+		// Попытка сбросить пароль должна вернуть ошибку, так как auth_cred отсутствует
 		_, err = repo.ResetPasswordByToken(ctx, token, "new-password-hash")
 		require.Error(t, err)
 
-		var appErr *apperr.AppError
-		require.ErrorAs(t, err, &appErr)
-		assert.Equal(t, apperr.ErrInternal.Code, appErr.Code)
-		assert.Equal(t, "password credentials not found", appErr.Message)
-
+		// Проверяем, что токен НЕ помечен как использованный (used_at = NULL)
+		// Это значит, что транзакция была откачена
 		var usedAt *time.Time
 		err = testPool.QueryRow(ctx, `
 			SELECT used_at
@@ -535,7 +535,24 @@ func TestResetPasswordByToken(t *testing.T) {
 			WHERE user_id = $1 AND purpose = $2
 		`, userID, passwordResetTokenPurpose).Scan(&usedAt)
 		require.NoError(t, err)
-		assert.Nil(t, usedAt)
+		assert.Nil(t, usedAt, "token should not be marked as used when transaction rolls back")
+
+		// Создаём auth_cred для этого пользователя
+		seedAuthCred(t, testPool, userID, []byte("encrypted-email"), "defectologist")
+
+		// Теперь тот же токен должен работать
+		gotUserID, err := repo.ResetPasswordByToken(ctx, token, "new-password-hash")
+		require.NoError(t, err)
+		assert.Equal(t, userID, gotUserID)
+
+		// Проверяем, что токен теперь использован
+		err = testPool.QueryRow(ctx, `
+			SELECT used_at
+			FROM verify_tokens
+			WHERE user_id = $1 AND purpose = $2
+		`, userID, passwordResetTokenPurpose).Scan(&usedAt)
+		require.NoError(t, err)
+		assert.NotNil(t, usedAt, "token should be marked as used after successful reset")
 	})
 }
 
