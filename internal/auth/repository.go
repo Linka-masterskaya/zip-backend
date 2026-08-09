@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
@@ -434,8 +435,18 @@ func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passw
         RETURNING user_id
     `
 
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("authRepo.ResetPasswordByToken: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.Error("tx rollback failed", "err", err)
+		}
+	}()
+
 	var userID uuid.UUID
-	err = r.db.QueryRow(ctx, query, tokenHash).Scan(&userID)
+	err = tx.QueryRow(ctx, query, tokenHash).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, apperr.ErrInvalidResetToken
 	}
@@ -449,8 +460,16 @@ func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passw
         SET password_hash = $1, updated_at = now()
         WHERE user_id = $2
     `
-	_, err = r.db.Exec(ctx, updateQuery, passwordHash, userID)
+	res, err := tx.Exec(ctx, updateQuery, passwordHash, userID)
 	if err != nil {
+		return uuid.Nil, fmt.Errorf("authRepo.ResetPasswordByToken: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		// Транзакция будет откачена через defer
+		return uuid.Nil, apperr.ErrInternal.WithMessage("password credentials not found")
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, fmt.Errorf("authRepo.ResetPasswordByToken: %w", err)
 	}
 
