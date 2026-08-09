@@ -23,7 +23,6 @@ type infra struct {
 	db      *pgxpool.Pool
 	redis   *cache.Client
 	nc      *nats.Conn
-	js      jetstream.JetStream
 	pub     *broker.Publisher
 	crypto  *cryptox.Cryptox
 	mailer  *mailer.SMTPSender
@@ -39,7 +38,7 @@ func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
 		return nil, fmt.Errorf("minio connect: %w", err)
 	}
 
-	nc, pub, js, err := initNATS(cfg.NATS)
+	nc, pub, err := initNATS(cfg.NATS)
 	if err != nil {
 		return nil, fmt.Errorf("nats init: %w", err)
 	}
@@ -66,7 +65,7 @@ func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
 		return nil, fmt.Errorf("cryptox init: %w", err)
 	}
 
-	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.FrontendURL, redisClient)
+	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.FrontendURL)
 	if err != nil {
 		return nil, fmt.Errorf("smtp init: %w", err)
 	}
@@ -76,7 +75,6 @@ func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
 		db:      dbPool,
 		redis:   redisClient,
 		nc:      nc,
-		js:      js,
 		pub:     pub,
 		crypto:  cryptoClient,
 		mailer:  smtpSender,
@@ -84,10 +82,10 @@ func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
 	}, nil
 }
 
-func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, jetstream.JetStream, error) {
+func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, error) {
 	nc, err := broker.New(cfg.Connection)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("initNATS: %w", err)
+		return nil, nil, fmt.Errorf("initNATS: %w", err)
 	}
 	initialized := false
 	defer func() {
@@ -99,14 +97,14 @@ func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, jetstream.J
 
 	js, err := jetstream.New(nc)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("initNATS: jetstream: %w", err)
+		return nil, nil, fmt.Errorf("initNATS: jetstream: %w", err)
 	}
 
 	if err := broker.InitStreams(cfg.Stream, js); err != nil {
-		return nil, nil, nil, fmt.Errorf("initNATS: streams: %w", err)
+		return nil, nil, fmt.Errorf("initNATS: streams: %w", err)
 	}
 	slog.Info("jetstream stream ready", "stream", cfg.Stream.Name)
 
 	initialized = true
-	return nc, broker.NewPublisher(js), js, nil
+	return nc, broker.NewPublisher(js), nil
 }

@@ -20,6 +20,10 @@ import (
 
 var validToken = strings.Repeat("t", 43)
 
+func newTestHandler(svc authServiceIface) *authHandlers {
+	return NewAuthHandler(svc)
+}
+
 func TestAuthHandler_Login(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -211,7 +215,7 @@ func TestAuthHandler_ResendEmail(t *testing.T) {
 			name: "success",
 			body: `{"email":"user@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any(), "user@example.com").Return(nil)
+				m.EXPECT().resendEmail(gomock.Any()).Return(nil)
 			},
 			wantStatus: http.StatusAccepted,
 		},
@@ -233,7 +237,7 @@ func TestAuthHandler_ResendEmail(t *testing.T) {
 			name: "user not found",
 			body: `{"email":"user@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any(), "user@example.com").Return(apperr.ErrUserNotFound)
+				m.EXPECT().resendEmail(gomock.Any()).Return(nil)
 			},
 			wantStatus: http.StatusNotFound,
 			wantCode:   "USER_NOT_FOUND",
@@ -242,7 +246,7 @@ func TestAuthHandler_ResendEmail(t *testing.T) {
 			name: "mailer/db failure",
 			body: `{"email":"user@example.com"}`,
 			mockSetup: func(m *MockauthServiceIface) {
-				m.EXPECT().resendEmail(gomock.Any(), "user@example.com").Return(apperr.ErrInternal)
+				m.EXPECT().resendEmail(gomock.Any()).Return(nil)
 			},
 			wantStatus: http.StatusInternalServerError,
 			wantCode:   "INTERNAL",

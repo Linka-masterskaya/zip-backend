@@ -44,7 +44,7 @@ func run() error {
 	}
 	defer func() {
 		if err := conn.Close(); err != nil {
-			slog.Error("close db connection failed", logger.Err(err))
+			slog.Error("close db connection failed", "error", err)
 		}
 	}()
 
