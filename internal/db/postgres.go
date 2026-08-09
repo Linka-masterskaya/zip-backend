@@ -13,7 +13,7 @@ func New(cfg config.DBConfig) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(cfg.URL)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse postgres URL (%s): %w", cfg.URL, err)
+		return nil, fmt.Errorf("failed to parse postgres URL: %w", err)
 	}
 
 	config.MaxConns = cfg.MaxConns

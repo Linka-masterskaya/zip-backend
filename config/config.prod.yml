@@ -18,14 +18,16 @@ server:
   shutdown_timeout: '30s'
 
 db:
-  url: 'postgres://linka:linka@localhost:5432/linka?sslmode=require'
+  # Required via DB_URL.
+  url: ''
   max_conns: 25
   min_conns: 5
   max_conn_lifetime: '1h'
   healthcheck_period: '30s'
 
 redis:
-  url: 'redis://localhost:6379/0'
+  # Required via REDIS_URL and must include a password.
+  url: ''
   pool_size: 10
   min_idle_conns: 2
   max_idle_conns: 5
@@ -67,21 +69,24 @@ nats:
       fetch_max_wait: '5s'
 
 minio:
-  endpoint: 'localhost:9000'
-  access_key: 'minioadmin'
-  secret_key: 'minioadmin'
+  # Required via MINIO_* environment variables.
+  endpoint: ''
+  access_key: ''
+  secret_key: ''
   bucket: 'linka-media'
   use_ssl: true
   timeout: '15s'
 
 jwt:
-  secret: "change-me"
+  # Required via JWT_SECRET.
+  secret: ""
   access_ttl: "15m"
   refresh_ttl: "720h"
 
 crypto:
-  aes_key: "change-me"
-  hmac_key: "change-me"
+  # Required via CRYPTO_*; never rotate AES without re-encrypting stored email data.
+  aes_key: ""
+  hmac_key: ""
 
 yandex:
   client_id: ''
@@ -99,11 +104,12 @@ pictures_bank:
 smtp:
   host: 'smtp.yandex.ru'
   port: 587
-  username: 'noreply@yandex.com'
+  username: ''
   password: ''
-  from_email: 'noreply@yandex.com'
+  from_email: ''
   tls: true
   timeout: "10s"
+  require_from_match: true
 
 auth:
   access_token_ttl: 15m
