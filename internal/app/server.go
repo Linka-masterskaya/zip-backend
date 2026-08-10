@@ -51,6 +51,9 @@ func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redi
 	httpapi.RegisterProfileRoutes(mux, authMW, rl, mods.profile)
 
 	mods.auth.RegisterRoutes(mux, authMW, redis, cfg)
+	if mods.oauth != nil {
+		mods.oauth.RegisterOAuthRoutes(mux)
+	}
 
 	handler := middleware.Chain(
 		mux,
