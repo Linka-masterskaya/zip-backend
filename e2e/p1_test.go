@@ -237,13 +237,13 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	)
 	assert.Equal(t, "student@example.com", createdStudent.Email)
 
-	students := e2eJSON[[]student.Student](
+	students := e2eJSON[student.ListResult](
 		t,
 		e2eRequest(t, server, ownerToken, http.MethodGet, "/api/v1/students", nil),
 		http.StatusOK,
 	)
-	require.Len(t, students, 1)
-	assert.Equal(t, createdStudent.ID, students[0].ID)
+	require.Len(t, studentsResult.Items, 1)
+	assert.Equal(t, createdStudent.ID, studentsResult.Items[0].ID)
 
 	studentFolder := e2eCreateFolder(t, server, ownerToken, map[string]any{
 		"section": "students", "kind": "student", "student_id": createdStudent.ID, "name": "Анна",
