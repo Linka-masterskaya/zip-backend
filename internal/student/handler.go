@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/google/uuid"
@@ -12,7 +13,7 @@ import (
 
 type studentService interface {
 	Create(context.Context, CreateInput) (*Student, error)
-	List(context.Context) ([]Student, error)
+	List(context.Context, ListInput) (*ListResult, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Student, error)
 	Delete(context.Context, uuid.UUID) error
 }
@@ -38,7 +39,26 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) error {
-	result, err := h.service.List(r.Context())
+	q := r.URL.Query()
+
+	input := ListInput{
+		SortBy: q.Get("sort_by"),
+		Order:  q.Get("order"),
+	}
+
+	if limitStr := q.Get("limit"); limitStr != "" {
+		if lim, err := strconv.Atoi(limitStr); err == nil {
+			input.Limit = lim
+		}
+	}
+
+	if offsetStr := q.Get("offset"); offsetStr != "" {
+		if ofs, err := strconv.Atoi(offsetStr); err == nil {
+			input.Offset = ofs
+		}
+	}
+
+	result, err := h.service.List(r.Context(), input)
 	if err != nil {
 		return err
 	}

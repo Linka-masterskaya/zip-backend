@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -48,29 +49,72 @@ func (r *Repository) Create(
 	return result, nil
 }
 
-func (r *Repository) List(ctx context.Context, ownerID uuid.UUID) ([]storedStudent, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT `+studentColumns+`
+func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInput) ([]storedStudent, int, error) {
+	query := `
+		SELECT ` + studentColumns + `, COUNT(*) OVER() as total_count
 		FROM students
 		WHERE defectologist_id = $1 AND deleted_at IS NULL
-		ORDER BY lower(name), id`, ownerID)
+	`
+
+	args := []any{ownerID}
+	argIdx := 2
+
+	sortBy := "name"
+	if input.SortBy != "" {
+		sortBy = input.SortBy
+	}
+
+	orderDir := "ASC"
+	if strings.ToLower(input.Order) == "desc" {
+		orderDir = "DESC"
+	}
+
+	var orderByClause string
+	switch sortBy {
+	case "last_lesson_at":
+		orderByClause = fmt.Sprintf("last_lesson_at %s NULLS LAST, id ASC", orderDir)
+	case "name":
+		orderByClause = fmt.Sprintf("lower(name) %s, id ASC", orderDir)
+	default:
+		orderByClause = fmt.Sprintf("%s %s, id ASC", sortBy, orderDir)
+	}
+
+	query += " ORDER BY " + orderByClause
+
+	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, input.Limit, input.Offset)
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("student list: %w", err)
+		return nil, 0, fmt.Errorf("student list: %w", err)
 	}
 	defer rows.Close()
 
-	result := make([]storedStudent, 0)
+	var result []storedStudent
+	totalCount := 0
+
 	for rows.Next() {
-		item, scanErr := scanStudent(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("student list scan: %w", scanErr)
+		var item storedStudent
+		var total int64
+
+		err := rows.Scan(
+			&item.ID, &item.EmailEncrypted, &item.EmailVerified, &item.Name, &item.Age, &item.Status, &item.LastLessonAt,
+			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt, &total,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("student list scan: %w", err)
 		}
-		result = append(result, *item)
+
+		if len(result) == 0 {
+			totalCount = int(total)
+		}
+		result = append(result, item)
 	}
+
 	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("student list rows: %w", err)
+		return nil, 0, fmt.Errorf("student list rows: %w", err)
 	}
-	return result, nil
+	return result, totalCount, nil
 }
 
 func (r *Repository) Update(
@@ -85,11 +129,13 @@ func (r *Repository) Update(
 		    name = COALESCE($5, name),
 		    age = COALESCE($6, age),
 		    status = COALESCE($7, status),
+			last_lesson_at = CASE WHEN $8 THEN $9 ELSE last_lesson_at END,
 		    updated_at = now()
 		WHERE id = $2 AND defectologist_id = $1 AND deleted_at IS NULL
 		RETURNING `+studentColumns,
 		ownerID, studentID, input.EmailSet, input.EmailEncrypted,
-		input.Name, input.Age, input.Status)
+		input.Name, input.Age, input.Status,
+		input.LastLessonSet, input.LastLessonAt)
 	result, err := scanStudent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -136,12 +182,12 @@ func scanStudent(row interface{ Scan(...any) error }) (*storedStudent, error) {
 	var result storedStudent
 	err := row.Scan(
 		&result.ID, &result.EmailEncrypted, &result.EmailVerified,
-		&result.Name, &result.Age, &result.Status, &result.CreatedAt,
-		&result.UpdatedAt, &result.DeletedAt,
+		&result.Name, &result.Age, &result.Status, &result.LastLessonAt,
+		&result.CreatedAt, &result.UpdatedAt, &result.DeletedAt,
 	)
 	return &result, err
 }
 
 const studentColumns = `
-	id, email_encrypted, email_verified, name, age, status,
+	id, email_encrypted, email_verified, name, age, status, last_lesson_at,
 	created_at, updated_at, deleted_at`
