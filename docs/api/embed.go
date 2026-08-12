@@ -29,12 +29,14 @@ func RegisterRoutes(mux interface {
 
 func serveOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
-	_, _ = w.Write(openAPI)
+	if _, err := w.Write(openAPI); err != nil {
+		return
+	}
 }
 
 func serveUI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(`<!doctype html>
+	if _, err := w.Write([]byte(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -57,7 +59,9 @@ func serveUI(w http.ResponseWriter, _ *http.Request) {
     };
   </script>
 </body>
-</html>`))
+</html>`)); err != nil {
+		return
+	}
 }
 
 func serveAsset(w http.ResponseWriter, r *http.Request) {

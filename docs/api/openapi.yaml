@@ -656,7 +656,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '204': { description: Метаданные, объект MinIO и занятая квота удалены }
+        '204': { description: 'Метаданные, объект MinIO и занятая квота удалены' }
         '404': { description: Media не найдено или принадлежит другому пользователю }
         '409': { description: Media ещё используется набором или адаптацией }
 
@@ -715,7 +715,7 @@ paths:
             image/gif:  { schema: { type: string, format: binary } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503': { description: Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME }
+        '503': { description: 'Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME' }
 
   /pictures/{id}/import:
     post:
@@ -1094,7 +1094,7 @@ paths:
         '201': { description: Набор импортирован, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '413': { description: Архив, распакованные данные или квота превышены }
+        '413': { description: 'Архив, распакованные данные или квота превышены' }
 
   /packs/{id}/publication:
     post:

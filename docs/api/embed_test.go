@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,7 +25,7 @@ func TestRegisterRoutes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, nil)
 			res := httptest.NewRecorder()
 			mux.ServeHTTP(res, req)
 			if res.Code != http.StatusOK {
@@ -43,7 +44,7 @@ func TestRegisterRoutes(t *testing.T) {
 func TestUnknownSwaggerAssetIsNotFound(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
-	req := httptest.NewRequest(http.MethodGet, assetsPath+"unknown.js", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, assetsPath+"unknown.js", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusNotFound {
