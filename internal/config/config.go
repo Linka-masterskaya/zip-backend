@@ -68,6 +68,7 @@ type AppConfig struct {
 	FrontendURL    string   `mapstructure:"frontend_url"`
 	MigrationsDir  string   `mapstructure:"migrations_dir"`
 	TrustedProxies []string `mapstructure:"trusted_proxies"`
+	DocsEnabled    bool     `mapstructure:"docs_enabled"`
 }
 
 // DBConfig contains database connection settings.
@@ -323,6 +324,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.frontend_url", "http://localhost:3000")
 	v.SetDefault("app.migrations_dir", "./migrations")
 	v.SetDefault("app.trusted_proxies", []string{})
+	v.SetDefault("app.docs_enabled", false)
 
 	// Server defaults
 	v.SetDefault("server.metrics_port", "9090")
