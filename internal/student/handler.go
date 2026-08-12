@@ -47,15 +47,19 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	if limitStr := q.Get("limit"); limitStr != "" {
-		if lim, err := strconv.Atoi(limitStr); err == nil {
-			input.Limit = lim
+		lim, err := strconv.Atoi(limitStr)
+		if err != nil {
+			return apperr.ErrBadRequest.WithMessage("invalid limit parameter")
 		}
+		input.Limit = lim
 	}
 
 	if offsetStr := q.Get("offset"); offsetStr != "" {
-		if ofs, err := strconv.Atoi(offsetStr); err == nil {
-			input.Offset = ofs
+		ofs, err := strconv.Atoi(offsetStr)
+		if err != nil {
+			return apperr.ErrBadRequest.WithMessage("invalid offset parameter")
 		}
+		input.Offset = ofs
 	}
 
 	result, err := h.service.List(r.Context(), input)

@@ -150,7 +150,8 @@ func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 		return storedUpdate{}, apperr.ErrBadRequest
 	}
 	if input.LastLessonAt != nil {
-		if input.LastLessonAt.After(time.Now()) {
+		today := time.Now().Truncate(24 * time.Hour)
+		if input.LastLessonAt.After(today) {
 			return storedUpdate{}, apperr.ErrBadRequest.WithMessage("last_lesson_at cannot be in the future")
 		}
 		result.LastLessonSet = true

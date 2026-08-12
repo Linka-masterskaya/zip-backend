@@ -50,12 +50,18 @@ func (r *Repository) Create(
 }
 
 func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInput) ([]storedStudent, int, error) {
+	var totalCount int
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM students
+		WHERE defectologist_id = $1 AND deleted_at IS NULL
+	`, ownerID).Scan(&totalCount); err != nil {
+		return nil, 0, fmt.Errorf("student count: %w", err)
+	}
 	query := `
-		SELECT ` + studentColumns + `, COUNT(*) OVER() as total_count
+		SELECT ` + studentColumns + `
 		FROM students
 		WHERE defectologist_id = $1 AND deleted_at IS NULL
 	`
-
 	args := []any{ownerID}
 	argIdx := 2
 
@@ -75,8 +81,12 @@ func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInpu
 		orderByClause = fmt.Sprintf("last_lesson_at %s NULLS LAST, id ASC", orderDir)
 	case "name":
 		orderByClause = fmt.Sprintf("lower(name) %s, id ASC", orderDir)
+	case "age":
+		orderByClause = fmt.Sprintf("age %s, id ASC", orderDir)
+	case "status":
+		orderByClause = fmt.Sprintf("status %s, id ASC", orderDir)
 	default:
-		orderByClause = fmt.Sprintf("%s %s, id ASC", sortBy, orderDir)
+		orderByClause = fmt.Sprintf("lower(name) %s, id ASC", orderDir)
 	}
 
 	query += " ORDER BY " + orderByClause
@@ -91,22 +101,13 @@ func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInpu
 	defer rows.Close()
 
 	var result []storedStudent
-	totalCount := 0
-
 	for rows.Next() {
 		var item storedStudent
-		var total int64
-
-		err := rows.Scan(
+		if err := rows.Scan(
 			&item.ID, &item.EmailEncrypted, &item.EmailVerified, &item.Name, &item.Age, &item.Status, &item.LastLessonAt,
-			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt, &total,
-		)
-		if err != nil {
+			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,
+		); err != nil {
 			return nil, 0, fmt.Errorf("student list scan: %w", err)
-		}
-
-		if len(result) == 0 {
-			totalCount = int(total)
 		}
 		result = append(result, item)
 	}
