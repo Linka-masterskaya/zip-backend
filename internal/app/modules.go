@@ -25,7 +25,6 @@ type modules struct {
 	folders  httpapi.FolderHandlers
 	students httpapi.StudentHandlers
 	auth     auth.AuthHandlerInterface
-	oauth    *auth.OAuthHandler
 	profile  httpapi.ProfileHandlers
 	pictures *picturebank.Handler
 	checker  *health.Checker
@@ -94,18 +93,33 @@ func buildModules(in *infra) (*modules, error) {
 
 	var oauthHandler *auth.OAuthHandler
 	if cfg.Yandex.ClientID != "" && cfg.Yandex.ClientSecret != "" {
+		redirectURL := cfg.Yandex.RedirectURL
+		if redirectURL == "" {
+			redirectURL = cfg.App.FrontendURL + "/api/v1/auth/yandex/callback"
+		}
+
 		oauthCfg := &oauth2.Config{
 			ClientID:     cfg.Yandex.ClientID,
 			ClientSecret: cfg.Yandex.ClientSecret,
-			RedirectURL:  cfg.App.FrontendURL + "/api/v1/auth/yandex/callback",
-			Scopes:       []string{"default"},
+			RedirectURL:  redirectURL,
+			Scopes:       []string{"login:email", "login:info"},
 			Endpoint: oauth2.Endpoint{
 				AuthURL:  "https://oauth.yandex.ru/authorize",
 				TokenURL: "https://oauth.yandex.ru/token",
 			},
 		}
-		oauthHandler = auth.NewOAuthHandler(authService, in.redis, oauthCfg, cfg.App.FrontendURL)
+		oauthHandler = auth.NewOAuthHandler(
+			authService,
+			in.redis,
+			oauthCfg,
+			cfg.App.FrontendURL,
+			cfg.Auth.CookieSecure,
+			cfg.Auth.RefreshTokenTTL,
+		)
 	}
+
+	// Устанавливаем OAuthHandler в authHandler
+	authHandler.SetOAuthHandler(oauthHandler)
 
 	profileService := profile.NewService(
 		profile.NewRepository(in.db), in.storage, in.mailer, in.crypto, in.redis,
@@ -138,8 +152,7 @@ func buildModules(in *infra) (*modules, error) {
 		students: httpapi.StudentHandlers{
 			Student: student.NewHandler(student.NewService(studentRepo, in.crypto)),
 		},
-		auth:  authHandler,
-		oauth: oauthHandler,
+		auth: authHandler,
 		profile: httpapi.ProfileHandlers{
 			Profile:        profile.NewHandler(profileService),
 			ChangePassword: profile.NewChangePasswordHandler(changePasswordService),

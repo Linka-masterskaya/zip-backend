@@ -50,10 +50,7 @@ func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redi
 	httpapi.RegisterPictureBankRoutes(mux, authMW, rl.Pictures, mods.pictures)
 	httpapi.RegisterProfileRoutes(mux, authMW, rl, mods.profile)
 
-	mods.auth.RegisterRoutes(mux, authMW, redis, cfg)
-	if mods.oauth != nil {
-		mods.oauth.RegisterOAuthRoutes(mux)
-	}
+	httpapi.RegisterAuthRoutes(mux, authMW, rl, redis, cfg, mods.auth)
 
 	handler := middleware.Chain(
 		mux,
