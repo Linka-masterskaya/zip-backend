@@ -34,7 +34,19 @@ type authServiceIface interface {
 }
 
 type AuthHandlerInterface interface {
-	RegisterRoutes(mux *http.ServeMux, authMW *middleware.AuthMW, cacheClient *cache.Client, cfg *config.Config)
+	RegisterRoutes(
+		mux *http.ServeMux,
+		authMW *middleware.AuthMW,
+		cacheClient *cache.Client,
+		cfg *config.Config,
+		loginLimit middleware.Middleware,
+		registerLimit middleware.Middleware,
+		refreshLimit middleware.Middleware,
+		forgotLimit middleware.Middleware,
+		resetLimit middleware.Middleware,
+		verifyResendLimit middleware.Middleware,
+		verifyEmailLimit middleware.Middleware,
+	)
 }
 
 type authHandlers struct {
@@ -42,6 +54,7 @@ type authHandlers struct {
 	refreshTokenTTL time.Duration
 	cookieSecure    bool
 	frontendOrigin  string
+	oauthHandler    *OAuthHandler
 }
 
 func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
@@ -56,6 +69,10 @@ func NewAuthHandler(svc authServiceIface, cfg ...Config) *authHandlers {
 	}
 
 	return h
+}
+
+func (h *authHandlers) SetOAuthHandler(oauth *OAuthHandler) {
+	h.oauthHandler = oauth
 }
 
 type RegisterRequest struct {
@@ -316,48 +333,52 @@ func (h *authHandlers) ResetPassword(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-// RegisterRoutes регистрирует все auth эндпоинты.
+// RegisterRoutes регистрирует все auth эндпоинты и OAuth роуты (если настроены).
 func (h *authHandlers) RegisterRoutes(
 	mux *http.ServeMux,
 	authMW *middleware.AuthMW,
 	cacheClient *cache.Client,
 	cfg *config.Config,
+	loginLimit middleware.Middleware,
+	registerLimit middleware.Middleware,
+	refreshLimit middleware.Middleware,
+	forgotLimit middleware.Middleware,
+	resetLimit middleware.Middleware,
+	verifyResendLimit middleware.Middleware,
+	verifyEmailLimit middleware.Middleware,
 ) {
-	mux.Handle("POST /api/v1/auth/register", middleware.ErrorMiddleware(h.Register))
-	mux.Handle("POST /api/v1/auth/login", middleware.ErrorMiddleware(h.Login))
-	mux.Handle("POST /api/v1/auth/refresh", middleware.ErrorMiddleware(h.Refresh))
-	mux.Handle("POST /api/v1/auth/forgot-password", middleware.ErrorMiddleware(h.ForgotPassword))
-	mux.Handle("POST /api/v1/auth/reset-password", middleware.ErrorMiddleware(h.ResetPassword))
+	// Публичные эндпоинты С RATE LIMIT
+	mux.Handle("POST /api/v1/auth/register",
+		registerLimit(middleware.ErrorMiddleware(h.Register)),
+	)
+	mux.Handle("POST /api/v1/auth/login",
+		loginLimit(middleware.ErrorMiddleware(h.Login)),
+	)
+	mux.Handle("POST /api/v1/auth/refresh",
+		refreshLimit(middleware.ErrorMiddleware(h.Refresh)),
+	)
+	mux.Handle("POST /api/v1/auth/forgot-password",
+		forgotLimit(middleware.ErrorMiddleware(h.ForgotPassword)),
+	)
+	mux.Handle("POST /api/v1/auth/reset-password",
+		resetLimit(middleware.ErrorMiddleware(h.ResetPassword)),
+	)
 
 	mux.Handle("POST /api/v1/auth/logout",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(h.Logout)),
 	)
 
-	verifyResendIPLimit := middleware.RateLimit(
-		cacheClient,
-		"verify-resend",
-		int64(cfg.Auth.VerifyResendRateLimit),
-		time.Minute,
-		cfg.App.TrustedProxies,
-	)
-
 	mux.Handle("POST /api/v1/auth/verify-resend",
-		verifyResendIPLimit(
-			middleware.ErrorMiddleware(h.ResendEmail),
-		),
-	)
-
-	verifyEmailIPLimit := middleware.RateLimit(
-		cacheClient,
-		"email-confirm",
-		int64(cfg.Auth.EmailConfirmRateLimit),
-		time.Minute,
-		cfg.App.TrustedProxies,
+		verifyResendLimit(middleware.ErrorMiddleware(h.ResendEmail)),
 	)
 
 	mux.Handle("POST /api/v1/auth/email-confirm",
-		verifyEmailIPLimit(middleware.ErrorMiddleware(h.VerifyEmail)),
+		verifyEmailLimit(middleware.ErrorMiddleware(h.VerifyEmail)),
 	)
+
+	if h.oauthHandler != nil {
+		h.oauthHandler.RegisterOAuthRoutes(mux)
+	}
 }
 
 type ForgotPasswordRequest struct {
@@ -382,10 +403,12 @@ type yandexUserInfo struct {
 }
 
 type OAuthHandler struct {
-	service     *authService
-	cache       *cache.Client
-	oauthCfg    *oauth2.Config
-	frontendURL string
+	service         *authService
+	cache           *cache.Client
+	oauthCfg        *oauth2.Config
+	frontendURL     string
+	secure          bool
+	refreshTokenTTL time.Duration
 }
 
 // NewOAuthHandler создает OAuthHandler отдельно.
@@ -395,18 +418,23 @@ func NewOAuthHandler(
 	cache *cache.Client,
 	oauthCfg *oauth2.Config,
 	frontendURL string,
+	secure bool,
+	refreshTokenTTL time.Duration,
 ) *OAuthHandler {
 	if oauthCfg == nil {
 		return nil
 	}
 	return &OAuthHandler{
-		service:     service,
-		cache:       cache,
-		oauthCfg:    oauthCfg,
-		frontendURL: frontendURL,
+		service:         service,
+		cache:           cache,
+		oauthCfg:        oauthCfg,
+		frontendURL:     frontendURL,
+		secure:          secure,
+		refreshTokenTTL: refreshTokenTTL,
 	}
 }
 
+// RegisterOAuthRoutes регистрирует OAuth эндпоинты.
 func (h *OAuthHandler) RegisterOAuthRoutes(mux *http.ServeMux) {
 	if h == nil {
 		return
@@ -427,6 +455,16 @@ func (h *OAuthHandler) YandexLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to save state", http.StatusInternalServerError)
 		return
 	}
+	// Устанавливаем state в cookie для защиты от CSRF
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    state,
+		Path:     "/api/v1/auth/yandex/callback",
+		MaxAge:   300,
+		HttpOnly: true,
+		Secure:   h.secure,
+		SameSite: http.SameSiteLaxMode,
+	})
 	url := h.oauthCfg.AuthCodeURL(state)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
@@ -440,6 +478,22 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing code or state", http.StatusBadRequest)
 		return
 	}
+
+	stateCookie, err := r.Cookie("oauth_state")
+	if err != nil || stateCookie.Value != state {
+		http.Error(w, "Invalid state", http.StatusForbidden)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    "",
+		Path:     "/api/v1/auth/yandex/callback",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.secure,
+		SameSite: http.SameSiteLaxMode,
+	})
 
 	if err := h.validateState(ctx, state); err != nil {
 		http.Error(w, "Invalid or expired state", http.StatusForbidden)
@@ -457,6 +511,12 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("failed to fetch user info", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if yandexUser.Email == "" {
+		slog.Error("yandex user email is empty")
+		http.Error(w, "Email not provided by Yandex", http.StatusBadRequest)
 		return
 	}
 
@@ -488,7 +548,28 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenString, err := h.service.GenerateOAuthJWT(user, userAuth)
+	jti := uuid.NewString()
+	fid := uuid.NewString()
+
+	rec := cache.RefreshRecord{
+		FID:    fid,
+		Status: "active",
+		UserID: user.ID,
+	}
+	if err := h.cache.StoreRefresh(ctx, jti, rec, h.refreshTokenTTL); err != nil {
+		slog.Error("failed to store refresh token", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	refreshToken, err := h.service.generateRefreshToken(user, jti)
+	if err != nil {
+		slog.Error("failed to generate refresh token", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	accessToken, err := h.service.GenerateOAuthJWT(user, userAuth)
 	if err != nil {
 		slog.Error("failed to generate JWT", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -496,14 +577,18 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     "token",
-		Value:    tokenString,
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		Path:     "/api/v1/auth",
+		MaxAge:   int(h.refreshTokenTTL.Seconds()),
 		HttpOnly: true,
-		Secure:   true,
-		Path:     "/",
-		MaxAge:   86400,
+		Secure:   h.secure,
+		SameSite: http.SameSiteStrictMode,
 	})
-	http.Redirect(w, r, h.frontendURL, http.StatusSeeOther)
+
+	// Передаем access token через URL параметр для фронта
+	redirectURL := h.frontendURL + "?access_token=" + accessToken
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 func (h *OAuthHandler) validateState(ctx context.Context, state string) error {

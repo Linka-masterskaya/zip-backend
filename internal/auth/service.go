@@ -624,10 +624,6 @@ func (au *authService) handleExistingIdentity(ctx context.Context, identity *Use
 		return nil, nil, fmt.Errorf("user not found for identity")
 	}
 
-	if err := au.repo.UpdateUserName(ctx, identity.UserID, name); err != nil {
-		return nil, nil, fmt.Errorf("update user name: %w", err)
-	}
-
 	cred, err := au.repo.GetAuthCredByUserID(ctx, identity.UserID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get auth_cred: %w", err)
@@ -770,11 +766,10 @@ func (au *authService) Logout(ctx context.Context, refreshToken string) error {
 		return nil
 	}
 
-	claims, record, err := au.validateRefreshToken(refreshToken)
+	_, record, err := au.validateRefreshToken(refreshToken)
 	if err != nil {
 		return nil
 	}
-	_ = claims
 
 	if err := au.cache.RevokeFamily(ctx, record.FID); err != nil {
 		return fmt.Errorf("authService.Logout: %w", err)
