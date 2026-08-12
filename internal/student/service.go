@@ -101,7 +101,7 @@ func (s *Service) Update(
 	if err != nil {
 		return nil, err
 	}
-	if input.Email == nil && input.Name == nil && input.Age == nil && input.Status == nil {
+	if input.Email == nil && input.Name == nil && input.Age == nil && input.Status == nil && input.LastLessonAt == nil {
 		return nil, apperr.ErrBadRequest
 	}
 	storedInput, err := s.prepareUpdate(input)
@@ -174,7 +174,7 @@ func (s *Service) decode(stored *storedStudent) (*Student, error) {
 	}
 	return &Student{
 		ID: stored.ID, Email: string(email), EmailVerified: stored.EmailVerified,
-		Name: stored.Name, Age: stored.Age, Status: stored.Status,
+		Name: stored.Name, Age: stored.Age, Status: stored.Status, LastLessonAt: stored.LastLessonAt,
 		CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt,
 	}, nil
 }

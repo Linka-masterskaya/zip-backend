@@ -256,9 +256,21 @@ components:
         name:           { type: string }
         age:            { type: integer, minimum: 0, maximum: 100, nullable: true }
         status:         { type: string, enum: [active, paused, archived, one_time] }
+        last_lesson_at: { type: string, format: date, nullable: true, description: Дата последнего занятия }
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
 
+    StudentListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Student' }
+        total:
+          type: integer
+          description: Общее количество записей для пагинации
+           
     ContentItem:
       type: object
       required: [type, id, name, updated_at]
@@ -1062,14 +1074,21 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
     get:
       tags: [students]
-      summary: Ученики текущего дефектолога
+      summary: Ученики текущего дефектолога (с пагинацией и сортировкой)
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 }, description: "Количество записей на странице" }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 }, description: "Смещение для пагинации" }
+        - { name: sort_by, in: query, schema: { type: string, enum: [name, age, status, last_lesson_at], default: name }, description: "Поле для сортировки" }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc }, description: "Направление сортировки" }
       responses:
         '200':
-          description: Список
+          description: Пагинированный список учеников
           content:
             application/json:
-              schema: { type: array, items: { $ref: '#/components/schemas/Student' } }
+              schema: { items: { $ref: '#/components/schemas/StudentListResponse' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /students/{id}:
     patch:
