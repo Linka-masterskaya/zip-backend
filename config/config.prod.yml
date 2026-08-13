@@ -4,6 +4,7 @@ app:
   public_url: 'https://linka.rassokha.pro'
   frontend_url: 'https://linka.rassokha.pro'
   migrations_dir: './migrations'
+  docs_enabled: false
   trusted_proxies:
     - '127.0.0.1'
     - '10.0.0.0/8'

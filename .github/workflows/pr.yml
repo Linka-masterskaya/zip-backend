@@ -23,6 +23,30 @@ jobs:
           version: latest
           args: --config=.golangci.yml
 
+  openapi:
+    name: OpenAPI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Lint OpenAPI
+        run: npx --yes @redocly/cli@latest lint docs/api/openapi.yaml
+
+      - name: Check OpenAPI route drift
+        run: go test ./internal/httpapi -run '^TestOpenAPIRouteDrift$' -count=1
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -250,12 +274,13 @@ jobs:
   required-pr-checks:
     name: Required PR checks
     if: always()
-    needs: [lint, test, e2e, rotation-integration, build, secret-scan, trivy]
+    needs: [lint, openapi, test, e2e, rotation-integration, build, secret-scan, trivy]
     runs-on: ubuntu-latest
     steps:
       - name: Require every PR check
         env:
           LINT_RESULT: ${{ needs.lint.result }}
+          OPENAPI_RESULT: ${{ needs.openapi.result }}
           TEST_RESULT: ${{ needs.test.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
           ROTATION_RESULT: ${{ needs.rotation-integration.result }}
@@ -264,7 +289,7 @@ jobs:
           TRIVY_RESULT: ${{ needs.trivy.result }}
         run: |
           for result in \
-            "$LINT_RESULT" "$TEST_RESULT" "$E2E_RESULT" \
+            "$LINT_RESULT" "$OPENAPI_RESULT" "$TEST_RESULT" "$E2E_RESULT" \
             "$ROTATION_RESULT" "$BUILD_RESULT" "$SECRET_SCAN_RESULT" "$TRIVY_RESULT"; do
             [ "$result" = "success" ] || exit 1
           done
