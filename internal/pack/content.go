@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -102,7 +103,7 @@ func (s *ContentService) RestoreVersion(
 }
 
 type mediaUploader interface {
-	Upload(context.Context, []byte) (*media.Response, error)
+	Upload(context.Context, []byte, string) (*media.Response, error)
 }
 
 // PictureLoader resolves a Pictures Bank reference for a self-contained export.
@@ -292,7 +293,7 @@ func (s *ContentService) uploadImportedMedia(
 			if !ok || element.MediaURL == "" {
 				return apperr.ErrBadRequest.WithMessage("archive media reference is missing")
 			}
-			uploaded, uploadErr := s.uploader.Upload(ctx, content)
+			uploaded, uploadErr := s.uploader.Upload(ctx, content, filepath.Base(element.MediaURL))
 			if uploadErr != nil {
 				return uploadErr
 			}
