@@ -156,7 +156,9 @@ func (s *Service) List(ctx context.Context, input ListInput) (*ListPage, error) 
 		input.Limit = defaultListLimit
 	}
 	if input.Limit < 1 || input.Limit > maxListLimit {
-		return nil, apperr.ErrBadRequest.WithMessage("limit must be between 1 and 100")
+		return nil, apperr.ErrBadRequest.WithMessage(
+			fmt.Sprintf("limit must be between 1 and %d", maxListLimit),
+		)
 	}
 	var cursor *mediaCursor
 	if input.Cursor != "" {
