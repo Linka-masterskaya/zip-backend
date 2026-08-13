@@ -347,7 +347,6 @@ func (h *authHandlers) RegisterRoutes(
 	verifyResendLimit middleware.Middleware,
 	verifyEmailLimit middleware.Middleware,
 ) {
-	// Публичные эндпоинты С RATE LIMIT
 	mux.Handle("POST /api/v1/auth/register",
 		registerLimit(middleware.ErrorMiddleware(h.Register)),
 	)
@@ -367,13 +366,38 @@ func (h *authHandlers) RegisterRoutes(
 	mux.Handle("POST /api/v1/auth/logout",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(h.Logout)),
 	)
+	verifyResendIPLimit := middleware.RateLimit(
+		cacheClient,
+		"verify-resend",
+		int64(cfg.Auth.VerifyResendRateLimit),
+		time.Minute,
+		cfg.App.TrustedProxies,
+	)
+
+	resendPolicy := middleware.RateLimitPolicy{
+		Scope:  cfg.RateLimit.Resend.Scope,
+		Limit:  cfg.RateLimit.Resend.Limit,
+		Window: cfg.RateLimit.Resend.Window,
+	}
 
 	mux.Handle("POST /api/v1/auth/verify-resend",
-		verifyResendLimit(middleware.ErrorMiddleware(h.ResendEmail)),
+		verifyResendIPLimit(
+			middleware.ErrorMiddleware(
+				middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
+			),
+		),
+	)
+
+	verifyEmailIPLimit := middleware.RateLimit(
+		cacheClient,
+		"email-confirm",
+		int64(cfg.Auth.EmailConfirmRateLimit),
+		time.Minute,
+		cfg.App.TrustedProxies,
 	)
 
 	mux.Handle("POST /api/v1/auth/email-confirm",
-		verifyEmailLimit(middleware.ErrorMiddleware(h.VerifyEmail)),
+		verifyEmailIPLimit(middleware.ErrorMiddleware(h.VerifyEmail)),
 	)
 
 	if h.oauthHandler != nil {
@@ -514,6 +538,7 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Валидация email
 	if yandexUser.Email == "" {
 		slog.Error("yandex user email is empty")
 		http.Error(w, "Email not provided by Yandex", http.StatusBadRequest)
@@ -548,6 +573,7 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Генерируем пару токенов (как в обычном login)
 	jti := uuid.NewString()
 	fid := uuid.NewString()
 
@@ -576,6 +602,7 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Устанавливаем refresh cookie (как в обычном login)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    refreshToken,
@@ -585,9 +612,7 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 		Secure:   h.secure,
 		SameSite: http.SameSiteStrictMode,
 	})
-
-	// Передаем access token через URL параметр для фронта
-	redirectURL := h.frontendURL + "?access_token=" + accessToken
+	redirectURL := h.frontendURL + "#access_token=" + accessToken
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 

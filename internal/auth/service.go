@@ -194,13 +194,24 @@ func (au *authService) Login(
 }
 
 // validateRefreshToken проверяет refresh токен и возвращает claims и запись из кэша.
-func (au *authService) validateRefreshToken(refreshToken string) (*RefreshClaims, *cache.RefreshRecord, error) {
+func (au *authService) validateRefreshToken(ctx context.Context, refreshToken string) (*RefreshClaims, *cache.RefreshRecord, error) {
 	token, err := jwt.ParseWithClaims(refreshToken, &RefreshClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
+		typ, ok := token.Header["typ"].(string)
+		if !ok || typ != "refresh" {
+			return nil, fmt.Errorf("unexpected token type: %v", token.Header["typ"])
+		}
+
 		return []byte(au.cfg.JWTSecret), nil
-	})
+	},
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuer(jwtIssuer),
+		jwt.WithAudience(jwtAudience),
+		jwt.WithIssuedAt(),
+		jwt.WithLeeway(10*time.Second),
+	)
 	if err != nil {
 		return nil, nil, apperr.ErrJWTTokenInvalid
 	}
@@ -210,7 +221,8 @@ func (au *authService) validateRefreshToken(refreshToken string) (*RefreshClaims
 		return nil, nil, apperr.ErrJWTTokenInvalid
 	}
 
-	record, err := au.cache.GetRefresh(context.Background(), claims.ID)
+	// Используем ctx вместо context.Background()
+	record, err := au.cache.GetRefresh(ctx, claims.ID)
 	if err != nil || record == nil {
 		return nil, nil, apperr.ErrJWTTokenInvalid
 	}
@@ -298,7 +310,7 @@ func (au *authService) rotateRefreshToken(ctx context.Context, user *User, oldJT
 
 // Refresh выполняет ротацию refresh токена.
 func (au *authService) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
-	claims, record, err := au.validateRefreshToken(refreshToken)
+	claims, record, err := au.validateRefreshToken(ctx, refreshToken)
 	if err != nil {
 		return nil, err
 	}
@@ -370,16 +382,21 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
-			return nil // не раскрываем существование email
+			return nil
 		}
 		return err
 	}
 	if user.EmailVerified {
-		return nil // уже верифицирован
+		return nil
+	}
+
+	userID, err := uuid.Parse(user.ID)
+	if err != nil {
+		return fmt.Errorf("authService.resendEmail: parse user id: %w", err)
 	}
 
 	// Получаем email для отправки
-	cred, err := au.repo.GetAuthCredByUserID(ctx, uuid.MustParse(user.ID))
+	cred, err := au.repo.GetAuthCredByUserID(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -408,7 +425,7 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 	err = au.repo.rotateEmailTokens(
 		ctx,
 		tokenID,
-		uuid.MustParse(user.ID),
+		userID,
 		hashToken[:],
 		time.Now().Add(au.cfg.VerifyEmailTokenTTL),
 	)
@@ -766,7 +783,7 @@ func (au *authService) Logout(ctx context.Context, refreshToken string) error {
 		return nil
 	}
 
-	_, record, err := au.validateRefreshToken(refreshToken)
+	_, record, err := au.validateRefreshToken(ctx, refreshToken)
 	if err != nil {
 		return nil
 	}
