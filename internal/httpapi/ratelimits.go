@@ -30,6 +30,8 @@ func NewRateLimits(c *cache.Client, cfg *config.Config) RateLimits {
 
 	limit := func(scope string, n int64) Middleware {
 		policy := middleware.EndpointPolicy{
+			// Умножаем на 5 (запас под NAT), чтобы легальные пользователи
+			// не блокировали друг друга, но брутфорс оставался неэффективным.
 			IPLimit:        n * 5,
 			IPWindow:       1 * time.Minute,
 			IdentityLimit:  n,

@@ -113,7 +113,12 @@ func extractPayloadSafe(r *http.Request) (email, token string) {
 		return "", ""
 	}
 
-	peekBuf := make([]byte, maxBodySize)
+	allocSize := int64(maxBodySize)
+	if r.ContentLength > 0 && r.ContentLength < allocSize {
+		allocSize = r.ContentLength
+	}
+
+	peekBuf := make([]byte, allocSize)
 	n, err := io.ReadFull(r.Body, peekBuf)
 	peekBuf = peekBuf[:n]
 
