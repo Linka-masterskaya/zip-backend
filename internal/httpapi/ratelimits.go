@@ -27,8 +27,19 @@ type RateLimits struct {
 // NewRateLimits builds all API rate limiters from configuration.
 func NewRateLimits(c *cache.Client, cfg *config.Config) RateLimits {
 	proxies := cfg.App.TrustedProxies
+
 	limit := func(scope string, n int64) Middleware {
-		return middleware.RateLimit(c, scope, n, time.Minute, proxies)
+		policy := middleware.EndpointPolicy{
+			// Умножаем на 5 (запас под NAT), чтобы легальные пользователи
+			// не блокировали друг друга, но брутфорс оставался неэффективным.
+			IPLimit:        n * 5,
+			IPWindow:       1 * time.Minute,
+			IdentityLimit:  n,
+			IdentityWindow: 1 * time.Minute,
+			GlobalLimit:    n * 100,
+			GlobalWindow:   1 * time.Minute,
+		}
+		return middleware.RateLimit(c, scope, policy, proxies)
 	}
 
 	return RateLimits{

@@ -15,7 +15,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const archiveMultipartOverhead = int64(128 * 1024)
+const (
+	archiveMultipartOverhead = int64(128 * 1024)
+	maxConfigSize            = int64(5 * 1024 * 1024)
+)
 
 type contentService interface {
 	SaveConfig(context.Context, uuid.UUID, json.RawMessage) (*Pack, error)
@@ -24,6 +27,9 @@ type contentService interface {
 	Import(context.Context, string, uuid.UUID, []byte) (*Pack, error)
 	Assign(context.Context, uuid.UUID, []uuid.UUID) ([]Adaptation, error)
 	Unassign(context.Context, uuid.UUID, uuid.UUID) error
+	ListAdaptations(context.Context, uuid.UUID) ([]Adaptation, error)
+	GetAdaptation(context.Context, uuid.UUID) (*Adaptation, error)
+	UpdateAdaptationConfig(context.Context, uuid.UUID, json.RawMessage) (*Adaptation, error)
 	CreateVersion(context.Context, uuid.UUID) (*Version, error)
 	ListVersions(context.Context, uuid.UUID, ListInput) ([]*VersionSummary, error)
 	GetVersion(context.Context, uuid.UUID, int) (*Version, error)
@@ -42,19 +48,27 @@ func NewContentHandler(service contentService) *ContentHandler {
 	return &ContentHandler{service: service}
 }
 
+func readConfig(w http.ResponseWriter, r *http.Request) (json.RawMessage, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxConfigSize+1)
+	config, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return nil, apperr.ErrPayloadTooLarge
+		}
+		return nil, apperr.ErrBadRequest.WithMessage("cannot read config")
+	}
+	return config, nil
+}
+
 func (h *ContentHandler) SaveConfig(w http.ResponseWriter, r *http.Request) error {
 	packID, err := pathUUID(r)
 	if err != nil {
 		return err
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, int64(5*1024*1024)+1)
-	config, err := io.ReadAll(r.Body)
+	config, err := readConfig(w, r)
 	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return apperr.ErrPayloadTooLarge
-		}
-		return apperr.ErrBadRequest.WithMessage("cannot read config")
+		return err
 	}
 	result, err := h.service.SaveConfig(r.Context(), packID, config)
 	if err != nil {
@@ -170,6 +184,46 @@ func (h *ContentHandler) Unassign(w http.ResponseWriter, r *http.Request) error 
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+func (h *ContentHandler) ListAdaptations(w http.ResponseWriter, r *http.Request) error {
+	packID, err := pathUUID(r)
+	if err != nil {
+		return err
+	}
+	result, err := h.service.ListAdaptations(r.Context(), packID)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, result)
+}
+
+func (h *ContentHandler) GetAdaptation(w http.ResponseWriter, r *http.Request) error {
+	adaptationID, err := pathUUID(r)
+	if err != nil {
+		return err
+	}
+	result, err := h.service.GetAdaptation(r.Context(), adaptationID)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, result)
+}
+
+func (h *ContentHandler) UpdateAdaptationConfig(w http.ResponseWriter, r *http.Request) error {
+	adaptationID, err := pathUUID(r)
+	if err != nil {
+		return err
+	}
+	config, err := readConfig(w, r)
+	if err != nil {
+		return err
+	}
+	result, err := h.service.UpdateAdaptationConfig(r.Context(), adaptationID, config)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, result)
 }
 
 func (h *ContentHandler) CreateVersion(w http.ResponseWriter, r *http.Request) error {

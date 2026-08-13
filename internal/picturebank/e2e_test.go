@@ -220,7 +220,17 @@ func picturesE2EServer(
 ) *httptest.Server {
 	t.Helper()
 	auth := middleware.NewAuthMW([]byte(picturesE2EJWTSecret))
-	rateLimit := middleware.RateLimit(redisCache, "pictures_e2e", 100, time.Minute, nil)
+
+	policy := middleware.EndpointPolicy{
+		IPLimit:        100,
+		IPWindow:       time.Minute,
+		IdentityLimit:  100,
+		IdentityWindow: time.Minute,
+		GlobalLimit:    10000,
+		GlobalWindow:   time.Minute,
+	}
+	rateLimit := middleware.RateLimit(redisCache, "pictures_e2e", policy, nil)
+
 	protected := func(next middleware.AppHandler) http.Handler {
 		return rateLimit(middleware.ErrorMiddleware(auth.AuthMiddleware(next)))
 	}

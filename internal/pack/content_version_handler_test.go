@@ -188,12 +188,15 @@ func performContentVersionRequest(
 }
 
 type fakeContentVersionService struct {
-	exportFn           func(context.Context, uuid.UUID) (*ExportArchive, error)
-	exportAdaptationFn func(context.Context, uuid.UUID) (*ExportArchive, error)
-	createVersionFn    func(context.Context, uuid.UUID) (*Version, error)
-	listVersionsFn     func(context.Context, uuid.UUID, ListInput) ([]*VersionSummary, error)
-	getVersionFn       func(context.Context, uuid.UUID, int) (*Version, error)
-	restoreVersionFn   func(context.Context, uuid.UUID, int) (*RestoreResult, error)
+	exportFn                 func(context.Context, uuid.UUID) (*ExportArchive, error)
+	exportAdaptationFn       func(context.Context, uuid.UUID) (*ExportArchive, error)
+	createVersionFn          func(context.Context, uuid.UUID) (*Version, error)
+	listVersionsFn           func(context.Context, uuid.UUID, ListInput) ([]*VersionSummary, error)
+	getVersionFn             func(context.Context, uuid.UUID, int) (*Version, error)
+	restoreVersionFn         func(context.Context, uuid.UUID, int) (*RestoreResult, error)
+	listAdaptationsFn        func(context.Context, uuid.UUID) ([]Adaptation, error)
+	getAdaptationFn          func(context.Context, uuid.UUID) (*Adaptation, error)
+	updateAdaptationConfigFn func(context.Context, uuid.UUID, json.RawMessage) (*Adaptation, error)
 }
 
 func (f *fakeContentVersionService) SaveConfig(
@@ -234,6 +237,33 @@ func (f *fakeContentVersionService) Assign(
 
 func (f *fakeContentVersionService) Unassign(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
+}
+
+func (f *fakeContentVersionService) ListAdaptations(
+	ctx context.Context, packID uuid.UUID,
+) ([]Adaptation, error) {
+	if f.listAdaptationsFn != nil {
+		return f.listAdaptationsFn(ctx, packID)
+	}
+	return []Adaptation{}, nil
+}
+
+func (f *fakeContentVersionService) GetAdaptation(
+	ctx context.Context, adaptationID uuid.UUID,
+) (*Adaptation, error) {
+	if f.getAdaptationFn != nil {
+		return f.getAdaptationFn(ctx, adaptationID)
+	}
+	return &Adaptation{}, nil
+}
+
+func (f *fakeContentVersionService) UpdateAdaptationConfig(
+	ctx context.Context, adaptationID uuid.UUID, config json.RawMessage,
+) (*Adaptation, error) {
+	if f.updateAdaptationConfigFn != nil {
+		return f.updateAdaptationConfigFn(ctx, adaptationID, config)
+	}
+	return &Adaptation{}, nil
 }
 
 func (f *fakeContentVersionService) CreateVersion(

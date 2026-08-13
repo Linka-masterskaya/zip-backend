@@ -1,13 +1,13 @@
 openapi: 3.0.3
 info:
-  title: Linka Backend API — Auth & Profile
+  title: Linka Backend API
   version: 0.3.0
   description: |
     Auth + Profile для Linka Editor. Сверено с дизайном.
     Без username. Вход по email. Refresh — httpOnly cookie (SameSite=Strict). Access — Bearer JWT (HS256, 15m).
 servers:
-  - url: http://localhost:8080/api/v1
-    description: dev
+  - url: /api/v1
+    description: API v1
 tags:
   - name: auth
   - name: profile
@@ -158,6 +158,30 @@ components:
         created_at:        { type: string, format: date-time }
         updated_at:        { type: string, format: date-time }
 
+    CreatePackRequest:
+      type: object
+      required: [title, folder_id]
+      properties:
+        title: { type: string }
+        folder_id: { type: string, format: uuid }
+
+    UpdatePackRequest:
+      type: object
+      properties:
+        title: { type: string }
+        folder_id: { type: string, format: uuid }
+        age_min: { type: integer, minimum: 3, maximum: 18, nullable: true }
+        age_max: { type: integer, minimum: 3, maximum: 18, nullable: true }
+        difficulty: { type: string, enum: [easy, medium, hard], nullable: true }
+        goals: { type: array, items: { type: string } }
+        notes: { type: string, nullable: true }
+
+    MovePackRequest:
+      type: object
+      required: [folder_id]
+      properties:
+        folder_id: { type: string, format: uuid }
+
     PackListItem:
       allOf:
         - { $ref: '#/components/schemas/Pack' }
@@ -168,17 +192,38 @@ components:
             is_favorite: { type: boolean }
             section: { type: string, enum: [library, my, students] }
 
-    Media:
+    MediaFile:
       type: object
-      required: [id, uploader_id, sha256, mime_type, size_bytes, created_at, url]
+      required: [id, uploader_id, name, sha256, media_type, mime_type, size_bytes, created_at]
       properties:
         id:          { type: string, format: uuid }
         uploader_id: { type: string, format: uuid }
+        name:        { type: string, description: "Имя файла, по нему идёт поиск" }
         sha256:      { type: string, pattern: '^[a-f0-9]{64}$' }
+        media_type:  { type: string, description: "Первая часть MIME-типа, например image или audio" }
         mime_type:   { type: string }
         size_bytes:  { type: integer, format: int64 }
         created_at:  { type: string, format: date-time }
-        url:         { type: string, format: uri, description: Временная presigned MinIO URL }
+
+    Media:
+      allOf:
+        - $ref: '#/components/schemas/MediaFile'
+        - type: object
+          required: [url]
+          properties:
+            url: { type: string, format: uri, description: Временная presigned MinIO URL }
+
+    MediaPage:
+      type: object
+      required: [items]
+      description: Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`.
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFile' }
+        next_cursor:
+          type: string
+          description: Курсор следующей страницы. Отсутствует, если страница последняя.
 
     PictureCategory:
       type: object
@@ -313,12 +358,21 @@ paths:
   /auth/verify-email/resend:
     post:
       tags: [auth]
-      summary: Переслать письмо верификации текущему пользователю
-      description: "Если verify-письмо потеряно. Использует email из access-токена. Под rate-limit (A-10)."
-      security: [{ bearerAuth: [] }]
+      summary: Переслать письмо верификации
+      description: "Публичный endpoint: email передаётся в теле запроса. Под rate-limit."
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
       responses:
-        '202': { description: Если email ещё не подтверждён — письмо отправлено }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '202': { description: Запрос принят }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/login:
@@ -361,25 +415,6 @@ paths:
       security: [{ refreshCookie: [] }]
       responses:
         '204': { description: "Refresh-семья удалена, cookie очищен" }
-
-  /auth/yandex:
-    get:
-      tags: [auth]
-      summary: Старт Яндекс OAuth (R6, p17 «Войти с Яндекс ID»)
-      security: []
-      responses: { '302': { description: Redirect на Яндекс } }
-
-  /auth/yandex/callback:
-    get:
-      tags: [auth]
-      summary: Яндекс callback — upsert user, токены
-      security: []
-      parameters:
-        - { name: code, in: query, required: true, schema: { type: string } }
-        - { name: state, in: query, required: true, schema: { type: string } }
-      responses:
-        '302': { description: Redirect на frontend с refresh-cookie }
-        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /auth/password/forgot:
     post:
@@ -607,6 +642,19 @@ paths:
         '404': { description: Папка не найдена }
 
   /media:
+    get:
+      tags: [media]
+      summary: Список media организации с поиском, фильтром и курсорной пагинацией
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: query, in: query, required: false, schema: { type: string }, description: "Поиск по имени, регистронезависимый" }
+        - { name: type, in: query, required: false, schema: { type: string }, description: "Фильтр по media_type, например image или audio" }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: "Курсор из next_cursor предыдущей страницы" }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 20, default: 5 } }
+      responses:
+        '200': { description: Страница media, content: { application/json: { schema: { $ref: '#/components/schemas/MediaPage' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [media]
       summary: Загрузить изображение или аудио в приватное объектное хранилище
@@ -642,7 +690,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '204': { description: Метаданные, объект MinIO и занятая квота удалены }
+        '204': { description: 'Метаданные, объект MinIO и занятая квота удалены' }
         '404': { description: Media не найдено или принадлежит другому пользователю }
         '409': { description: Media ещё используется набором или адаптацией }
 
@@ -701,7 +749,7 @@ paths:
             image/gif:  { schema: { type: string, format: binary } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503': { description: Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME }
+        '503': { description: 'Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME' }
 
   /pictures/{id}/import:
     post:
@@ -721,6 +769,19 @@ paths:
         '429': { $ref: '#/components/responses/TooMany' }
 
   /packs:
+    post:
+      tags: [packs]
+      summary: Создать набор
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePackRequest' }
+      responses:
+        '201': { description: Набор создан, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     get:
       tags: [packs]
       summary: Найти наборы во всех доступных папках
@@ -746,6 +807,64 @@ paths:
                 items: { $ref: '#/components/schemas/PackListItem' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /packs/{id}:
+    get:
+      tags: [packs]
+      summary: Получить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Набор, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+    patch:
+      tags: [packs]
+      summary: Обновить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdatePackRequest' }
+      responses:
+        '200': { description: Набор обновлён, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+    delete:
+      tags: [packs]
+      summary: Удалить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Набор удалён }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+
+  /packs/{id}/move:
+    post:
+      tags: [packs]
+      summary: Переместить набор в другую папку
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovePackRequest' }
+      responses:
+        '200': { description: Набор перемещён, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
 
   /packs/{id}/config:
     put:
@@ -789,6 +908,69 @@ paths:
         '404': { description: Набор не найден }
         '409': { description: В config есть ссылка на отсутствующий media-файл }
         '413': { description: Архив превышает 50 MiB }
+
+  /packs/{id}/adaptations:
+    get:
+      tags: [packs]
+      summary: Получить адаптации набора для учеников
+      description: Возвращает доступные текущему пользователю снимки config, созданные для учеников этого набора
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Адаптации набора, начиная с недавно обновлённых
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PackAdaptation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден или недоступен пользователю }
+
+  /adaptations/{id}:
+    get:
+      tags: [packs]
+      summary: Получить адаптацию набора
+      description: Возвращает сохранённый для ученика снимок config
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Адаптация набора
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackAdaptation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Адаптация не найдена или недоступна пользователю }
+
+  /adaptations/{id}/config:
+    put:
+      tags: [packs]
+      summary: Полностью сохранить config адаптации
+      description: Валидирует Linka 2.0 и атомарно обновляет config адаптации и связанные media usages
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Config адаптации сохранён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackAdaptation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: Config ссылается на недоступный media-файл }
+        '404': { description: Адаптация не найдена или недоступна пользователю }
+        '413': { description: Размер config превышает допустимый лимит }
 
   /adaptations/{id}/export:
     get:
@@ -946,7 +1128,7 @@ paths:
         '201': { description: Набор импортирован, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '413': { description: Архив, распакованные данные или квота превышены }
+        '413': { description: 'Архив, распакованные данные или квота превышены' }
 
   /packs/{id}/publication:
     post:

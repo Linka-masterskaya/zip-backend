@@ -3,6 +3,7 @@ package pack
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -457,7 +458,7 @@ func TestRepositoryPublicationAdminIsScopedToOrganization(t *testing.T) {
 func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
-	_, ownerID, folderID := seedPackOwner(t, pool, "assignment org")
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "assignment org")
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
 	created, err := repo.Create(context.Background(), ownerID, CreateInput{
 		Title: "Assigned", FolderID: folderID, Config: config,
@@ -478,6 +479,73 @@ func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) 
 	require.Len(t, assigned, 2)
 	assert.JSONEq(t, string(config), string(assigned[0].Config))
 
+	listed, err := repo.ListAdaptations(t.Context(), ownerID, created.ID)
+	require.NoError(t, err)
+	require.Len(t, listed, 2)
+	assert.ElementsMatch(t, studentIDs, []uuid.UUID{listed[0].StudentID, listed[1].StudentID})
+
+	fetched, err := repo.GetAdaptation(t.Context(), ownerID, assigned[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, assigned[0].ID, fetched.ID)
+	assert.Equal(t, created.ID, fetched.PackID)
+	assert.Equal(t, studentIDs[0], fetched.StudentID)
+	assert.JSONEq(t, string(config), string(fetched.Config))
+
+	mediaID := uuid.New()
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
+		)
+		VALUES ($1, $2, $3, 'media.png', $4, 'image/png', 'image', 4, $5)`,
+		mediaID, orgID, ownerID, "adaptation-media-sha", "media/"+mediaID.String(),
+	)
+	require.NoError(t, err)
+	updatedConfig := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":2},
+		"blocks":[{
+			"id":"block","type":"grid",
+			"elements":[{"id":"image","kind":"image","media_id":"` + mediaID.String() + `"}]
+		}]
+	}`)
+	service := NewContentService(repo, nil, nil, nil)
+	updated, err := service.UpdateAdaptationConfig(
+		packContext(ownerID), assigned[0].ID, updatedConfig,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, assigned[0].ID, updated.ID)
+	assert.JSONEq(t, string(updatedConfig), string(updated.Config))
+
+	var adaptationUsageCount int
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_usages
+		WHERE source_type = 'pack_adaptation' AND source_id = $1`, assigned[0].ID,
+	).Scan(&adaptationUsageCount))
+	assert.Equal(t, 1, adaptationUsageCount)
+
+	_, err = service.UpdateAdaptationConfig(packContext(ownerID), assigned[0].ID, json.RawMessage(`{}`))
+	assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+	unchanged, err := repo.GetAdaptation(t.Context(), ownerID, assigned[0].ID)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(updatedConfig), string(unchanged.Config))
+
+	_, foreignID, _ := seedPackOwner(t, pool, "foreign assignment org")
+	_, err = repo.GetAdaptation(t.Context(), foreignID, assigned[0].ID)
+	assert.ErrorIs(t, err, ErrAdaptationNotFound)
+	_, err = repo.ListAdaptations(t.Context(), foreignID, created.ID)
+	assert.ErrorIs(t, err, ErrPackNotFound)
+	_, err = service.UpdateAdaptationConfig(packContext(foreignID), assigned[0].ID, updatedConfig)
+	assertAppErrorStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+
+	emptyPack, err := repo.Create(t.Context(), ownerID, CreateInput{
+		Title: "Unassigned", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+	empty, err := repo.ListAdaptations(t.Context(), ownerID, emptyPack.ID)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+	assert.NotNil(t, empty)
+
 	var adaptationCount int
 	require.NoError(t, pool.QueryRow(context.Background(), `
 		SELECT count(*) FROM pack_adaptations WHERE pack_id = $1`, created.ID,
@@ -490,6 +558,8 @@ func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) 
 		SELECT count(*) FROM pack_adaptations WHERE pack_id = $1`, created.ID,
 	).Scan(&adaptationCount))
 	assert.Zero(t, adaptationCount)
+	_, err = pool.Exec(t.Context(), `DELETE FROM media_files WHERE id = $1`, mediaID)
+	require.NoError(t, err)
 }
 
 func TestRepositoryAdaptationArchiveUsesSnapshotMediaAndChecksAccess(t *testing.T) {

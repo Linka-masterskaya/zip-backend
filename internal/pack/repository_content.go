@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/media"
 )
 
 func (r *Repository) SaveConfig(
@@ -33,7 +34,7 @@ func (r *Repository) SaveConfig(
 	}
 	if len(mediaIDs) > 0 {
 		var count int
-		err = tx.QueryRow(ctx, countPackMediaQuery, orgID, mediaIDs).Scan(&count)
+		err = tx.QueryRow(ctx, countAccessibleMediaQuery, orgID, mediaIDs).Scan(&count)
 		if err != nil {
 			return nil, fmt.Errorf("pack config validate media: %w", err)
 		}
@@ -122,6 +123,112 @@ func (r *Repository) archiveMedia(
 	return files, nil
 }
 
+func (r *Repository) ListAdaptations(
+	ctx context.Context,
+	userID, packID uuid.UUID,
+) ([]Adaptation, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptations list begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	rows, err := tx.Query(ctx, listAdaptationsQuery, userID, packID)
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptations list: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]Adaptation, 0)
+	for rows.Next() {
+		item, scanErr := scanAdaptation(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("pack adaptations scan: %w", scanErr)
+		}
+		result = append(result, *item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("pack adaptations rows: %w", err)
+	}
+	if len(result) == 0 {
+		var exists bool
+		if err = tx.QueryRow(ctx, ownedPackExistsQuery, userID, packID).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("pack adaptations access: %w", err)
+		}
+		if !exists {
+			return nil, ErrPackNotFound
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("pack adaptations list commit: %w", err)
+	}
+	return result, nil
+}
+
+func (r *Repository) GetAdaptation(
+	ctx context.Context,
+	userID, adaptationID uuid.UUID,
+) (*Adaptation, error) {
+	result, err := scanAdaptation(r.pool.QueryRow(ctx, getAdaptationQuery, userID, adaptationID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrAdaptationNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptation get: %w", err)
+	}
+	return result, nil
+}
+
+func (r *Repository) UpdateAdaptationConfig(
+	ctx context.Context,
+	userID, adaptationID uuid.UUID,
+	config json.RawMessage,
+	mediaIDs []uuid.UUID,
+) (*Adaptation, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptation config begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	var orgID uuid.UUID
+	err = tx.QueryRow(ctx, lockAdaptationForUpdateQuery, userID, adaptationID).Scan(&orgID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrAdaptationNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptation config lock: %w", err)
+	}
+	if len(mediaIDs) > 0 {
+		var count int
+		if err = tx.QueryRow(ctx, countAccessibleMediaQuery, orgID, mediaIDs).Scan(&count); err != nil {
+			return nil, fmt.Errorf("pack adaptation config validate media: %w", err)
+		}
+		if count != len(mediaIDs) {
+			return nil, ErrMediaNotAllowed
+		}
+	}
+	if _, err = tx.Exec(ctx, deleteAdaptationUsagesQuery, adaptationID); err != nil {
+		return nil, fmt.Errorf("pack adaptation config clear media usages: %w", err)
+	}
+	if len(mediaIDs) > 0 {
+		if _, err = tx.Exec(ctx, insertAdaptationMediaUsagesQuery, mediaIDs, adaptationID); err != nil {
+			return nil, fmt.Errorf("pack adaptation config insert media usages: %w", err)
+		}
+	}
+	result, err := scanAdaptation(tx.QueryRow(ctx, updateAdaptationConfigQuery, adaptationID, config))
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptation config update: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("pack adaptation config commit: %w", err)
+	}
+	return result, nil
+}
+
 func (r *Repository) Assign(
 	ctx context.Context,
 	userID, packID uuid.UUID,
@@ -178,7 +285,7 @@ func (r *Repository) Unassign(
 	}
 	defer rollbackPackTx(ctx, tx)
 	var adaptationID uuid.UUID
-	err = tx.QueryRow(ctx, lockAdaptationQuery, userID, packID, studentID).Scan(&adaptationID)
+	err = tx.QueryRow(ctx, lockAdaptationForUnassignQuery, userID, packID, studentID).Scan(&adaptationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrPackNotFound
 	}

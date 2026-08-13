@@ -31,6 +31,9 @@ type contentRepository interface {
 	) (*adaptationArchiveData, []*media.File, error)
 	Assign(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) ([]Adaptation, error)
 	Unassign(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	ListAdaptations(context.Context, uuid.UUID, uuid.UUID) ([]Adaptation, error)
+	GetAdaptation(context.Context, uuid.UUID, uuid.UUID) (*Adaptation, error)
+	UpdateAdaptationConfig(context.Context, uuid.UUID, uuid.UUID, json.RawMessage, []uuid.UUID) (*Adaptation, error)
 	CreateVersion(context.Context, uuid.UUID, uuid.UUID) (*Version, error)
 	ListVersions(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*VersionSummary, error)
 	GetVersion(context.Context, uuid.UUID, uuid.UUID, int) (*Version, error)
@@ -183,6 +186,49 @@ func (s *ContentService) Unassign(
 		return err
 	}
 	return contentError(s.repo.Unassign(ctx, userID, packID, studentID))
+}
+
+// ListAdaptations returns all student-specific snapshots for an owned pack.
+func (s *ContentService) ListAdaptations(
+	ctx context.Context,
+	packID uuid.UUID,
+) ([]Adaptation, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.repo.ListAdaptations(ctx, userID, packID)
+	return result, contentError(err)
+}
+
+// GetAdaptation returns one student-specific snapshot accessible to the current user.
+func (s *ContentService) GetAdaptation(
+	ctx context.Context,
+	adaptationID uuid.UUID,
+) (*Adaptation, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.repo.GetAdaptation(ctx, userID, adaptationID)
+	return result, contentError(err)
+}
+
+func (s *ContentService) UpdateAdaptationConfig(
+	ctx context.Context,
+	adaptationID uuid.UUID,
+	config json.RawMessage,
+) (*Adaptation, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mediaIDs, err := validateAndMediaIDs(ctx, config, false)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.repo.UpdateAdaptationConfig(ctx, userID, adaptationID, config, mediaIDs)
+	return result, contentError(err)
 }
 
 func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) (*ExportArchive, error) {
