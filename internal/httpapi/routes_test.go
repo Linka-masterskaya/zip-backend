@@ -66,6 +66,7 @@ func TestRegisterMediaRoutesPatterns(t *testing.T) {
 
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/media",
+		"GET /api/v1/media",
 		"GET /api/v1/media/{id}",
 		"DELETE /api/v1/media/{id}",
 	})
