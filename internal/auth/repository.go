@@ -59,6 +59,7 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 		FROM users u
 		JOIN auth_cred ac ON ac.user_id = u.id
 		WHERE ac.email_hash = $1
+			AND u.deleted_at IS NULL
 	`
 
 	err := r.db.QueryRow(ctx, query, emailHash).Scan(
