@@ -60,6 +60,7 @@ func (au *authService) generateRefreshToken(user *User, jti string) (string, err
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "refresh"
 	tokenString, err := token.SignedString([]byte(au.cfg.JWTSecret))
 	if err != nil {
 		return "", fmt.Errorf("generate refresh token: %w", err)

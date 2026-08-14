@@ -356,16 +356,17 @@ func (h *authHandlers) RegisterRoutes(
 	mux.Handle("POST /api/v1/auth/refresh",
 		refreshLimit(middleware.ErrorMiddleware(h.Refresh)),
 	)
-	mux.Handle("POST /api/v1/auth/forgot-password",
+	mux.Handle("POST /api/v1/auth/password/forgot",
 		forgotLimit(middleware.ErrorMiddleware(h.ForgotPassword)),
 	)
-	mux.Handle("POST /api/v1/auth/reset-password",
+	mux.Handle("POST /api/v1/auth/password/reset",
 		resetLimit(middleware.ErrorMiddleware(h.ResetPassword)),
 	)
 
 	mux.Handle("POST /api/v1/auth/logout",
 		middleware.ErrorMiddleware(authMW.AuthMiddleware(h.Logout)),
 	)
+
 	verifyResendIPLimit := middleware.RateLimit(
 		cacheClient,
 		"verify-resend",
@@ -380,14 +381,13 @@ func (h *authHandlers) RegisterRoutes(
 		Window: cfg.RateLimit.Resend.Window,
 	}
 
-	mux.Handle("POST /api/v1/auth/verify-resend",
+	mux.Handle("POST /api/v1/auth/verify-email/resend",
 		verifyResendIPLimit(
 			middleware.ErrorMiddleware(
 				middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
 			),
 		),
 	)
-
 	verifyEmailIPLimit := middleware.RateLimit(
 		cacheClient,
 		"email-confirm",
@@ -395,11 +395,9 @@ func (h *authHandlers) RegisterRoutes(
 		time.Minute,
 		cfg.App.TrustedProxies,
 	)
-
-	mux.Handle("POST /api/v1/auth/email-confirm",
+	mux.Handle("POST /api/v1/auth/verify-email",
 		verifyEmailIPLimit(middleware.ErrorMiddleware(h.VerifyEmail)),
 	)
-
 	if h.oauthHandler != nil {
 		h.oauthHandler.RegisterOAuthRoutes(mux)
 	}
