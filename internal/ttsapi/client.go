@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -57,7 +58,9 @@ func (t *Client) Synthesize(ctx context.Context, text, voice string) ([]byte, er
 		return nil, fmt.Errorf("ttsapi.Synthesize: do request: %w", err)
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			slog.WarnContext(ctx, "ttsapi: close response body", "err", closeErr)
+		}
 	}()
 
 	audio, err := io.ReadAll(resp.Body)
@@ -101,7 +104,9 @@ func (t *Client) Voices(ctx context.Context) ([]tts.Voice, error) {
 		return nil, fmt.Errorf("ttsapi.Voices: %w", err)
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			slog.WarnContext(ctx, "ttsapi: close response body", "err", closeErr)
+		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
