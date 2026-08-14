@@ -1,13 +1,13 @@
 openapi: 3.0.3
 info:
-  title: Linka Backend API — Auth & Profile
+  title: Linka Backend API
   version: 0.3.0
   description: |
     Auth + Profile для Linka Editor. Сверено с дизайном.
     Без username. Вход по email. Refresh — httpOnly cookie (SameSite=Strict). Access — Bearer JWT (HS256, 15m).
 servers:
-  - url: http://localhost:8080/api/v1
-    description: dev
+  - url: /api/v1
+    description: API v1
 tags:
   - name: auth
   - name: profile
@@ -157,6 +157,30 @@ components:
         config:            { type: object, additionalProperties: true }
         created_at:        { type: string, format: date-time }
         updated_at:        { type: string, format: date-time }
+
+    CreatePackRequest:
+      type: object
+      required: [title, folder_id]
+      properties:
+        title: { type: string }
+        folder_id: { type: string, format: uuid }
+
+    UpdatePackRequest:
+      type: object
+      properties:
+        title: { type: string }
+        folder_id: { type: string, format: uuid }
+        age_min: { type: integer, minimum: 3, maximum: 18, nullable: true }
+        age_max: { type: integer, minimum: 3, maximum: 18, nullable: true }
+        difficulty: { type: string, enum: [easy, medium, hard], nullable: true }
+        goals: { type: array, items: { type: string } }
+        notes: { type: string, nullable: true }
+
+    MovePackRequest:
+      type: object
+      required: [folder_id]
+      properties:
+        folder_id: { type: string, format: uuid }
 
     PackListItem:
       allOf:
@@ -313,12 +337,21 @@ paths:
   /auth/verify-email/resend:
     post:
       tags: [auth]
-      summary: Переслать письмо верификации текущему пользователю
-      description: "Если verify-письмо потеряно. Использует email из access-токена. Под rate-limit (A-10)."
-      security: [{ bearerAuth: [] }]
+      summary: Переслать письмо верификации
+      description: "Публичный endpoint: email передаётся в теле запроса. Под rate-limit."
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
       responses:
-        '202': { description: Если email ещё не подтверждён — письмо отправлено }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '202': { description: Запрос принят }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/login:
@@ -361,25 +394,6 @@ paths:
       security: [{ refreshCookie: [] }]
       responses:
         '204': { description: "Refresh-семья удалена, cookie очищен" }
-
-  /auth/yandex:
-    get:
-      tags: [auth]
-      summary: Старт Яндекс OAuth (R6, p17 «Войти с Яндекс ID»)
-      security: []
-      responses: { '302': { description: Redirect на Яндекс } }
-
-  /auth/yandex/callback:
-    get:
-      tags: [auth]
-      summary: Яндекс callback — upsert user, токены
-      security: []
-      parameters:
-        - { name: code, in: query, required: true, schema: { type: string } }
-        - { name: state, in: query, required: true, schema: { type: string } }
-      responses:
-        '302': { description: Redirect на frontend с refresh-cookie }
-        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /auth/password/forgot:
     post:
@@ -642,7 +656,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '204': { description: Метаданные, объект MinIO и занятая квота удалены }
+        '204': { description: 'Метаданные, объект MinIO и занятая квота удалены' }
         '404': { description: Media не найдено или принадлежит другому пользователю }
         '409': { description: Media ещё используется набором или адаптацией }
 
@@ -701,7 +715,7 @@ paths:
             image/gif:  { schema: { type: string, format: binary } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503': { description: Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME }
+        '503': { description: 'Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME' }
 
   /pictures/{id}/import:
     post:
@@ -721,6 +735,19 @@ paths:
         '429': { $ref: '#/components/responses/TooMany' }
 
   /packs:
+    post:
+      tags: [packs]
+      summary: Создать набор
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePackRequest' }
+      responses:
+        '201': { description: Набор создан, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     get:
       tags: [packs]
       summary: Найти наборы во всех доступных папках
@@ -746,6 +773,64 @@ paths:
                 items: { $ref: '#/components/schemas/PackListItem' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /packs/{id}:
+    get:
+      tags: [packs]
+      summary: Получить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Набор, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+    patch:
+      tags: [packs]
+      summary: Обновить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdatePackRequest' }
+      responses:
+        '200': { description: Набор обновлён, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+    delete:
+      tags: [packs]
+      summary: Удалить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Набор удалён }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+
+  /packs/{id}/move:
+    post:
+      tags: [packs]
+      summary: Переместить набор в другую папку
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovePackRequest' }
+      responses:
+        '200': { description: Набор перемещён, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
 
   /packs/{id}/config:
     put:
@@ -1009,7 +1094,7 @@ paths:
         '201': { description: Набор импортирован, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '413': { description: Архив, распакованные данные или квота превышены }
+        '413': { description: 'Архив, распакованные данные или квота превышены' }
 
   /packs/{id}/publication:
     post:
