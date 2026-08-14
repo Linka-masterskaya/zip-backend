@@ -72,6 +72,9 @@ scratch/
 # ── Misc ─────────────────────────────────────────────────────────────────────
 *.linka
 
+# Keep N5 Linka Looks compatibility fixture in Git
+!docs/compatibility/linka-looks/testdata/backend-v2-export.linka
+
 # ── Local configuration ─────────────────────────────────────────────────────
 config/*.yml
 !config/config.dev.yml

@@ -1,0 +1,52 @@
+{
+  "client": {
+    "appVersion": "3.2.10",
+    "setFormatVersion": "3.0",
+    "sourceCommit": "b8e65af5825a5a3389e416253393c39d4d5353bd",
+    "configFileBlob": "be3443a89839a04829dd036f2cb5bf493a35e6af"
+  },
+  "execution": "exact official src/common/interfaces/ConfigFile.ts compiled and executed locally",
+  "fixture": "backend-v2-export.linka",
+  "opened": true,
+  "raw": {
+    "backendVersion": "2.0",
+    "blockTypes": [
+      "single_choice",
+      "matching"
+    ],
+    "elementOrder": [
+      "text-yozhik",
+      "image-one",
+      "audio-one",
+      "cat-ru",
+      "cat-en",
+      "dog-ru",
+      "dog-en"
+    ],
+    "archiveEntries": [
+      "media/11111111-1111-4111-8111-111111111111.png",
+      "media/22222222-2222-4222-8222-222222222222.wav",
+      "config.json"
+    ]
+  },
+  "afterOpen": {
+    "version": "3.0",
+    "pageModes": [
+      "standard"
+    ],
+    "cardTypes": [
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "sourceElementIdsPresent": [],
+    "mediaPathsPresent": [],
+    "cyrillicSamplesPresent": []
+  }
+}
