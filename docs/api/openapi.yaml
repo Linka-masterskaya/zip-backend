@@ -418,6 +418,25 @@ paths:
       responses:
         '204': { description: "Пароль обновлён, токен сожжён, сессии отозваны" }
         '400': { $ref: '#/components/responses/BadRequest' }
+  /auth/yandex/login:
+    get:
+      tags: [auth]
+      summary: Начать OAuth авторизацию через Яндекс
+      security: []
+      responses:
+        '302': { description: Редирект на Яндекс }
+        '500': { description: Внутренняя ошибка }
+
+  /auth/yandex/callback:
+    get:
+      tags: [auth]
+      summary: OAuth callback от Яндекса
+      security: []
+      responses:
+        '302': { description: Редирект на фронтенд с access_token в URL }
+        '400': { description: Неверный запрос }
+        '403': { description: Невалидный state }
+        '500': { description: Внутренняя ошибка }
 
   /profile/me:
     get:

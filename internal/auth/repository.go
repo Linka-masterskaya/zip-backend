@@ -232,35 +232,6 @@ func (r *authRepo) rotateEmailTokens(
 	return nil
 }
 
-func (r *authRepo) getUserContactForResend(
-	ctx context.Context,
-	userID uuid.UUID,
-) ([]byte, bool, error) {
-	var (
-		emailEncrypted []byte
-		emailVerified  bool
-	)
-
-	err := r.db.QueryRow(
-		ctx,
-		`SELECT ac.email_encrypted, u.email_verified
-		 FROM users u
-		 JOIN auth_cred ac ON ac.user_id = u.id
-		 WHERE u.id = $1
-		   AND u.deleted_at IS NULL`,
-		userID,
-	).Scan(&emailEncrypted, &emailVerified)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, apperr.ErrUserNotFound
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("authRepo.getUserContactForResend: %w", err)
-	}
-
-	return emailEncrypted, emailVerified, nil
-}
-
 func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
 	query := `
 		SELECT
@@ -361,21 +332,6 @@ func (r *authRepo) CreateOAuthUser(ctx context.Context, params CreateUserParams)
 	_, err := r.db.Exec(ctx, query, params.ID, orgID, params.Name, params.EmailVerified)
 	if err != nil {
 		return fmt.Errorf("authRepo.CreateOAuthUser: %w", err)
-	}
-
-	return nil
-}
-
-func (r *authRepo) UpdateUserName(ctx context.Context, userID uuid.UUID, name string) error {
-	query := `
-		UPDATE users
-		SET display_name = $1, updated_at = now()
-		WHERE id = $2 AND deleted_at IS NULL
-	`
-
-	_, err := r.db.Exec(ctx, query, name, userID)
-	if err != nil {
-		return fmt.Errorf("authRepo.UpdateUserName: %w", err)
 	}
 
 	return nil

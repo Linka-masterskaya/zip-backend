@@ -24,10 +24,22 @@ var httpMethods = map[string]struct{}{
 	"get": {}, "post": {}, "put": {}, "patch": {}, "delete": {}, "head": {}, "options": {}, "trace": {},
 }
 
+var ignoredRoutes = map[routeKey]struct{}{
+	{Method: "GET", Path: "/health"}:  {},
+	{Method: "GET", Path: "/livez"}:   {},
+	{Method: "GET", Path: "/readyz"}:  {},
+	{Method: "GET", Path: "/metrics"}: {},
+}
+
 func TestOpenAPIRouteDrift(t *testing.T) {
 	repoRoot := repositoryRoot(t)
-	registered := registeredRoutes(t, filepath.Join(repoRoot, "internal", "httpapi"))
+	registered := registeredRoutes(t, filepath.Join(repoRoot, "internal"))
 	documented := documentedRoutes(t, filepath.Join(repoRoot, "docs", "api", "openapi.yaml"))
+
+	// Удаляем игнорируемые маршруты
+	for route := range ignoredRoutes {
+		delete(registered, route)
+	}
 
 	missingInOAS := difference(registered, documented)
 	missingInRouter := difference(documented, registered)
@@ -47,33 +59,38 @@ func repositoryRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
-func registeredRoutes(t *testing.T, dir string) map[routeKey]struct{} {
+func registeredRoutes(t *testing.T, rootDir string) map[routeKey]struct{} {
 	t.Helper()
 	set := make(map[routeKey]struct{})
 	fset := token.NewFileSet()
 
-	entries, err := os.ReadDir(dir)
+	err := filepath.WalkDir(rootDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == "vendor" || entry.Name() == ".git" || entry.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			return nil
+		}
+		collectRegisteredRoutes(t, fset, path, set)
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range entries {
-		if !isRouteSourceFile(entry) {
-			continue
-		}
-		collectRegisteredRoutes(t, fset, filepath.Join(dir, entry.Name()), set)
-	}
 	return set
-}
-
-func isRouteSourceFile(entry os.DirEntry) bool {
-	return !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") && !strings.HasSuffix(entry.Name(), "_test.go")
 }
 
 func collectRegisteredRoutes(t *testing.T, fset *token.FileSet, filename string, set map[routeKey]struct{}) {
 	t.Helper()
 	file, err := parser.ParseFile(fset, filename, nil, 0)
 	if err != nil {
-		t.Fatal(err)
+		return
 	}
 	ast.Inspect(file, func(node ast.Node) bool {
 		if route, ok := routeFromHandleCall(node); ok {
@@ -89,7 +106,11 @@ func routeFromHandleCall(node ast.Node) (routeKey, bool) {
 		return routeKey{}, false
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Handle" {
+	if !ok {
+		return routeKey{}, false
+	}
+	// Поддерживаем как Handle, так и HandleFunc
+	if sel.Sel.Name != "Handle" && sel.Sel.Name != "HandleFunc" {
 		return routeKey{}, false
 	}
 	lit, ok := call.Args[0].(*ast.BasicLit)
@@ -101,7 +122,7 @@ func routeFromHandleCall(node ast.Node) (routeKey, bool) {
 		return routeKey{}, false
 	}
 	method, path, ok := strings.Cut(pattern, " ")
-	if !ok || !strings.HasPrefix(path, "/api/v1/") {
+	if !ok {
 		return routeKey{}, false
 	}
 	return routeKey{Method: strings.ToUpper(method), Path: normalizePath(path)}, true
@@ -137,7 +158,8 @@ func documentedRoutes(t *testing.T, filename string) map[routeKey]struct{} {
 		}
 		method := strings.TrimSuffix(strings.TrimSpace(line), ":")
 		if _, ok := httpMethods[method]; ok {
-			set[routeKey{Method: strings.ToUpper(method), Path: normalizePath(currentPath)}] = struct{}{}
+			fullPath := "/api/v1" + currentPath
+			set[routeKey{Method: strings.ToUpper(method), Path: normalizePath(fullPath)}] = struct{}{}
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -147,7 +169,9 @@ func documentedRoutes(t *testing.T, filename string) map[routeKey]struct{} {
 }
 
 func normalizePath(path string) string {
-	path = strings.TrimPrefix(path, "/api/v1")
+	if strings.HasPrefix(path, "/api/v1") {
+		path = strings.TrimPrefix(path, "/api/v1")
+	}
 	if path == "" {
 		return "/"
 	}

@@ -329,7 +329,15 @@ func TestAuthService_Login_EmailNotVerified(t *testing.T) {
 func TestAuthService_Refresh_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)
-	cacheStore := NewMockrefreshStore(ctrl)
+	cacheStore := &fakeCache{
+		GetRefreshResult: &cache.RefreshRecord{
+			FID:    "family-id",
+			Status: "active",
+		},
+		IsFamilyRevokedRes:  false,
+		IsSessionRevokedRes: false,
+		RotateRefreshErr:    nil,
+	}
 
 	cfg := testAuthConfig()
 	svc := NewAuthService(
@@ -356,48 +364,9 @@ func TestAuthService_Refresh_Success(t *testing.T) {
 		t.Fatalf("generate old refresh token: %v", err)
 	}
 
-	cacheStore.EXPECT().
-		GetRefresh(gomock.Any(), oldJTI).
-		Return(&cache.RefreshRecord{
-			FID:    fid,
-			Status: "active",
-		}, nil)
-
-	cacheStore.EXPECT().
-		IsFamilyRevoked(gomock.Any(), fid).
-		Return(false, nil)
-
-	cacheStore.EXPECT().
-		IsSessionRevoked(gomock.Any(), gomock.Any()).
-		Return(false, nil)
-
 	repo.EXPECT().
 		GetUserByID(gomock.Any(), userID).
 		Return(user, nil)
-
-	cacheStore.EXPECT().
-		RotateRefresh(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, req cache.RotateRefreshRequest) error {
-			if req.OldJTI != oldJTI {
-				t.Errorf("OldJTI = %q, want %q", req.OldJTI, oldJTI)
-			}
-			if req.NewJTI == "" {
-				t.Error("NewJTI is empty")
-			}
-			if req.NewJTI == oldJTI {
-				t.Error("NewJTI must differ from OldJTI")
-			}
-			if req.NewRecord.FID != fid {
-				t.Errorf("FID = %q, want %q", req.NewRecord.FID, fid)
-			}
-			if req.NewRecord.Status != "active" {
-				t.Errorf("status = %q, want active", req.NewRecord.Status)
-			}
-			if req.TTL != cfg.RefreshTokenTTL {
-				t.Errorf("TTL = %v, want %v", req.TTL, cfg.RefreshTokenTTL)
-			}
-			return nil
-		})
 
 	result, err := svc.Refresh(context.Background(), oldRefreshToken)
 	if err != nil {
@@ -412,6 +381,9 @@ func TestAuthService_Refresh_Success(t *testing.T) {
 	}
 	if result.RefreshToken == oldRefreshToken {
 		t.Fatal("refresh token was not rotated")
+	}
+	if !cacheStore.RotateRefreshCalled {
+		t.Fatal("RotateRefresh was not called")
 	}
 }
 

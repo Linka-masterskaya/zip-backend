@@ -137,10 +137,15 @@ func extractEmail(r *http.Request) string {
 		Email string `json:"email"`
 	}
 	if errUnmarshal := json.Unmarshal(bodyBytes, &doc); errUnmarshal == nil && doc.Email != "" {
-		return strings.ToLower(strings.TrimSpace(doc.Email))
+		email := strings.ToLower(strings.TrimSpace(doc.Email))
+		if idx := strings.Index(email, "+"); idx > 0 {
+			localPart := email[:idx]
+			domain := email[strings.Index(email, "@"):]
+			return localPart + domain
+		}
+		return email
 	}
 	return ""
-
 }
 
 type RateLimitPolicy struct {

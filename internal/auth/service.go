@@ -44,7 +44,6 @@ type authRepoIface interface {
 	GetAuthCredByUserID(ctx context.Context, userID uuid.UUID) (*UserCred, error)
 	FindIdentityByProviderUID(ctx context.Context, provider, providerUID string) (*UserIdentity, error)
 	CreateOAuthUser(ctx context.Context, params CreateUserParams) error
-	UpdateUserName(ctx context.Context, userID uuid.UUID, name string) error
 	CreateIdentity(ctx context.Context, identity *UserIdentity) error
 	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
 	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
@@ -54,7 +53,6 @@ type authRepoIface interface {
 	useEmailVerifyToken(ctx context.Context, token []byte) (uuid.UUID, uuid.UUID, error)
 	verifyUser(ctx context.Context, userID uuid.UUID) error
 	verifyStudent(ctx context.Context, studentID uuid.UUID) error
-	getUserContactForResend(ctx context.Context, userID uuid.UUID) ([]byte, bool, error)
 	rotateEmailTokens(ctx context.Context, tokenID, userID uuid.UUID, hash []byte, expiresAt time.Time) error
 }
 
