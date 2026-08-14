@@ -45,11 +45,10 @@ Git history confirms that seven fixed JWT/AES/HMAC credentials were tracked. Sou
 | Type | First observed commit | Date | Tracked source SHA-256 | Decoded key-material SHA-256 |
 | --- | --- | --- | --- | --- |
 | JWT | `a456ada` | 2026-06-03 | `f16dd3036e8e542ced86fe8bc25d7d1f6c4b1622f0321069c17600c12b59415b` | — |
-| JWT | `737870a` | 2026-07-10 | `32764387e4bc263f87e102ca57010c55ca8b3d9cb9fb0d809696a6f680e4384d` | — |
 | AES | `7572693` | 2026-07-09 | `861009ec4d599fab1f40abc76e6f89880cff5833c79c548c99f9045f191cd90b` | `861009ec4d599fab1f40abc76e6f89880cff5833c79c548c99f9045f191cd90b` |
-| AES | `737870a` | 2026-07-10 | `cbee3ab7885dfe98049d29d2d92bcb669ce3b37fa9b0f6e46a7a832772332b25` | `5f2560c1d6160f95c48ec63ef391d6993b70ceec9e2d9ad68dbab6286115bf0b` |
+| AES | `737870a` | 2026-07-10 | `5f2560c1d6160f95c48ec63ef391d6993b70ceec9e2d9ad68dbab6286115bf0b` |
 | HMAC | `7572693` | 2026-07-09 | `f6d527e6d01865481134f29788be2afe7fc3c702e1a55d7ceafac5f35199e8dc` | `f6d527e6d01865481134f29788be2afe7fc3c702e1a55d7ceafac5f35199e8dc` |
-| HMAC | `737870a` | 2026-07-10 | `9a17bb0290ef0facc1b39174d8ebf96578a99f2d091d019eef3ecfaebf40fd6b` | `23d328bdaf8da8b816c41b4a70f0f178468fd6c2a66990ee2f083b2496eabf52` |
+| HMAC | `737870a` | 2026-07-10 |`23d328bdaf8da8b816c41b4a70f0f178468fd6c2a66990ee2f083b2496eabf52` |
 | AES/HMAC | `0013390` | 2026-07-31 | `2cf5e6ec387461b4bf954f587ad4d957753fcbc48bf892b5e49996b90cf3b476` | `3eb1bd439947eb762998e566ccc2e099c791118b2f40579cc4f7da2b5061b7f9` |
 
 The deploy workflow now runs `scripts/audit-secret-fingerprints.sh` against the active production JWT/AES/HMAC GitHub Environment secrets before rendering or deploying. The script prints only a status and fails on a known tracked fingerprint. The same audit is the first step of the manual `Production key audit and rotation` workflow.
