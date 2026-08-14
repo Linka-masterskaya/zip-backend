@@ -73,6 +73,14 @@ func (f *fakeRepo) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUID,
 	return uuid.New(), nil
 }
 
+func (f *fakeRepo) GetVoices(_ context.Context) ([]Voice, error) {
+	return nil, fmt.Errorf("no cache")
+}
+
+func (f *fakeRepo) UpsertVoices(_ context.Context, _ []Voice) error {
+	return nil
+}
+
 type fakePub struct {
 	publishFn func(context.Context, broker.TTSJob) error
 }

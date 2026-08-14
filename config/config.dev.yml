@@ -180,3 +180,12 @@ ttsapi:
   rate_limit: 30
   max_text_len: 5000
   max_body_size: 65536
+
+cron:
+  voice_refresh:
+    interval: 1h
+  tts_cleanup:
+    interval: 6h
+    clean_period: 2160h  # 90 days
+    jobs_ttl: 72h        # 3 days
+    limit: 100

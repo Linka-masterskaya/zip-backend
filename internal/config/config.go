@@ -31,6 +31,7 @@ type Config struct {
 	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
 	Server       ServerConfig       `mapstructure:"server"`
 	TTS          TTSConfig          `mapstructure:"ttsapi"`
+	Cron         CronConfig         `mapstructure:"cron"`
 }
 
 // MigrationConfig contains only the settings required by the migration binary.
@@ -249,6 +250,7 @@ type CORSConfig struct {
 	MaxAge           int      `mapstructure:"max_age"`
 }
 
+// TTSConfig contains TTS settings.
 type TTSConfig struct {
 	ServiceURL  string        `mapstructure:"service_url"`
 	Timeout     time.Duration `mapstructure:"timeout"`
@@ -256,6 +258,25 @@ type TTSConfig struct {
 	MaxTextLen  int           `mapstructure:"max_text_len"`
 	MaxBodySize int64         `mapstructure:"max_body_size"`
 	MimeType    string        `mapstructure:"mime_type"`
+}
+
+// CronConfig contains scheduled task settings.
+type CronConfig struct {
+	VoiceRefresh VoiceRefreshCron `mapstructure:"voice_refresh"`
+	TTSCleanup   TTSCleanupCron   `mapstructure:"tts_cleanup"`
+}
+
+// VoiceRefreshCron contains voice cache refresh settings.
+type VoiceRefreshCron struct {
+	Interval time.Duration `mapstructure:"interval"`
+}
+
+// TTSCleanupCron contains TTS cleanup job settings.
+type TTSCleanupCron struct {
+	Interval    time.Duration `mapstructure:"interval"`
+	CleanPeriod time.Duration `mapstructure:"clean_period"`
+	JobsTTL     time.Duration `mapstructure:"jobs_ttl"`
+	Limit       int           `mapstructure:"limit"`
 }
 
 // Load reads application settings from a configuration file and applies
@@ -492,6 +513,13 @@ func setDefaults(v *viper.Viper) {
 	})
 	v.SetDefault("cors.allow_credentials", true)
 	v.SetDefault("cors.max_age", 86400)
+
+	// Cron defaults
+	v.SetDefault("cron.voice_refresh.interval", "1h")
+	v.SetDefault("cron.tts_cleanup.interval", "6h")
+	v.SetDefault("cron.tts_cleanup.clean_period", "2160h") // 90 days
+	v.SetDefault("cron.tts_cleanup.jobs_ttl", "72h")       // 3 days
+	v.SetDefault("cron.tts_cleanup.limit", 100)
 }
 
 // validateConfig validates required configuration fields.

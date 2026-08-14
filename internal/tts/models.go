@@ -49,9 +49,9 @@ type ServiceConfig struct {
 }
 
 type Voice struct {
-	ID       string
-	Name     string
-	LangCode string
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	LangCode string `json:"lang_code"`
 }
 
 type VoiceResponse struct {

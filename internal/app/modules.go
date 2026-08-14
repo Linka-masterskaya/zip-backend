@@ -10,6 +10,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/internal/cron"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
@@ -41,6 +42,8 @@ type modules struct {
 	tts         httpapi.TTSHandlers
 	ttsWorker   *worker.TTS
 	ttsConsumer *broker.Consumer
+	voiceRefresher *cron.VoiceRefresher
+	ttsCleaner     *cron.TTSCleaner
 }
 
 // buildModules wires every domain module on top of the infrastructure.
@@ -126,6 +129,9 @@ func buildModules(in *infra) (*modules, error) {
 	ttsWorker := worker.NewTTS(ttsClient, in.storage, ttsRepo)
 	ttsConsumer := broker.NewConsumer(in.js, cfg.NATS.Stream.Name, cfg.NATS.Consumers)
 
+	voiceRefresher := cron.NewVoiceRefresher(ttsClient, ttsRepo)
+	ttsCleaner := cron.NewTTSCleaner(ttsRepo, in.storage, cfg.Cron.TTSCleanup.CleanPeriod, cfg.Cron.TTSCleanup.JobsTTL, cfg.Cron.TTSCleanup.Limit)
+
 	return &modules{
 		packs: httpapi.PackHandlers{
 			Pack:    pack.NewHandler(packService),
@@ -153,7 +159,9 @@ func buildModules(in *infra) (*modules, error) {
 		tts: httpapi.TTSHandlers{
 			TTS: tts.NewHandler(ttsService, cfg.TTS.MaxBodySize),
 		},
-		ttsWorker:   ttsWorker,
-		ttsConsumer: ttsConsumer,
+		ttsWorker:      ttsWorker,
+		ttsConsumer:    ttsConsumer,
+		voiceRefresher: voiceRefresher,
+		ttsCleaner:     ttsCleaner,
 	}, nil
 }

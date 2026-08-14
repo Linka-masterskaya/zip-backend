@@ -21,6 +21,8 @@ type repository interface {
 	GetOrgID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetJob(context.Context, uuid.UUID) (*JobDetails, error)
 	CreateMediaFile(context.Context, uuid.UUID, uuid.UUID, *JobDetails) (uuid.UUID, error)
+	GetVoices(context.Context) ([]Voice, error)
+	UpsertVoices(context.Context, []Voice) error
 }
 
 type publisher interface {
@@ -123,7 +125,22 @@ func (s *Service) GetJob(ctx context.Context, jobID uuid.UUID) (string, string, 
 }
 
 func (s *Service) GetVoices(ctx context.Context) ([]Voice, error) {
-	return s.ttsClient.Voices(ctx)
+	voices, err := s.repo.GetVoices(ctx)
+	if err == nil {
+		return voices, nil
+	}
+	slog.WarnContext(ctx, "tts.GetVoices: cache miss", "err", err)
+
+	voices, err = s.ttsClient.Voices(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.repo.UpsertVoices(ctx, voices); err != nil {
+		slog.ErrorContext(ctx, "tts.GetVoices: cache write failed", "err", err)
+	}
+
+	return voices, nil
 }
 
 func (s *Service) failJob(ctx context.Context, jobID uuid.UUID) {
