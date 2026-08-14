@@ -377,6 +377,28 @@ func (c *Client) getString(ctx context.Context, key string) (string, error) {
 	return val, nil
 }
 
+func (c *Client) SaveOAuthState(ctx context.Context, state string, ttl time.Duration) error {
+	key := fmt.Sprintf("oauth:state:%s", state)
+	return c.setString(ctx, key, state, ttl)
+}
+
+func (c *Client) GetOAuthState(ctx context.Context, state string) (string, error) {
+	key := fmt.Sprintf("oauth:state:%s", state)
+	return c.getString(ctx, key)
+}
+
+func (c *Client) DelState(ctx context.Context, key string) error {
+	if err := c.rdb.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("cache.Del: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) DeleteOAuthState(ctx context.Context, state string) error {
+	key := fmt.Sprintf("oauth:state:%s", state)
+	return c.DelState(ctx, key)
+}
+
 // Ping checks Redis connectivity for readiness probes.
 func (c *Client) Ping(ctx context.Context) error {
 	if err := c.rdb.Ping(ctx).Err(); err != nil {

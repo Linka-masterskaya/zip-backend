@@ -8,6 +8,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
+	"github.com/google/uuid"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -47,17 +48,17 @@ type passwordResetCryptoFake struct {
 	gotHashInput []byte
 }
 
+func (f *passwordResetCryptoFake) Encrypt(_ []byte) ([]byte, error) {
+	return []byte("encrypted_data"), nil
+}
+
 func (f *passwordResetCryptoFake) Hash(data []byte) []byte {
 	f.gotHashInput = append([]byte(nil), data...)
 	return f.hash
 }
 
 func (f *passwordResetCryptoFake) Decrypt(_ []byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (f *passwordResetCryptoFake) Encrypt(data []byte) ([]byte, error) {
-	return data, nil
+	return []byte("test@example.com"), nil
 }
 
 func testPasswordResetConfig() Config {
@@ -76,6 +77,7 @@ func waitPasswordResetMailerCall(t *testing.T, mailer *passwordResetMailerFake) 
 		t.Fatal("password reset email was not sent")
 	}
 }
+
 func TestAuthService_ForgotPassword_InvalidEmail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)
@@ -83,7 +85,6 @@ func TestAuthService_ForgotPassword_InvalidEmail(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		&fakeRateLimiter{allowed: true},
 		&passwordResetMailerFake{},
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -113,7 +114,6 @@ func TestAuthService_ForgotPassword_UserNotFoundIsSuccess(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		&fakeRateLimiter{allowed: true},
 		mailer,
 		testPasswordResetConfig(),
 		crypto,
@@ -147,7 +147,6 @@ func TestAuthService_ForgotPassword_SendsResetEmail(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		&fakeRateLimiter{allowed: true},
 		fakeMailer,
 		cfg,
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -191,9 +190,8 @@ func TestAuthService_ForgotPassword_MailerErrorIsSuccess(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		&fakeRateLimiter{allowed: true},
 		fakeMailer,
-		cfg,
+		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
 	)
 
@@ -211,7 +209,6 @@ func TestAuthService_ResetPassword_InvalidInput(t *testing.T) {
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		&fakeRateLimiter{allowed: true},
 		nil,
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -240,12 +237,11 @@ func TestAuthService_ResetPassword_InvalidToken(t *testing.T) {
 
 	repo.EXPECT().
 		ResetPasswordByToken(gomock.Any(), "bad-token", gomock.Any()).
-		Return("", apperr.ErrInvalidResetToken)
+		Return(uuid.Nil, apperr.ErrInvalidResetToken)
 
 	svc := NewAuthService(
 		repo,
 		&fakeCache{},
-		&fakeRateLimiter{allowed: true},
 		nil,
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -262,18 +258,19 @@ func TestAuthService_ResetPassword_UpdatesPasswordAndRevokesSessions(t *testing.
 	repo := NewMockauthRepoIface(ctrl)
 
 	var gotPasswordHash string
+	userID := uuid.New()
+
 	repo.EXPECT().
 		ResetPasswordByToken(gomock.Any(), "reset-token", gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, passwordHash string) (string, error) {
+		DoAndReturn(func(_ context.Context, _ string, passwordHash string) (uuid.UUID, error) {
 			gotPasswordHash = passwordHash
-			return "user-id", nil
+			return userID, nil
 		})
 
 	cacheStore := &fakeCache{}
 	svc := NewAuthService(
 		repo,
 		cacheStore,
-		&fakeRateLimiter{allowed: true},
 		nil,
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -289,8 +286,8 @@ func TestAuthService_ResetPassword_UpdatesPasswordAndRevokesSessions(t *testing.
 	if cacheStore.revokeCalls == 0 {
 		t.Fatal("sessions revoke was not called")
 	}
-	if cacheStore.revokedUserID != "user-id" {
-		t.Fatalf("revoked user id = %q, want user-id", cacheStore.revokedUserID)
+	if cacheStore.revokedUserID != userID.String() {
+		t.Fatalf("revoked user id = %q, want %q", cacheStore.revokedUserID, userID.String())
 	}
 }
 
@@ -298,16 +295,17 @@ func TestAuthService_ResetPassword_ReturnsInternalErrorWhenRevokeFails(t *testin
 	ctrl := gomock.NewController(t)
 	repo := NewMockauthRepoIface(ctrl)
 
+	userID := uuid.New()
+
 	repo.EXPECT().
 		ResetPasswordByToken(gomock.Any(), "reset-token", gomock.Any()).
-		Return("user-id", nil)
+		Return(userID, nil)
 
 	revokerErr := errors.New("revoke failed")
 	cacheStore := &fakeCache{revokeErr: revokerErr}
 	svc := NewAuthService(
 		repo,
 		cacheStore,
-		&fakeRateLimiter{allowed: true},
 		nil,
 		testPasswordResetConfig(),
 		&passwordResetCryptoFake{hash: []byte("email-hash")},
@@ -327,7 +325,7 @@ func TestAuthService_ResetPassword_ReturnsInternalErrorWhenRevokeFails(t *testin
 	if cacheStore.revokeCalls == 0 {
 		t.Fatal("sessions revoke was not called")
 	}
-	if cacheStore.revokedUserID != "user-id" {
-		t.Fatalf("revoked user id = %q, want user-id", cacheStore.revokedUserID)
+	if cacheStore.revokedUserID != userID.String() {
+		t.Fatalf("revoked user id = %q, want %q", cacheStore.revokedUserID, userID.String())
 	}
 }

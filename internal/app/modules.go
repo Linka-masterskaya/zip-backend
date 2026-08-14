@@ -6,13 +6,13 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
 	"github.com/Linka-masterskaya/zip-backend/internal/media"
-	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/picturebank"
 	"github.com/Linka-masterskaya/zip-backend/internal/profile"
@@ -24,7 +24,7 @@ type modules struct {
 	media    httpapi.MediaHandlers
 	folders  httpapi.FolderHandlers
 	students httpapi.StudentHandlers
-	auth     httpapi.AuthHandlers
+	auth     auth.AuthHandlerInterface
 	profile  httpapi.ProfileHandlers
 	pictures *picturebank.Handler
 	checker  *health.Checker
@@ -34,7 +34,7 @@ type modules struct {
 func buildModules(in *infra) (*modules, error) {
 	cfg := in.cfg
 
-	resendPolicy := middleware.RateLimitPolicy{
+	resendPolicy := auth.RateLimitPolicy{
 		Scope:  cfg.RateLimit.Resend.Scope,
 		Limit:  cfg.RateLimit.Resend.Limit,
 		Window: cfg.RateLimit.Resend.Window,
@@ -80,7 +80,46 @@ func buildModules(in *infra) (*modules, error) {
 		CookieSecure:             cfg.Auth.CookieSecure,
 		RateLimit:                resendPolicy,
 	}
-	authService := auth.NewAuthService(auth.NewAuthRepo(in.db), in.redis, in.redis, in.mailer, authCfg, in.crypto)
+
+	authService := auth.NewAuthService(
+		auth.NewAuthRepo(in.db),
+		in.redis,
+		in.mailer,
+		authCfg,
+		in.crypto,
+	)
+
+	authHandler := auth.NewAuthHandler(authService, authCfg)
+
+	var oauthHandler *auth.OAuthHandler
+	if cfg.Yandex.ClientID != "" && cfg.Yandex.ClientSecret != "" {
+		redirectURL := cfg.Yandex.RedirectURL
+		if redirectURL == "" {
+			redirectURL = cfg.App.FrontendURL + "/api/v1/auth/yandex/callback"
+		}
+
+		oauthCfg := &oauth2.Config{
+			ClientID:     cfg.Yandex.ClientID,
+			ClientSecret: cfg.Yandex.ClientSecret,
+			RedirectURL:  redirectURL,
+			Scopes:       []string{"login:email", "login:info"},
+			Endpoint: oauth2.Endpoint{
+				AuthURL:  "https://oauth.yandex.ru/authorize",
+				TokenURL: "https://oauth.yandex.ru/token",
+			},
+		}
+		oauthHandler = auth.NewOAuthHandler(
+			authService,
+			in.redis,
+			oauthCfg,
+			cfg.App.FrontendURL,
+			cfg.Auth.CookieSecure,
+			cfg.Auth.RefreshTokenTTL,
+		)
+	}
+
+	// Устанавливаем OAuthHandler в authHandler
+	authHandler.SetOAuthHandler(oauthHandler)
 
 	profileService := profile.NewService(
 		profile.NewRepository(in.db), in.storage, in.mailer, in.crypto, in.redis,
@@ -113,9 +152,7 @@ func buildModules(in *infra) (*modules, error) {
 		students: httpapi.StudentHandlers{
 			Student: student.NewHandler(student.NewService(studentRepo, in.crypto)),
 		},
-		auth: httpapi.AuthHandlers{
-			Auth: auth.NewHandler(authService, authCfg),
-		},
+		auth: authHandler,
 		profile: httpapi.ProfileHandlers{
 			Profile:        profile.NewHandler(profileService),
 			ChangePassword: profile.NewChangePasswordHandler(changePasswordService),

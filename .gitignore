@@ -82,3 +82,5 @@ bin/
 
 # ── Subagent-driven development scratch ──────────────────────────────────────
 .superpowers/
+
+postman/desktop.ini

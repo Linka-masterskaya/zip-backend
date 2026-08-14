@@ -74,19 +74,11 @@ func TestRateLimitMiddleware(t *testing.T) {
 	t.Run("AllowRequestsWithinQuota", func(t *testing.T) {
 		require.NoError(t, raw.FlushDB(t.Context()).Err())
 
-		policy := middleware.EndpointPolicy{
-			IPLimit:        40,
-			IPWindow:       time.Minute,
-			IdentityLimit:  2,
-			IdentityWindow: time.Minute,
-			GlobalLimit:    200,
-			GlobalWindow:   time.Minute,
-		}
-		limiter := middleware.RateLimit(cacheClient, "test_quota", policy, []string{"127.0.0.1"})
+		limiter := middleware.RateLimit(cacheClient, "test_quota", 2, time.Minute, []string{"127.0.0.1"})
 		handler := limiter(nextHandler)
 
 		for i := 0; i < 2; i++ {
-			req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"user@test.com"}`))) //nolint:noctx
+			req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"user@test.com"}`)))
 			req.RemoteAddr = "127.0.0.1:12345"
 			rec := httptest.NewRecorder()
 
@@ -94,7 +86,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 			require.Equal(t, http.StatusOK, rec.Code)
 		}
 
-		reqBlock := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"user@test.com"}`))) //nolint:noctx
+		reqBlock := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"user@test.com"}`)))
 		reqBlock.RemoteAddr = "127.0.0.1:12345"
 		recBlock := httptest.NewRecorder()
 
@@ -106,18 +98,10 @@ func TestRateLimitMiddleware(t *testing.T) {
 	t.Run("RejectUntrustedProxyHeaders", func(t *testing.T) {
 		require.NoError(t, raw.FlushDB(t.Context()).Err())
 
-		policy := middleware.EndpointPolicy{
-			IPLimit:        1,
-			IPWindow:       time.Minute,
-			IdentityLimit:  1,
-			IdentityWindow: time.Minute,
-			GlobalLimit:    100,
-			GlobalWindow:   time.Minute,
-		}
-		limiter := middleware.RateLimit(cacheClient, "test_spoof", policy, []string{"192.168.1.1"})
+		limiter := middleware.RateLimit(cacheClient, "test_spoof", 1, time.Minute, []string{"192.168.1.1"})
 		handler := limiter(nextHandler)
 
-		req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"test@test.com"}`))) //nolint:noctx
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"test@test.com"}`)))
 		req.RemoteAddr = "203.0.113.5:12345"
 		req.Header.Set("X-Real-IP", "1.1.1.1")
 		rec := httptest.NewRecorder()
@@ -125,7 +109,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusOK, rec.Code)
 
-		reqBlock := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"test2@test.com"}`))) //nolint:noctx
+		reqBlock := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"test2@test.com"}`)))
 		reqBlock.RemoteAddr = "203.0.113.5:54321"
 		reqBlock.Header.Set("X-Real-IP", "2.2.2.2")
 		recBlock := httptest.NewRecorder()
@@ -137,30 +121,21 @@ func TestRateLimitMiddleware(t *testing.T) {
 	t.Run("BlockDistributedBruteForceByEmail", func(t *testing.T) {
 		require.NoError(t, raw.FlushDB(t.Context()).Err())
 
-		policy := middleware.EndpointPolicy{
-			IPLimit:        100,
-			IPWindow:       time.Minute,
-			IdentityLimit:  2,
-			IdentityWindow: time.Minute,
-			GlobalLimit:    1000,
-			GlobalWindow:   time.Minute,
-		}
-		limiter := middleware.RateLimit(cacheClient, "test_dist", policy, []string{"127.0.0.1"})
+		limiter := middleware.RateLimit(cacheClient, "test_dist", 2, time.Minute, []string{"127.0.0.1"})
 		handler := limiter(nextHandler)
-
-		req1 := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"victim@test.com"}`))) //nolint:noctx
+		req1 := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"victim@test.com"}`)))
 		req1.RemoteAddr = "192.168.1.10:1234"
 		rec1 := httptest.NewRecorder()
 		handler.ServeHTTP(rec1, req1)
 		require.Equal(t, http.StatusOK, rec1.Code)
 
-		req2 := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"victim@test.com"}`))) //nolint:noctx
+		req2 := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"victim@test.com"}`)))
 		req2.RemoteAddr = "192.168.1.11:1234"
 		rec2 := httptest.NewRecorder()
 		handler.ServeHTTP(rec2, req2)
 		require.Equal(t, http.StatusOK, rec2.Code)
 
-		req3 := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"victim@test.com"}`))) //nolint:noctx
+		req3 := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer([]byte(`{"email":"victim@test.com"}`)))
 		req3.RemoteAddr = "192.168.1.12:1234"
 		rec3 := httptest.NewRecorder()
 		handler.ServeHTTP(rec3, req3)
@@ -169,25 +144,16 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	t.Run("PlusAliasesShareIdentityLimit", func(t *testing.T) {
 		require.NoError(t, raw.FlushDB(t.Context()).Err())
-
-		policy := middleware.EndpointPolicy{
-			IPLimit:        100,
-			IPWindow:       time.Minute,
-			IdentityLimit:  1,
-			IdentityWindow: time.Minute,
-			GlobalLimit:    1000,
-			GlobalWindow:   time.Minute,
-		}
-		limiter := middleware.RateLimit(cacheClient, "test_alias", policy, []string{})
+		limiter := middleware.RateLimit(cacheClient, "test_alias", 1, time.Minute, []string{})
 		handler := limiter(nextHandler)
 
-		req1 := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer([]byte(`{"email":"user+1@example.com"}`))) //nolint:noctx
+		req1 := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer([]byte(`{"email":"user+1@example.com"}`)))
 		req1.RemoteAddr = "192.168.1.1:1234"
 		rec1 := httptest.NewRecorder()
 		handler.ServeHTTP(rec1, req1)
 		require.Equal(t, http.StatusOK, rec1.Code)
 
-		req2 := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer([]byte(`{"email":"USER+2@example.com"}`))) //nolint:noctx
+		req2 := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer([]byte(`{"email":"USER+2@example.com"}`)))
 		req2.RemoteAddr = "192.168.1.2:1234"
 		rec2 := httptest.NewRecorder()
 		handler.ServeHTTP(rec2, req2)
@@ -196,16 +162,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	t.Run("SafeBodyRestoreAndOversizedBlock", func(t *testing.T) {
 		require.NoError(t, raw.FlushDB(t.Context()).Err())
-
-		policy := middleware.EndpointPolicy{
-			IPLimit:        100,
-			IPWindow:       time.Minute,
-			IdentityLimit:  100,
-			IdentityWindow: time.Minute,
-			GlobalLimit:    1000,
-			GlobalWindow:   time.Minute,
-		}
-		limiter := middleware.RateLimit(cacheClient, "test_body", policy, []string{})
+		limiter := middleware.RateLimit(cacheClient, "test_body", 100, time.Minute, []string{})
 
 		bodyTestHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(r.Body)
@@ -217,7 +174,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 		})
 		handler := limiter(bodyTestHandler)
 
-		req := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer([]byte(`{"email":"test@example.com"}`))) //nolint:noctx
+		req := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer([]byte(`{"email":"test@example.com"}`)))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusOK, rec.Code)
@@ -228,7 +185,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 		}
 		copy(largePayload, []byte(`{"email":"test@example.com"}`))
 
-		reqLarge := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer(largePayload)) //nolint:noctx
+		reqLarge := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer(largePayload))
 		recLarge := httptest.NewRecorder()
 		handler.ServeHTTP(recLarge, reqLarge)
 

@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Linka-masterskaya/zip-backend/docs/api"
 )
 
 func TestRegisterDocsRoutesRespectsFlag(t *testing.T) {
@@ -20,12 +22,12 @@ func TestRegisterDocsRoutesRespectsFlag(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mux := http.NewServeMux()
-			registerDocsRoutes(mux, tt.enabled)
-
+			if tt.enabled {
+				api.RegisterRoutes(mux)
+			}
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/docs", nil)
 			res := httptest.NewRecorder()
 			mux.ServeHTTP(res, req)
-
 			if res.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", res.Code, tt.wantStatus)
 			}

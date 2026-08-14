@@ -55,9 +55,9 @@ func TestE2E_RefreshTokenLifecycle(t *testing.T) {
 		RequireEmailVerification: true,
 	}
 	authService := auth.NewAuthService(
-		auth.NewAuthRepo(pool), refreshCache, refreshCache, nil, authConfig, crypto,
+		auth.NewAuthRepo(pool), refreshCache, nil, authConfig, crypto,
 	)
-	authHandler := auth.NewHandler(authService, authConfig)
+	authHandler := auth.NewAuthHandler(authService, authConfig)
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/auth/login", middleware.ErrorMiddleware(authHandler.Login))
 	mux.Handle("POST /api/v1/auth/refresh", middleware.ErrorMiddleware(authHandler.Refresh))

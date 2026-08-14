@@ -8,10 +8,8 @@ import (
 )
 
 const (
-	jwtIssuer      = "zip-backend"
-	jwtAudience    = "zip-backend-api"
-	jwtAccessType  = "access"
-	jwtRefreshType = "refresh"
+	jwtIssuer   = "zip-backend"
+	jwtAudience = "zip-backend-api"
 )
 
 type AccessClaims struct {
@@ -38,8 +36,7 @@ func (au *authService) generateAccessToken(user *User) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	token.Header["typ"] = jwtAccessType
-
+	token.Header["typ"] = "access"
 	tokenString, err := token.SignedString([]byte(au.cfg.JWTSecret))
 	if err != nil {
 		return "", fmt.Errorf("generate access token: %w", err)
@@ -63,53 +60,11 @@ func (au *authService) generateRefreshToken(user *User, jti string) (string, err
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	token.Header["typ"] = jwtRefreshType
-
+	token.Header["typ"] = "refresh"
 	tokenString, err := token.SignedString([]byte(au.cfg.JWTSecret))
 	if err != nil {
 		return "", fmt.Errorf("generate refresh token: %w", err)
 	}
 
 	return tokenString, nil
-}
-
-func (au *authService) parseRefreshToken(tokenString string) (*RefreshClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &RefreshClaims{}, func(t *jwt.Token) (any, error) {
-		if t.Method != jwt.SigningMethodHS256 {
-			return nil, fmt.Errorf("auth unexpected signing method: %v", t.Header["alg"])
-		}
-
-		if typ, ok := t.Header["typ"].(string); !ok || typ != jwtRefreshType {
-			return nil, fmt.Errorf("auth unexpected token type: %v", t.Header["typ"])
-		}
-
-		return []byte(au.cfg.JWTSecret), nil
-	},
-		jwt.WithExpirationRequired(),
-		jwt.WithIssuer(jwtIssuer),
-		jwt.WithAudience(jwtAudience),
-		jwt.WithIssuedAt(),
-		jwt.WithLeeway(10*time.Second),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("parse refresh token: %w", err)
-	}
-
-	claims, ok := token.Claims.(*RefreshClaims)
-	if !ok {
-		return nil, fmt.Errorf(
-			"parse refresh token: unexpected claims type %T",
-			token.Claims,
-		)
-	}
-
-	if claims.Subject == "" {
-		return nil, fmt.Errorf("parse refresh token: missing subject")
-	}
-
-	if claims.ID == "" {
-		return nil, fmt.Errorf("parse refresh token: missing jti")
-	}
-
-	return claims, nil
 }
