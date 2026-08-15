@@ -1317,9 +1317,12 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    id:   { type: string }
-                    name: { type: string }
+                type: object
+                properties:
+                  voices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:   { type: string }
+                        name: { type: string }

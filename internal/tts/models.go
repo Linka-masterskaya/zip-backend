@@ -58,3 +58,7 @@ type VoiceResponse struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
+
+type VoicesResponse struct {
+	Voices []VoiceResponse `json:"voices"`
+}

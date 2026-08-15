@@ -78,7 +78,7 @@ func (h *Handler) Voices(w http.ResponseWriter, r *http.Request) error {
 		voices[i].Name = v.Name + " (" + v.LangCode + ")"
 	}
 
-	return writeJSON(w, http.StatusOK, voices)
+	return writeJSON(w, http.StatusOK, VoicesResponse{Voices: voices})
 }
 
 func decode(r *http.Request, target any) error {

@@ -157,11 +157,11 @@ func TestVoicesOK(t *testing.T) {
 	rec := performRequest(t, h.Voices, http.MethodGet, "/api/v1/tts/voices", nil, "")
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var resp []VoiceResponse
+	var resp VoicesResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.Len(t, resp, 2)
-	assert.Equal(t, "alena", resp[0].ID)
-	assert.Equal(t, "Алёна (ru-RU)", resp[0].Name)
-	assert.Equal(t, "john", resp[1].ID)
-	assert.Equal(t, "Джон (en-US)", resp[1].Name)
+	require.Len(t, resp.Voices, 2)
+	assert.Equal(t, "alena", resp.Voices[0].ID)
+	assert.Equal(t, "Алёна (ru-RU)", resp.Voices[0].Name)
+	assert.Equal(t, "john", resp.Voices[1].ID)
+	assert.Equal(t, "Джон (en-US)", resp.Voices[1].Name)
 }
