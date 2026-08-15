@@ -252,12 +252,13 @@ type CORSConfig struct {
 
 // TTSConfig contains TTS settings.
 type TTSConfig struct {
-	ServiceURL  string        `mapstructure:"service_url"`
-	Timeout     time.Duration `mapstructure:"timeout"`
-	RateLimit   int           `mapstructure:"rate_limit"`
-	MaxTextLen  int           `mapstructure:"max_text_len"`
-	MaxBodySize int64         `mapstructure:"max_body_size"`
-	MimeType    string        `mapstructure:"mime_type"`
+	ServiceURL    string        `mapstructure:"service_url"`
+	Timeout       time.Duration `mapstructure:"timeout"`
+	MaxConcurrent int           `mapstructure:"max_concurrent"`
+	RateLimit     int           `mapstructure:"rate_limit"`
+	MaxTextLen    int           `mapstructure:"max_text_len"`
+	MaxBodySize   int64         `mapstructure:"max_body_size"`
+	MimeType      string        `mapstructure:"mime_type"`
 }
 
 // CronConfig contains scheduled task settings.
@@ -483,6 +484,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ttsapi.max_text_len", 5000)
 	v.SetDefault("ttsapi.max_body_size", 65536)
 	v.SetDefault("ttsapi.mime_type", "audio/mpeg")
+	v.SetDefault("ttsapi.max_concurrent", 10)
 
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})

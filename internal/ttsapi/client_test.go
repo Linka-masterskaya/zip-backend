@@ -18,7 +18,7 @@ import (
 func testClient(t *testing.T, handler http.HandlerFunc) *ttsapi.Client {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return ttsapi.NewClient(srv.URL, 5*time.Second)
+	return ttsapi.NewClient(srv.URL, 5*time.Second, 10)
 }
 
 func TestSynthesizeOK(t *testing.T) {

@@ -120,7 +120,7 @@ func buildModules(in *infra) (*modules, error) {
 		return nil, fmt.Errorf("health checker init: %w", err)
 	}
 
-	ttsClient := ttsapi.NewClient(cfg.TTS.ServiceURL, cfg.TTS.Timeout)
+	ttsClient := ttsapi.NewClient(cfg.TTS.ServiceURL, cfg.TTS.Timeout, cfg.TTS.MaxConcurrent)
 	ttsRepo := tts.NewRepository(in.db)
 	ttsService := tts.NewService(ttsRepo, in.pub, ttsClient, tts.ServiceConfig{
 		MaxTextLen: cfg.TTS.MaxTextLen,

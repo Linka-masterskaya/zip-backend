@@ -47,7 +47,7 @@ func TestE2E_TTSFlow(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	ttsClient := ttsapi.NewClient(upstream.URL, 5*time.Second)
+	ttsClient := ttsapi.NewClient(upstream.URL, 5*time.Second, 10)
 	ttsRepo := tts.NewRepository(pool)
 	pub := &fakeTTSPublisher{}
 	ttsService := tts.NewService(ttsRepo, pub, ttsClient, tts.ServiceConfig{

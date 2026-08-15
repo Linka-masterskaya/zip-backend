@@ -23,6 +23,7 @@ var (
 type Client struct {
 	httpClient *http.Client
 	apiURL     string
+	semaphore  chan struct{}
 }
 
 type ttsRequest struct {
@@ -30,17 +31,16 @@ type ttsRequest struct {
 	Voice string `json:"voice"`
 }
 
-func NewClient(apiurl string, timeout time.Duration) *Client {
+func NewClient(apiurl string, timeout time.Duration, maxConcurrent int) *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: timeout},
 		apiURL:     apiurl,
+		semaphore:  make(chan struct{}, maxConcurrent),
 	}
 }
 
 func (t *Client) Synthesize(ctx context.Context, text, voice string) ([]byte, error) {
-	ttsReq := ttsRequest{Text: text, Voice: voice}
-
-	data, err := json.Marshal(ttsReq)
+	data, err := json.Marshal(ttsRequest{Text: text, Voice: voice})
 	if err != nil {
 		return nil, fmt.Errorf("ttsapi.Synthesize: %w", err)
 	}
@@ -53,22 +53,12 @@ func (t *Client) Synthesize(ctx context.Context, text, voice string) ([]byte, er
 
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := t.httpClient.Do(req)
+	body, status, err := t.do(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("ttsapi.Synthesize: do request: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			slog.WarnContext(ctx, "ttsapi: close response body", "err", closeErr)
-		}
-	}()
-
-	audio, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("ttsapi.Synthesize: read body: %w", err)
+		return nil, fmt.Errorf("ttsapi.Synthesize: %w", err)
 	}
 
-	switch resp.StatusCode {
+	switch status {
 	case http.StatusOK:
 	case http.StatusBadRequest:
 		return nil, ErrBadRequest
@@ -77,14 +67,14 @@ func (t *Client) Synthesize(ctx context.Context, text, voice string) ([]byte, er
 	case http.StatusBadGateway:
 		return nil, ErrUnavailable
 	default:
-		return nil, fmt.Errorf("ttsapi.Synthesize: unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("ttsapi.Synthesize: unexpected status %d", status)
 	}
 
-	if len(audio) == 0 {
+	if len(body) == 0 {
 		return nil, fmt.Errorf("ttsapi.Synthesize: empty audio")
 	}
 
-	return audio, nil
+	return body, nil
 }
 
 type ttsVoice struct {
@@ -99,22 +89,17 @@ func (t *Client) Voices(ctx context.Context) ([]tts.Voice, error) {
 		return nil, fmt.Errorf("ttsapi.Voices: %w", err)
 	}
 
-	resp, err := t.httpClient.Do(req)
+	body, status, err := t.do(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("ttsapi.Voices: %w", err)
 	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			slog.WarnContext(ctx, "ttsapi: close response body", "err", closeErr)
-		}
-	}()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ttsapi.Voices: unexpected status %d", resp.StatusCode)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("ttsapi.Voices: unexpected status %d", status)
 	}
 
 	var voicesFromAPI []ttsVoice
-	err = json.NewDecoder(resp.Body).Decode(&voicesFromAPI)
+	err = json.Unmarshal(body, &voicesFromAPI)
 	if err != nil {
 		return nil, fmt.Errorf("ttsapi.Voices: %w", err)
 	}
@@ -130,4 +115,30 @@ func (t *Client) Voices(ctx context.Context) ([]tts.Voice, error) {
 	}
 
 	return voicesToService, nil
+}
+
+func (t *Client) do(ctx context.Context, req *http.Request) ([]byte, int, error) {
+	select {
+	case t.semaphore <- struct{}{}:
+		defer func() { <-t.semaphore }()
+	case <-ctx.Done():
+		return nil, 0, ctx.Err()
+	}
+
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			slog.WarnContext(ctx, "ttsapi: close response body", "err", closeErr)
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return body, resp.StatusCode, nil
 }
