@@ -168,7 +168,7 @@ ttsapi:
   service_url: "https://tts.linka.su"
   mime_type: "audio/mpeg"
   timeout: 30s
-  rate_limit: 30
+  rate_limit: 120
   max_concurrent: 10
   max_text_len: 5000
   max_body_size: 65536

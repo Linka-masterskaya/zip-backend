@@ -127,7 +127,11 @@ func TestCreateAudioBankHit(t *testing.T) {
 		},
 	}
 
-	svc := testService(repo, pub, &fakeClient{})
+	svc := testService(repo, pub, &fakeClient{
+		voicesFn: func(_ context.Context) ([]Voice, error) {
+			return []Voice{{ID: "alena"}}, nil
+		},
+	})
 	jobID, err := svc.CreateAudio(context.Background(), TTSDataRequest{Text: "привет", Voice: "alena"})
 
 	require.NoError(t, err)
@@ -152,7 +156,11 @@ func TestCreateAudioBankMissNewJob(t *testing.T) {
 		},
 	}
 
-	svc := testService(repo, pub, &fakeClient{})
+	svc := testService(repo, pub, &fakeClient{
+		voicesFn: func(_ context.Context) ([]Voice, error) {
+			return []Voice{{ID: "alena"}}, nil
+		},
+	})
 	jobID, err := svc.CreateAudio(context.Background(), TTSDataRequest{Text: "привет", Voice: "alena"})
 
 	require.NoError(t, err)
@@ -270,7 +278,11 @@ func TestCreateAudioInflightJob(t *testing.T) {
 		},
 	}
 
-	svc := testService(repo, pub, &fakeClient{})
+	svc := testService(repo, pub, &fakeClient{
+		voicesFn: func(_ context.Context) ([]Voice, error) {
+			return []Voice{{ID: "alena"}}, nil
+		},
+	})
 	jobID, err := svc.CreateAudio(context.Background(), TTSDataRequest{Text: "привет", Voice: "alena"})
 
 	require.NoError(t, err)

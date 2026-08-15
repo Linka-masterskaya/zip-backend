@@ -10,5 +10,8 @@ CREATE TABLE audio_bank (
     last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (text, voice)
 );
+CREATE INDEX audio_bank_last_used_at_idx ON audio_bank(last_used_at);
+CREATE UNIQUE INDEX audio_bank_minio_key_uniq ON audio_bank(minio_key);
+
 -- +goose Down
 DROP TABLE audio_bank;

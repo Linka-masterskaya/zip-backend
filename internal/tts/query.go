@@ -46,12 +46,12 @@ const insertMediaFromTTS = `
 WITH ins AS (
 	INSERT INTO media_files (org_id, uploader_id, sha256, mime_type, size_bytes, minio_key)
 	VALUES ($1, $2, $3, $4, $5, $6)
-	ON CONFLICT (minio_key) DO NOTHING
+	ON CONFLICT (org_id, minio_key) DO NOTHING
 	RETURNING id
 )
 SELECT id FROM ins
 UNION ALL
-SELECT id FROM media_files WHERE minio_key = $6
+SELECT id FROM media_files WHERE minio_key = $6 AND org_id = $1
 LIMIT 1`
 
 const updateOrgQuota = `

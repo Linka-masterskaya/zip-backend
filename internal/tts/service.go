@@ -52,7 +52,8 @@ func NewService(repo repository, pub publisher, ttsClient ttsClient, cfg Service
 }
 
 func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (string, error) {
-	ttsData.Text = normalizeText(ttsData.Text)
+	ttsData.Text = normalize(ttsData.Text)
+	ttsData.Voice = normalize(ttsData.Voice)
 	if ttsData.Text == "" || ttsData.Voice == "" {
 		return "", apperr.ErrBadRequest
 	}
@@ -72,6 +73,10 @@ func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (stri
 		return "", err
 	}
 
+	if !s.isValidVoice(ctx, ttsData.Voice) {
+		return "", apperr.ErrBadRequest.WithMessage("unknown voice")
+	}
+
 	jobId, isJobNew, err := s.repo.CreateOrGetInflightJob(ctx, ttsData.Text, ttsData.Voice)
 	if err != nil {
 		return "", err
@@ -83,7 +88,7 @@ func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (stri
 			Voice: ttsData.Voice,
 		})
 		if err != nil {
-			s.failJob(ctx, jobId)
+			s.failJob(context.WithoutCancel(ctx), jobId)
 			return "", err
 		}
 	}
@@ -159,6 +164,20 @@ func ttsError(err error) error {
 	return err
 }
 
-func normalizeText(text string) string {
-	return strings.ToLower(strings.TrimSpace(text))
+func normalize(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+func (s *Service) isValidVoice(ctx context.Context, voice string) bool {
+	voices, err := s.GetVoices(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "tts.isValidVoice: skipping validation, voices unavailable", "err", err, "voice", voice)
+		return true
+	}
+	for _, v := range voices {
+		if v.ID == voice {
+			return true
+		}
+	}
+	return false
 }

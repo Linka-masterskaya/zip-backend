@@ -116,9 +116,9 @@ func TestE2E_TTSFlow(t *testing.T) {
 
 	// 7. Список голосов
 	resp = e2eRequest(t, server, token, http.MethodGet, "/api/v1/tts/voices", nil)
-	voices := e2eJSON[[]tts.VoiceResponse](t, resp, http.StatusOK)
-	assert.Len(t, voices, 2)
-	assert.Equal(t, "alena", voices[0].ID)
+	voicesResp := e2eJSON[tts.VoicesResponse](t, resp, http.StatusOK)
+	assert.Len(t, voicesResp.Voices, 2)
+	assert.Equal(t, "alena", voicesResp.Voices[0].ID)
 
 	// 8. Пустой текст — 400
 	resp = e2eRequest(t, server, token, http.MethodPost, "/api/v1/tts", map[string]any{

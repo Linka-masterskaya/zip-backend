@@ -11,5 +11,6 @@ CREATE TABLE tts_jobs (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX tts_jobs_inflight_uniq ON tts_jobs (text, voice) WHERE status IN ('pending', 'in_progress');
+CREATE INDEX tts_jobs_created_at_idx ON tts_jobs(created_at) WHERE status IN ('succeeded', 'failed');
 -- +goose Down
 DROP TABLE tts_jobs;

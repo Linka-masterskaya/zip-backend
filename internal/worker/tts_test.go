@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"testing"
@@ -42,6 +43,7 @@ type fakeAudioBank struct {
 	putToBankFn    func(ctx context.Context, entry *tts.BankEntry) error
 	completeCalled bool
 	bankCalled     bool
+	updateStatusFn func(context.Context, uuid.UUID, string) error
 }
 
 func (f *fakeAudioBank) CompleteJob(ctx context.Context, jobID uuid.UUID, key, digest string, size int64) error {
@@ -56,6 +58,13 @@ func (f *fakeAudioBank) PutToBank(ctx context.Context, entry *tts.BankEntry) err
 	f.bankCalled = true
 	if f.putToBankFn != nil {
 		return f.putToBankFn(ctx, entry)
+	}
+	return nil
+}
+
+func (f *fakeAudioBank) UpdateStatusTTS(ctx context.Context, jobID uuid.UUID, status string) error {
+	if f.updateStatusFn != nil {
+		return f.updateStatusFn(ctx, jobID, status)
 	}
 	return nil
 }
@@ -98,7 +107,8 @@ func TestHandleOKVerifiesKeyAndDigest(t *testing.T) {
 	expectedHash := sha256.Sum256(audio)
 	expectedDigest := hex.EncodeToString(expectedHash[:])
 
-	keyHash := sha256.Sum256([]byte(job.Text + job.Voice))
+	data, _ := json.Marshal([2]string{job.Voice, job.Text})
+	keyHash := sha256.Sum256(data)
 	expectedKey := "tts/" + hex.EncodeToString(keyHash[:])
 
 	synth := &fakeSynthesizer{
@@ -196,8 +206,10 @@ func TestHandleCompleteJobError(t *testing.T) {
 }
 
 func TestHandleInvalidJobID(t *testing.T) {
+	var synthCalled bool
 	synth := &fakeSynthesizer{
 		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			synthCalled = true
 			return []byte("audio"), nil
 		},
 	}
@@ -210,10 +222,10 @@ func TestHandleInvalidJobID(t *testing.T) {
 	w := NewTTS(synth, stor, repo)
 	err := w.Handle(context.Background(), job)
 
-	require.Error(t, err)
+	require.NoError(t, err, "bad job id должен ACK'аться без ошибки")
+	assert.False(t, synthCalled, "не должен синтезировать при bad job id")
 	assert.False(t, repo.completeCalled)
 }
-
 func TestHandlePutToBankError(t *testing.T) {
 	synth := &fakeSynthesizer{
 		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {

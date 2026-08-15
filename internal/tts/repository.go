@@ -176,7 +176,7 @@ func (r *Repository) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUI
 	}
 
 	var mediaID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT id FROM media_files WHERE minio_key = $1`, job.MinioKey).Scan(&mediaID)
+	err = tx.QueryRow(ctx, `SELECT id FROM media_files WHERE minio_key = $1 AND org_id = $2`, job.MinioKey, orgID).Scan(&mediaID)
 	if err == nil {
 		return mediaID, nil
 	}
