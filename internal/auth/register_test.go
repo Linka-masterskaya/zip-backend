@@ -115,6 +115,7 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	svc := newRegisterTestService(mailerFake)
 
 	err := svc.Register(ctx, RegisterRequest{
+		Name:     "Тест Тестов",
 		Email:    " Test2026@example.com ",
 		Password: "strongpass123",
 	})
@@ -201,6 +202,12 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 
 	expectedTokenHash := sha256.Sum256(rawToken)
 	assert.Equal(t, expectedTokenHash[:], tokenHash)
+
+	var displayName *string
+	err = testPool.QueryRow(ctx, `SELECT display_name FROM users WHERE id = $1`, userID).Scan(&displayName)
+	require.NoError(t, err)
+	require.NotNil(t, displayName)
+	assert.Equal(t, "Тест Тестов", *displayName)
 }
 
 func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
@@ -211,6 +218,7 @@ func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
 	svc := newRegisterTestService(mailerFake)
 
 	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Name:     "Тест Тестов",
 		Email:    "duplicate@example.com",
 		Password: "strongpass123",
 	}))
@@ -221,6 +229,7 @@ func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
 
 	// Адрес занят, но не подтверждён — повторная регистрация забирает его.
 	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Name:     "Тест Тестов",
 		Email:    " DUPLICATE@example.com ",
 		Password: "anotherStrongPassword123",
 	}))
@@ -286,6 +295,7 @@ func TestAuthService_Register_MailerErrorIsSuccess(t *testing.T) {
 	svc := newRegisterTestService(mailerFake)
 
 	err := svc.Register(ctx, RegisterRequest{
+		Name:     "Тест Тестов",
 		Email:    "mail-error@example.com",
 		Password: "strongpass123",
 	})
