@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -111,6 +112,51 @@ func TestE2E_P1UserJourney(t *testing.T) {
 		FROM organizations o JOIN users u ON u.org_id = o.id
 		WHERE u.id = $1`, ownerID).Scan(&storageUsed))
 	assert.Equal(t, int64(len(tinyPNG())), storageUsed, "deduplicated import must not consume quota twice")
+
+	secondUpload := e2eUploadMediaNamed(t, server, ownerToken, "cat.png", testPNG(9))
+
+	t.Run("media list is scoped, searchable, and cursor-paginated", func(t *testing.T) {
+		all := e2eJSON[media.ListPage](
+			t,
+			e2eRequest(t, server, ownerToken, http.MethodGet, "/api/v1/media", nil),
+			http.StatusOK,
+		)
+		assert.ElementsMatch(t, []uuid.UUID{uploaded.ID, secondUpload.ID}, mediaIDs(all.Items),
+			"only the caller's own organization media, foreign media excluded")
+
+		byName := e2eJSON[media.ListPage](
+			t,
+			e2eRequest(t, server, ownerToken, http.MethodGet, "/api/v1/media?query=cat", nil),
+			http.StatusOK,
+		)
+		require.Len(t, byName.Items, 1)
+		assert.Equal(t, secondUpload.ID, byName.Items[0].ID)
+		assert.Equal(t, "cat.png", byName.Items[0].Name)
+		assert.Equal(t, "image", byName.Items[0].MediaType)
+
+		firstPage := e2eJSON[media.ListPage](
+			t,
+			e2eRequest(t, server, ownerToken, http.MethodGet, "/api/v1/media?limit=1", nil),
+			http.StatusOK,
+		)
+		require.Len(t, firstPage.Items, 1)
+		require.NotEmpty(t, firstPage.NextCursor)
+
+		secondPage := e2eJSON[media.ListPage](
+			t,
+			e2eRequest(t, server, ownerToken, http.MethodGet,
+				"/api/v1/media?limit=1&cursor="+url.QueryEscape(firstPage.NextCursor), nil),
+			http.StatusOK,
+		)
+		require.Len(t, secondPage.Items, 1)
+		assert.NotEqual(t, firstPage.Items[0].ID, secondPage.Items[0].ID, "second page does not repeat the first")
+		assert.ElementsMatch(t,
+			[]uuid.UUID{uploaded.ID, secondUpload.ID},
+			mediaIDs(append(firstPage.Items, secondPage.Items...)),
+			"both pages together cover every owned file exactly once",
+		)
+		assert.Empty(t, secondPage.NextCursor, "no more pages left")
+	})
 
 	updatedPack := e2eJSON[pack.Pack](
 		t,
@@ -550,9 +596,19 @@ func e2eUploadMedia(
 	data []byte,
 ) media.Response {
 	t.Helper()
+	return e2eUploadMediaNamed(t, server, token, "pixel.png", data)
+}
+
+func e2eUploadMediaNamed(
+	t *testing.T,
+	server *httptest.Server,
+	token, filename string,
+	data []byte,
+) media.Response {
+	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("file", "pixel.png")
+	part, err := writer.CreateFormFile("file", filename)
 	require.NoError(t, err)
 	_, err = part.Write(data)
 	require.NoError(t, err)
@@ -633,6 +689,14 @@ func packMediaConfig(mediaIDs ...uuid.UUID) map[string]any {
 func testPNG(marker byte) []byte {
 	data := append([]byte(nil), tinyPNG()...)
 	return append(data, marker)
+}
+
+func mediaIDs(items []media.File) []uuid.UUID {
+	ids := make([]uuid.UUID, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	return ids
 }
 
 func e2eBody(t *testing.T, response *http.Response, expectedStatus int) []byte {

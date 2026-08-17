@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -50,8 +51,8 @@ func (r *Repository) Upsert(ctx context.Context, input File) (*File, error) {
 	err = tx.QueryRow(ctx, findByDigestQuery,
 		input.OrgID, input.SHA256,
 	).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
-		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
+		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+		&result.MIMEType, &result.MediaType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
 	if err == nil {
 		if err = tx.Commit(ctx); err != nil {
@@ -73,10 +74,11 @@ func (r *Repository) Upsert(ctx context.Context, input File) (*File, error) {
 	}
 
 	err = tx.QueryRow(ctx, insertMediaQuery,
-		input.OrgID, input.UploaderID, input.SHA256, input.MIMEType, input.SizeBytes, input.MinIOKey,
+		input.OrgID, input.UploaderID, input.Name, input.SHA256, input.MIMEType,
+		input.MediaType, input.SizeBytes, input.MinIOKey,
 	).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
-		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
+		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+		&result.MIMEType, &result.MediaType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("media repository insert: %w", err)
@@ -97,8 +99,8 @@ func rollbackMediaTx(ctx context.Context, tx pgx.Tx) {
 func (r *Repository) GetAccessible(ctx context.Context, userID, mediaID uuid.UUID) (*File, error) {
 	var result File
 	err := r.pool.QueryRow(ctx, getAccessibleMediaQuery, userID, mediaID).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
-		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
+		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+		&result.MIMEType, &result.MediaType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -107,6 +109,42 @@ func (r *Repository) GetAccessible(ctx context.Context, userID, mediaID uuid.UUI
 		return nil, fmt.Errorf("media repository get: %w", err)
 	}
 	return &result, nil
+}
+
+func (r *Repository) List(
+	ctx context.Context,
+	orgID uuid.UUID,
+	query, mediaType string,
+	cursor *mediaCursor,
+	limit int,
+) ([]File, error) {
+	var cursorCreatedAt *time.Time
+	var cursorID uuid.UUID
+	if cursor != nil {
+		cursorCreatedAt = &cursor.CreatedAt
+		cursorID = cursor.ID
+	}
+	rows, err := r.pool.Query(ctx, listMediaQuery, orgID, query, mediaType, cursorCreatedAt, cursorID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("media repository list: %w", err)
+	}
+	defer rows.Close()
+
+	var results []File
+	for rows.Next() {
+		var result File
+		if err = rows.Scan(
+			&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+			&result.MIMEType, &result.MediaType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("media repository list scan: %w", err)
+		}
+		results = append(results, result)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("media repository list rows: %w", err)
+	}
+	return results, nil
 }
 
 func (r *Repository) Delete(
@@ -121,8 +159,8 @@ func (r *Repository) Delete(
 
 	var result File
 	err = tx.QueryRow(ctx, lockOwnedMediaQuery, userID, mediaID).Scan(
-		&result.ID, &result.OrgID, &result.UploaderID, &result.SHA256,
-		&result.MIMEType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
+		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
+		&result.MIMEType, &result.MediaType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
