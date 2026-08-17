@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
@@ -33,7 +34,9 @@ type File struct {
 	ID         uuid.UUID `json:"id"`
 	OrgID      uuid.UUID `json:"-"`
 	UploaderID uuid.UUID `json:"uploader_id"`
+	Name       string    `json:"name"`
 	SHA256     string    `json:"sha256"`
+	MediaType  string    `json:"media_type"`
 	MIMEType   string    `json:"mime_type"`
 	SizeBytes  int64     `json:"size_bytes"`
 	MinIOKey   string    `json:"-"`
@@ -45,10 +48,25 @@ type Response struct {
 	URL string `json:"url"`
 }
 
+// ListInput contains filters and cursor pagination parameters for the media library list.
+type ListInput struct {
+	Query     string
+	MediaType string
+	Limit     int
+	Cursor    string
+}
+
+// ListPage is a page of media library items with an cursor to the next page.
+type ListPage struct {
+	Items      []File `json:"items"`
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
 type repository interface {
 	UserOrg(context.Context, uuid.UUID) (uuid.UUID, error)
 	Upsert(context.Context, File) (*File, error)
 	GetAccessible(context.Context, uuid.UUID, uuid.UUID) (*File, error)
+	List(context.Context, uuid.UUID, string, string, *mediaCursor, int) ([]File, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) (*File, error)
 }
 
@@ -67,7 +85,7 @@ func NewService(repo repository, storage objectStorage) *Service {
 	return &Service{repo: repo, storage: storage}
 }
 
-func (s *Service) Upload(ctx context.Context, data []byte) (*Response, error) {
+func (s *Service) Upload(ctx context.Context, data []byte, name string) (*Response, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -92,9 +110,10 @@ func (s *Service) Upload(ctx context.Context, data []byte) (*Response, error) {
 	if err = s.storage.PutObject(ctx, key, bytes.NewReader(data), int64(len(data)), mimeType); err != nil {
 		return nil, fmt.Errorf("upload media object: %w", err)
 	}
+	mediaType, _, _ := strings.Cut(mimeType, "/")
 	file, err := s.repo.Upsert(ctx, File{
-		OrgID: orgID, UploaderID: userID, SHA256: digest,
-		MIMEType: mimeType, SizeBytes: int64(len(data)), MinIOKey: key,
+		OrgID: orgID, UploaderID: userID, Name: name, SHA256: digest,
+		MIMEType: mimeType, MediaType: mediaType, SizeBytes: int64(len(data)), MinIOKey: key,
 	})
 	if err != nil {
 		if errors.Is(err, ErrQuotaExceeded) {
@@ -117,6 +136,49 @@ func (s *Service) Get(ctx context.Context, mediaID uuid.UUID) (*Response, error)
 		return nil, mediaError(err)
 	}
 	return s.response(ctx, file)
+}
+
+const (
+	defaultListLimit = 5
+	maxListLimit     = 20
+)
+
+func (s *Service) List(ctx context.Context, input ListInput) (*ListPage, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	orgID, err := s.repo.UserOrg(ctx, userID)
+	if err != nil {
+		return nil, mediaError(err)
+	}
+	if input.Limit == 0 {
+		input.Limit = defaultListLimit
+	}
+	if input.Limit < 1 || input.Limit > maxListLimit {
+		return nil, apperr.ErrBadRequest.WithMessage(
+			fmt.Sprintf("limit must be between 1 and %d", maxListLimit),
+		)
+	}
+	var cursor *mediaCursor
+	if input.Cursor != "" {
+		decoded, decodeErr := decodeCursor(input.Cursor)
+		if decodeErr != nil {
+			return nil, apperr.ErrBadRequest.WithMessage("cursor is invalid")
+		}
+		cursor = &decoded
+	}
+	files, err := s.repo.List(ctx, orgID, input.Query, input.MediaType, cursor, input.Limit+1)
+	if err != nil {
+		return nil, mediaError(err)
+	}
+	page := &ListPage{Items: files}
+	if len(files) > input.Limit {
+		page.Items = files[:input.Limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextCursor = encodeCursor(mediaCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	}
+	return page, nil
 }
 
 func (s *Service) Delete(ctx context.Context, mediaID uuid.UUID) error {
