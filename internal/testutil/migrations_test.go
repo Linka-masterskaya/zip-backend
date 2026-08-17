@@ -147,8 +147,8 @@ func insertTestMediaFile(t *testing.T, orgID, uploaderID uuid.UUID) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	_, err := pool.Exec(ctx, `
-		INSERT INTO media_files (id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key)
-		VALUES ($1, $2, $3, $4, 'audio/mpeg', 4, $5)
+		INSERT INTO media_files (id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key)
+		VALUES ($1, $2, $3, 'test.mp3', $4, 'audio/mpeg', 'audio', 4, $5)
 	`, id, orgID, uploaderID, id.String(), "test/"+id.String())
 	require.NoError(t, err)
 	return id
