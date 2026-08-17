@@ -56,10 +56,6 @@ func TestRegisterPackRoutesPatterns(t *testing.T) {
 		"GET /api/v1/packs/{id}/adaptations",
 		"GET /api/v1/adaptations/{id}",
 		"PUT /api/v1/adaptations/{id}/config",
-		"POST /api/v1/packs/{id}/versions",
-		"GET /api/v1/packs/{id}/versions",
-		"GET /api/v1/packs/{id}/versions/{version}",
-		"POST /api/v1/packs/{id}/versions/{version}/restore",
 	})
 }
 

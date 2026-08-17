@@ -210,9 +210,6 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 			return fmt.Errorf("pack repository delete adaptation usages: %w", err)
 		}
 	}
-	if _, err = tx.Exec(ctx, deleteVersionMediaUsagesForPackQuery, packID); err != nil {
-		return fmt.Errorf("pack repository delete version usages: %w", err)
-	}
 	if _, err = tx.Exec(ctx, deletePackQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete: %w", err)
 	}

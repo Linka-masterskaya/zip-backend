@@ -23,7 +23,7 @@ func TestContentHandlerListAdaptations(t *testing.T) {
 		Config:    json.RawMessage(`{"settings":{"columns":1}}`),
 		CreatedBy: uuid.New(),
 	}
-	service := &fakeContentVersionService{
+	service := &fakeContentService{
 		listAdaptationsFn: func(_ context.Context, gotID uuid.UUID) ([]Adaptation, error) {
 			assert.Equal(t, packID, gotID)
 			return []Adaptation{adaptation}, nil
@@ -54,7 +54,7 @@ func TestContentHandlerGetAdaptation(t *testing.T) {
 		Config:    json.RawMessage(`{"settings":{"rows":2}}`),
 		CreatedBy: uuid.New(),
 	}
-	service := &fakeContentVersionService{
+	service := &fakeContentService{
 		getAdaptationFn: func(_ context.Context, gotID uuid.UUID) (*Adaptation, error) {
 			assert.Equal(t, adaptationID, gotID)
 			return &adaptation, nil
@@ -82,7 +82,7 @@ func TestContentHandlerUpdateAdaptationConfig(t *testing.T) {
 		"settings":{"columns":1,"rows":2},
 		"blocks":[]
 	}`)
-	service := &fakeContentVersionService{
+	service := &fakeContentService{
 		updateAdaptationConfigFn: func(
 			_ context.Context, gotID uuid.UUID, gotConfig json.RawMessage,
 		) (*Adaptation, error) {
@@ -110,7 +110,7 @@ func TestContentHandlerUpdateAdaptationConfig(t *testing.T) {
 }
 
 func TestContentHandlerAdaptationsRejectInvalidID(t *testing.T) {
-	handler := NewContentHandler(&fakeContentVersionService{})
+	handler := NewContentHandler(&fakeContentService{})
 
 	for name, method := range map[string]middleware.AppHandler{
 		"list":   handler.ListAdaptations,
@@ -133,4 +133,33 @@ func performContentAdaptationRequest(
 	rec := httptest.NewRecorder()
 	middleware.ErrorMiddleware(handler).ServeHTTP(rec, req)
 	return rec
+}
+
+type fakeContentService struct {
+	contentService
+
+	listAdaptationsFn        func(ctx context.Context, packID uuid.UUID) ([]Adaptation, error)
+	getAdaptationFn          func(ctx context.Context, id uuid.UUID) (*Adaptation, error)
+	updateAdaptationConfigFn func(ctx context.Context, id uuid.UUID, config json.RawMessage) (*Adaptation, error)
+}
+
+func (s *fakeContentService) ListAdaptations(ctx context.Context, packID uuid.UUID) ([]Adaptation, error) {
+	if s.listAdaptationsFn != nil {
+		return s.listAdaptationsFn(ctx, packID)
+	}
+	return nil, nil
+}
+
+func (s *fakeContentService) GetAdaptation(ctx context.Context, id uuid.UUID) (*Adaptation, error) {
+	if s.getAdaptationFn != nil {
+		return s.getAdaptationFn(ctx, id)
+	}
+	return nil, nil
+}
+
+func (s *fakeContentService) UpdateAdaptationConfig(ctx context.Context, id uuid.UUID, config json.RawMessage) (*Adaptation, error) {
+	if s.updateAdaptationConfigFn != nil {
+		return s.updateAdaptationConfigFn(ctx, id, config)
+	}
+	return nil, nil
 }
