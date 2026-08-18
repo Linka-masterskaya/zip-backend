@@ -8,7 +8,8 @@ const lockOrgQuery = `
 	SELECT id FROM organizations WHERE id = $1 FOR UPDATE`
 
 const findByDigestQuery = `
-	SELECT id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key, created_at
+	SELECT id, org_id, uploader_id, name, sha256, mime_type, media_type,
+	       size_bytes, minio_key, created_at
 	FROM media_files WHERE org_id = $1 AND sha256 = $2`
 
 const reserveQuotaQuery = `
@@ -20,12 +21,13 @@ const reserveQuotaQuery = `
 
 const insertMediaQuery = `
 	INSERT INTO media_files
-		(org_id, uploader_id, sha256, mime_type, size_bytes, minio_key)
-	VALUES ($1, $2, $3, $4, $5, $6)
-	RETURNING id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key, created_at`
+		(org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	RETURNING id, org_id, uploader_id, name, sha256, mime_type, media_type,
+	          size_bytes, minio_key, created_at`
 
 const getAccessibleMediaQuery = `
-	SELECT m.id, m.org_id, m.uploader_id, m.sha256, m.mime_type,
+	SELECT m.id, m.org_id, m.uploader_id, m.name, m.sha256, m.mime_type, m.media_type,
 	       m.size_bytes, m.minio_key, m.created_at
 	FROM media_files m
 	JOIN users u ON u.id = $1 AND u.deleted_at IS NULL
@@ -39,8 +41,19 @@ const getAccessibleMediaQuery = `
 	    )
 	  )`
 
+const listMediaQuery = `
+	SELECT id, org_id, uploader_id, name, sha256, mime_type, media_type,
+	       size_bytes, minio_key, created_at
+	FROM media_files
+	WHERE org_id = $1
+	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%')
+	  AND ($3::text = '' OR media_type = $3::text)
+	  AND ($4::timestamptz IS NULL OR (created_at, id) < ($4::timestamptz, $5::uuid))
+	ORDER BY created_at DESC, id DESC
+	LIMIT $6`
+
 const lockOwnedMediaQuery = `
-	SELECT m.id, m.org_id, m.uploader_id, m.sha256, m.mime_type,
+	SELECT m.id, m.org_id, m.uploader_id, m.name, m.sha256, m.mime_type, m.media_type,
 	       m.size_bytes, m.minio_key, m.created_at
 	FROM media_files m
 	JOIN users u ON u.id = $1 AND u.org_id = m.org_id AND u.deleted_at IS NULL

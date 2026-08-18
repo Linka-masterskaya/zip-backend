@@ -494,9 +494,9 @@ func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) 
 	mediaID := uuid.New()
 	_, err = pool.Exec(t.Context(), `
 		INSERT INTO media_files (
-			id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
 		)
-		VALUES ($1, $2, $3, $4, 'image/png', 4, $5)`,
+		VALUES ($1, $2, $3, 'media.png', $4, 'image/png', 'image', 4, $5)`,
 		mediaID, orgID, ownerID, "adaptation-media-sha", "media/"+mediaID.String(),
 	)
 	require.NoError(t, err)
@@ -571,9 +571,9 @@ func TestRepositoryAdaptationArchiveUsesSnapshotMediaAndChecksAccess(t *testing.
 	mediaID := uuid.New()
 	_, err := pool.Exec(t.Context(), `
 		INSERT INTO media_files (
-			id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
 		)
-		VALUES ($1, $2, $3, $4, 'image/png', 4, $5)`,
+		VALUES ($1, $2, $3, 'media.png', $4, 'image/png', 'image', 4, $5)`,
 		mediaID, orgID, ownerID, "adaptation-media-sha", "media/"+mediaID.String(),
 	)
 	require.NoError(t, err)
@@ -647,9 +647,9 @@ func TestRepositoryVersionsRestoreConfigAndRetainMedia(t *testing.T) {
 	mediaID := uuid.New()
 	_, err := pool.Exec(t.Context(), `
 		INSERT INTO media_files (
-			id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
 		)
-		VALUES ($1, $2, $3, $4, 'image/png', 4, $5)`,
+		VALUES ($1, $2, $3, 'media.png', $4, 'image/png', 'image', 4, $5)`,
 		mediaID, orgID, ownerID, "version-media-sha", "media/"+mediaID.String(),
 	)
 	require.NoError(t, err)

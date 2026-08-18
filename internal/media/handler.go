@@ -9,6 +9,9 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/google/uuid"
@@ -17,8 +20,9 @@ import (
 const multipartOverhead = int64(64 * 1024)
 
 type mediaService interface {
-	Upload(context.Context, []byte) (*Response, error)
+	Upload(context.Context, []byte, string) (*Response, error)
 	Get(context.Context, uuid.UUID) (*Response, error)
+	List(context.Context, ListInput) (*ListPage, error)
 	Delete(context.Context, uuid.UUID) error
 }
 
@@ -32,7 +36,7 @@ func NewHandler(service mediaService) *Handler {
 
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) error {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxFileSize+multipartOverhead)
-	file, _, err := r.FormFile("file")
+	file, header, err := r.FormFile("file")
 	if err != nil {
 		if errors.Is(err, multipart.ErrMessageTooLarge) {
 			return apperr.ErrPayloadTooLarge
@@ -56,7 +60,11 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) error {
 	if int64(len(data)) > MaxFileSize {
 		return apperr.ErrPayloadTooLarge
 	}
-	result, err := h.service.Upload(r.Context(), data)
+	name := strings.TrimSpace(filepath.Base(header.Filename))
+	if name == "." || name == "/" {
+		name = ""
+	}
+	result, err := h.service.Upload(r.Context(), data, name)
 	if err != nil {
 		return err
 	}
@@ -73,6 +81,35 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) List(w http.ResponseWriter, r *http.Request) error {
+	input, err := listInputFromRequest(r)
+	if err != nil {
+		return err
+	}
+	result, err := h.service.List(r.Context(), input)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, result)
+}
+
+func listInputFromRequest(r *http.Request) (ListInput, error) {
+	q := r.URL.Query()
+	input := ListInput{
+		Query:     q.Get("query"),
+		MediaType: q.Get("type"),
+		Cursor:    q.Get("cursor"),
+	}
+	if q.Has("limit") {
+		limit, err := strconv.Atoi(q.Get("limit"))
+		if err != nil {
+			return ListInput{}, apperr.ErrBadRequest.WithMessage("limit must be an integer")
+		}
+		input.Limit = limit
+	}
+	return input, nil
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
