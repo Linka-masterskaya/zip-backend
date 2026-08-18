@@ -624,8 +624,16 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 	existing, err := au.repo.GetUserByEmailHash(ctx, emailHash)
 	switch {
 	case err == nil && existing.EmailVerified:
+		// Ответ одинаков для занятого и свободного адреса: иначе регистрация
+		// становится оракулом и по ней можно перебирать базу пользователей.
+		// Владелец узнаёт о попытке из письма, а не атакующий — из кода ответа.
 		runDummyPasswordCompare(req.Password)
-		return apperr.ErrConflict.WithMessage("email already exists")
+		if mailErr := au.mailer.Send(ctx, email, mailer.AccountExists, mailer.EmailData{
+			Email: email,
+		}); mailErr != nil {
+			slog.Error("failed to send account exists email", "err", mailErr)
+		}
+		return nil
 	case err == nil:
 		// Регистрация на адрес, который занят, но не подтверждён: владение им
 		// не доказано, поэтому отдаём его тому, кто пришёл за ним сейчас.

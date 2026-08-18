@@ -538,3 +538,51 @@ func (r *authRepo) replaceUnverifiedPassword(
 	}
 	return nil
 }
+
+// DeleteStaleUnverifiedUsers удаляет регистрации, которые так и не подтвердили
+// адрес: пока он занят, настоящий владелец не может им пользоваться.
+//
+// Пользователи, успевшие что-то создать, не трогаются: packs, folders,
+// students, media_files и pack_versions ссылаются на users без каскада, и
+// фоновая задача не должна удалять данные. В проде такие строки появиться не
+// могут — неподтверждённый пользователь не проходит вход.
+func (r *authRepo) DeleteStaleUnverifiedUsers(ctx context.Context, cutoff time.Time) (int64, error) {
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: begin tx: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.ErrorContext(ctx, "tx rollback failed", logger.Err(err))
+		}
+	}()
+
+	res, err := tx.Exec(ctx, `
+		DELETE FROM users AS u
+		WHERE u.email_verified = false
+		  AND u.created_at < $1
+		  AND NOT EXISTS (SELECT 1 FROM folders     f WHERE f.owner_id = u.id)
+		  AND NOT EXISTS (SELECT 1 FROM packs       p WHERE p.owner_id = u.id)
+		  AND NOT EXISTS (SELECT 1 FROM pack_versions v WHERE v.created_by = u.id)
+		  AND NOT EXISTS (SELECT 1 FROM students    s WHERE s.defectologist_id = u.id)
+		  AND NOT EXISTS (SELECT 1 FROM media_files m WHERE m.uploader_id = u.id)
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: delete users: %w", err)
+	}
+
+	// Личная организация остаётся без владельца — убираем и её, но только если
+	// в ней действительно не осталось пользователей.
+	if _, err = tx.Exec(ctx, `
+		DELETE FROM organizations AS o
+		WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.org_id = o.id)
+	`); err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: delete orgs: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: commit: %w", err)
+	}
+
+	return res.RowsAffected(), nil
+}

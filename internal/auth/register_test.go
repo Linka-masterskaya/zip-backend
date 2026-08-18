@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -248,7 +247,7 @@ func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
 	assert.Equal(t, 1, usedTokens)
 }
 
-func TestAuthService_Register_IntegrationVerifiedEmailConflicts(t *testing.T) {
+func TestAuthService_Register_IntegrationVerifiedEmailIsIndistinguishable(t *testing.T) {
 	truncateAll(t)
 	ctx := registerCtx(t)
 
@@ -263,20 +262,20 @@ func TestAuthService_Register_IntegrationVerifiedEmailConflicts(t *testing.T) {
 	_, err := testPool.Exec(ctx, `UPDATE users SET email_verified = true`)
 	require.NoError(t, err)
 
-	err = svc.Register(ctx, RegisterRequest{
+	// Ответ такой же, как для свободного адреса: перебирать базу по коду
+	// ответа нельзя.
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
 		Email:    "verified@example.com",
 		Password: "anotherStrongPassword123",
-	})
-	require.Error(t, err)
-
-	var appErr *apperr.AppError
-	require.ErrorAs(t, err, &appErr)
-	assert.Equal(t, apperr.ErrConflict.Code, appErr.Code)
+	}))
 
 	counts := getRegisterCounts(t, ctx)
-	assert.Equal(t, 1, counts.users)
+	assert.Equal(t, 1, counts.users, "второй аккаунт заводиться не должен")
 	assert.Equal(t, 1, counts.authCred)
-	assert.Equal(t, 1, mailerFake.calls, "подтверждённому адресу письмо не шлём")
+	assert.Equal(t, 1, counts.verifyTokens, "новый verify-токен не выпускается")
+	assert.Equal(t, mailer.AccountExists, mailerFake.template,
+		"владельцу уходит письмо о попытке регистрации")
+	assert.Equal(t, 2, mailerFake.calls)
 }
 
 func TestAuthService_Register_MailerErrorIsSuccess(t *testing.T) {

@@ -121,6 +121,8 @@ auth:
   bcrypt_cost: 12
   login_rate_limit: 5
   require_email_verification: true
+  # Неподтверждённые регистрации не должны держать чужой адрес вечно.
+  unverified_retention: 168h
   pack_rate_limit: 60
   forgot_rate_limit: 3
   reset_rate_limit: 3

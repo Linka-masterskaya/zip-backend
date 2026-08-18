@@ -538,3 +538,67 @@ func TestResetPasswordByToken(t *testing.T) {
 		assert.Nil(t, usedAt)
 	})
 }
+
+func TestDeleteStaleUnverifiedUsersKeepsVerifiedRecentAndOwners(t *testing.T) {
+	truncateAll(t)
+	ctx := testCtx(t)
+	repo := &authRepo{db: testPool, pool: testPool}
+
+	newUser := func(name string, verified bool, age time.Duration) uuid.UUID {
+		t.Helper()
+		orgID := uuid.New()
+		_, err := testPool.Exec(ctx,
+			`INSERT INTO organizations (id, name) VALUES ($1, $2)`, orgID, name)
+		require.NoError(t, err)
+		userID := uuid.New()
+		_, err = testPool.Exec(ctx, `
+			INSERT INTO users (id, org_id, email_verified, created_at)
+			VALUES ($1, $2, $3, now() - $4::interval)`,
+			userID, orgID, verified, age.String())
+		require.NoError(t, err)
+		return userID
+	}
+
+	stale := newUser("stale org", false, 8*24*time.Hour)
+	verified := newUser("verified org", true, 8*24*time.Hour)
+	recent := newUser("recent org", false, time.Hour)
+	owner := newUser("owner org", false, 8*24*time.Hour)
+
+	// У владельца есть папка: folders.owner_id объявлен ON DELETE RESTRICT,
+	// и фоновая задача не должна ни падать, ни удалять данные.
+	_, err := testPool.Exec(ctx, `
+		INSERT INTO folders (org_id, owner_id, section, kind, name, depth)
+		SELECT org_id, id, 'my', 'folder', 'Моя папка', 0 FROM users WHERE id = $1`, owner)
+	require.NoError(t, err)
+
+	deleted, err := repo.DeleteStaleUnverifiedUsers(ctx, time.Now().Add(-7*24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+
+	remaining := map[uuid.UUID]bool{}
+	rows, err := testPool.Query(ctx, `SELECT id FROM users`)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		require.NoError(t, rows.Scan(&id))
+		remaining[id] = true
+	}
+	require.NoError(t, rows.Err())
+
+	assert.False(t, remaining[stale], "просроченная неподтверждённая регистрация удаляется")
+	assert.True(t, remaining[verified], "подтверждённый аккаунт не трогаем")
+	assert.True(t, remaining[recent], "свежая регистрация ещё имеет право на жизнь")
+	assert.True(t, remaining[owner], "владельца данных не удаляем")
+
+	// Личная организация удалённого пользователя не должна остаться сиротой.
+	var orgs int
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT count(*) FROM organizations WHERE name = 'stale org'`).Scan(&orgs))
+	assert.Zero(t, orgs)
+
+	var keptOrgs int
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT count(*) FROM organizations`).Scan(&keptOrgs))
+	assert.Equal(t, 3, keptOrgs)
+}
