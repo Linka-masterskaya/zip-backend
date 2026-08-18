@@ -103,7 +103,9 @@ func TestStudentFolderOwnershipAndMixedContents(t *testing.T) {
 		FROM users WHERE id = $1`, ownerID, studentFolder.ID)
 	require.NoError(t, err)
 
-	page, err := service.Contents(ctx, studentFolder.ID, ContentsInput{})
+	page, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &studentFolder.ID,
+	})
 	require.NoError(t, err)
 	require.Len(t, page.Items, 2)
 	assert.Equal(t, "folder", page.Items[0].Type)
@@ -264,4 +266,74 @@ func assertStatus(t *testing.T, err error, status int) {
 	require.Error(t, err)
 	require.True(t, errors.As(err, &appErr))
 	assert.Equal(t, status, appErr.HTTPStatus)
+}
+
+func TestSectionRootContentsAreScopedSortedAndFolderOnly(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "root owner")
+	foreignID := seedFolderUser(t, pool, "root foreign")
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	beta, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Бета",
+	})
+	require.NoError(t, err)
+	alpha, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Альфа",
+	})
+	require.NoError(t, err)
+
+	// Вложенная папка не должна попасть в корень.
+	_, err = service.Create(ctx, CreateInput{
+		ParentID: &alpha.ID, Section: SectionMy, Kind: KindFolder, Name: "Вложенная",
+	})
+	require.NoError(t, err)
+
+	// Папка другого раздела тоже не должна попасть в корень "my".
+	_, err = service.Create(ctx, CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Библиотечная",
+	})
+	require.NoError(t, err)
+
+	// И папка чужого владельца.
+	_, err = service.Create(folderContext(foreignID), CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Чужая",
+	})
+	require.NoError(t, err)
+
+	page, err := service.Contents(ctx, ContentsInput{Section: SectionMy})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 2)
+	assert.Equal(t, []string{"Альфа", "Бета"}, []string{page.Items[0].Name, page.Items[1].Name})
+	assert.Equal(t, alpha.ID, page.Items[0].ID)
+	assert.Equal(t, beta.ID, page.Items[1].ID)
+	for _, item := range page.Items {
+		assert.Equal(t, "folder", item.Type)
+	}
+
+	desc, err := service.Contents(ctx, ContentsInput{Section: SectionMy, Order: "desc"})
+	require.NoError(t, err)
+	require.Len(t, desc.Items, 2)
+	assert.Equal(t, "Бета", desc.Items[0].Name)
+
+	_, err = service.Contents(ctx, ContentsInput{})
+	assertStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+}
+
+func TestContentsRejectsFolderFromAnotherSection(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "section mismatch")
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	libraryFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Общая",
+	})
+	require.NoError(t, err)
+
+	_, err = service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &libraryFolder.ID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }

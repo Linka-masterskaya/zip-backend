@@ -628,13 +628,20 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
 
-  /folders/{id}/contents:
+  /sections/{section}/contents:
     get:
       tags: [folders]
-      summary: Смешанный список дочерних папок и наборов
+      summary: Содержимое узла дерева — папки и наборы одним списком
+      description: >-
+        Один эндпоинт на весь экран. Без `parent_id` возвращает корень раздела:
+        «Мои наборы», «Библиотека» и «Картотека учеников» — это пункты меню, а не
+        папки, поэтому адресовать корень id папки нельзя. В корне лежат только
+        папки: у набора `folder_id` объявлен NOT NULL, то есть набор всегда
+        находится внутри какой-то папки.
       security: [{ bearerAuth: [] }]
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: section, in: path, required: true, schema: { type: string, enum: [library, my, students] } }
+        - { name: parent_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Папка внутри раздела. Не задан — корень раздела" }
         - { name: sort, in: query, schema: { type: string, enum: [name, updated_at], default: name } }
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
@@ -651,7 +658,9 @@ paths:
                   items:  { type: array, items: { $ref: '#/components/schemas/ContentItem' } }
                   limit:  { type: integer }
                   offset: { type: integer }
-        '404': { description: Папка не найдена }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Папка не найдена или недоступна }
 
   /media:
     get:

@@ -82,7 +82,7 @@ func TestRegisterFolderRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/folders",
 		"GET /api/v1/folders",
-		"GET /api/v1/folders/{id}/contents",
+		"GET /api/v1/sections/{section}/contents",
 		"PATCH /api/v1/folders/{id}",
 		"POST /api/v1/folders/{id}/move",
 		"DELETE /api/v1/folders/{id}",

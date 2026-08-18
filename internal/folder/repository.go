@@ -350,18 +350,27 @@ func (r *Repository) Delete(
 func (r *Repository) Contents(
 	ctx context.Context,
 	userID uuid.UUID,
-	folderID uuid.UUID,
 	input ContentsInput,
 ) (*ContentsPage, error) {
-	var section string
-	var ownerID uuid.UUID
-	err := r.pool.QueryRow(ctx, `
-		SELECT section, owner_id FROM folders WHERE id = $1`, folderID).Scan(&section, &ownerID)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && section != SectionLibrary && ownerID != userID) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("folder contents access: %w", err)
+	section := input.Section
+	if input.ParentID != nil {
+		var folderSection string
+		var ownerID uuid.UUID
+		err := r.pool.QueryRow(ctx, `
+			SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
+			Scan(&folderSection, &ownerID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return nil, ErrNotFound
+		case err != nil:
+			return nil, fmt.Errorf("folder contents access: %w", err)
+		// A folder addressed from the wrong section is reported as missing so
+		// the response never confirms that it exists elsewhere.
+		case folderSection != section:
+			return nil, ErrNotFound
+		case section != SectionLibrary && ownerID != userID:
+			return nil, ErrNotFound
+		}
 	}
 
 	orderColumn := "name"
@@ -373,15 +382,35 @@ func (r *Repository) Contents(
 		direction = "DESC"
 	}
 
-	packFolderColumn := "p.folder_id"
-	packScope := "AND p.owner_id = $2"
-	if section == SectionLibrary {
-		packFolderColumn = "p.library_folder_id"
-		packScope = "AND p.published_at IS NOT NULL"
-	}
-	studentAssignments := ""
-	if section == SectionStudents {
-		studentAssignments = `
+	var query string
+	var args []any
+	if input.ParentID == nil {
+		// Root of a section holds folders only: packs.folder_id is NOT NULL,
+		// so a pack always lives inside some folder.
+		query = `
+		WITH items AS (
+			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
+			       f.student_id, false AS published, f.updated_at
+			FROM folders f
+			WHERE f.parent_id IS NULL
+			  AND f.section = $2
+			  AND ($2 = 'library' OR f.owner_id = $1)
+		)
+		SELECT type, id, name, kind, student_id, published, updated_at
+		FROM items
+		ORDER BY ` + orderColumn + ` ` + direction + `, id
+		LIMIT $3 OFFSET $4`
+		args = []any{userID, section, input.Limit, input.Offset}
+	} else {
+		packFolderColumn := "p.folder_id"
+		packScope := "AND p.owner_id = $2"
+		if section == SectionLibrary {
+			packFolderColumn = "p.library_folder_id"
+			packScope = "AND p.published_at IS NOT NULL"
+		}
+		studentAssignments := ""
+		if section == SectionStudents {
+			studentAssignments = `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       false, p.updated_at
@@ -391,8 +420,8 @@ func (r *Repository) Contents(
 			WHERE student_folder.id = $1
 			  AND student_folder.owner_id = $2
 			  AND p.folder_id <> $1`
-	}
-	query := `
+		}
+		query = `
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
 			       f.student_id, false AS published, f.updated_at
@@ -410,7 +439,10 @@ func (r *Repository) Contents(
 		FROM items
 		ORDER BY ` + orderColumn + ` ` + direction + `, id
 		LIMIT $4 OFFSET $5`
-	rows, err := r.pool.Query(ctx, query, folderID, userID, section, input.Limit, input.Offset)
+		args = []any{*input.ParentID, userID, section, input.Limit, input.Offset}
+	}
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("folder contents: %w", err)
 	}
