@@ -485,6 +485,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ttsapi.max_body_size", 65536)
 	v.SetDefault("ttsapi.mime_type", "audio/mpeg")
 	v.SetDefault("ttsapi.max_concurrent", 10)
+	v.SetDefault("ttsapi.rate_limit", 120)
 
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})
@@ -567,6 +568,12 @@ func validateConfig(cfg *Config) error {
 	// TTSapi validation
 	if cfg.TTS.ServiceURL == "" {
 		return fmt.Errorf("ttsapi.service_url is required")
+	}
+	if cfg.TTS.RateLimit <= 0 {
+		return fmt.Errorf("ttsapi.rate_limit must be > 0")
+	}
+	if cfg.TTS.MaxConcurrent <= 0 {
+		return fmt.Errorf("ttsapi.max_concurrent must be > 0")
 	}
 	return nil
 }

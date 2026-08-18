@@ -101,7 +101,7 @@ func TestPublishAndConsumeTTS(t *testing.T) {
 	received := make(chan broker.TTSJob, 1)
 
 	go func() {
-		_ = consumer.ConsumeTTSJobs(ctx, func(_ context.Context, j broker.TTSJob) error {
+		_ = consumer.ConsumeTTSJobs(ctx, func(_ context.Context, j broker.TTSJob, _ bool) error {
 			received <- j
 			cancel()
 			return nil
@@ -132,7 +132,7 @@ func TestPublishAndConsumeClamAV(t *testing.T) {
 	received := make(chan broker.ClamAVJob, 1)
 
 	go func() {
-		_ = consumer.ConsumeClamAVJobs(ctx, func(_ context.Context, j broker.ClamAVJob) error {
+		_ = consumer.ConsumeClamAVJobs(ctx, func(_ context.Context, j broker.ClamAVJob, _ bool) error {
 			received <- j
 			cancel()
 			return nil

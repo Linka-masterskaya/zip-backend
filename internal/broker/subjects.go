@@ -17,10 +17,10 @@ const (
 
 type (
 	// TTSJobHandler processes a single text-to-speech job.
-	TTSJobHandler func(ctx context.Context, job TTSJob) error
+	TTSJobHandler func(ctx context.Context, job TTSJob, isLastAttempt bool) error
 
 	// ClamAVJobHandler processes a single ClamAV file scan job.
-	ClamAVJobHandler func(ctx context.Context, job ClamAVJob) error
+	ClamAVJobHandler func(ctx context.Context, job ClamAVJob, isLastAttempt bool) error
 )
 
 // LLMRequest is a request to generate or edit cards via LLM.

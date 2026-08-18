@@ -41,6 +41,7 @@ type JobDetails struct {
 	SHA256    *string
 	SizeBytes *int64
 	MimeType  *string
+	Text      string
 }
 
 type ServiceConfig struct {

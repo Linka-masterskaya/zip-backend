@@ -86,7 +86,7 @@ func TestE2E_TTSFlow(t *testing.T) {
 
 	// 3. Worker обрабатывает задачу
 	require.NotNil(t, pub.lastJob)
-	err := ttsWorker.Handle(context.Background(), *pub.lastJob)
+	err := ttsWorker.Handle(context.Background(), *pub.lastJob, false)
 	require.NoError(t, err)
 
 	// 4. Статус — succeeded, есть media_id

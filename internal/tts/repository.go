@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
@@ -147,6 +148,7 @@ func (r *Repository) GetJob(ctx context.Context, jobID uuid.UUID) (*JobDetails, 
 		&jobDetails.MinioKey,
 		&jobDetails.SHA256,
 		&jobDetails.SizeBytes,
+		&jobDetails.Text,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -193,8 +195,10 @@ func (r *Repository) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUI
 		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
 	}
 
+	mediaType, _, _ := strings.Cut(*job.MimeType, "/")
 	err = tx.QueryRow(ctx, insertMediaFromTTS,
 		orgID, userID, job.SHA256, job.MimeType, job.SizeBytes, job.MinioKey,
+		job.Text, mediaType,
 	).Scan(&mediaID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)

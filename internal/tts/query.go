@@ -38,16 +38,16 @@ VALUES($1, $2, $3, $4, $5)
 ON CONFLICT (text, voice) DO NOTHING`
 
 const getJob = `
-SELECT status, minio_key, sha256, size_bytes
+SELECT status, minio_key, sha256, size_bytes, text
 FROM tts_jobs
 WHERE id=$1`
 
 const insertMediaFromTTS = `
 WITH ins AS (
-	INSERT INTO media_files (org_id, uploader_id, sha256, mime_type, size_bytes, minio_key)
-	VALUES ($1, $2, $3, $4, $5, $6)
-	ON CONFLICT (org_id, minio_key) DO NOTHING
-	RETURNING id
+    INSERT INTO media_files (org_id, uploader_id, sha256, mime_type, size_bytes, minio_key, name, media_type)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (org_id, minio_key) DO NOTHING
+    RETURNING id
 )
 SELECT id FROM ins
 UNION ALL

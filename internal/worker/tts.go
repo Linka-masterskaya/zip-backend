@@ -42,7 +42,7 @@ func NewTTS(ttsapi synthesizer, storage uploader, repo audioBank) *TTS {
 	return &TTS{client: ttsapi, storage: storage, repo: repo}
 }
 
-func (w *TTS) Handle(ctx context.Context, job broker.TTSJob) error {
+func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool) error {
 	jobID, err := uuid.Parse(job.JobId)
 	if err != nil {
 		slog.ErrorContext(ctx, "worker.Handle: bad job id in message", "job_id", job.JobId, "err", err)
@@ -58,7 +58,7 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob) error {
 			}
 			return nil
 		}
-		return err
+		return w.handleRetryable(ctx, jobID, "Synthesize", isLastAttempt, err)
 	}
 
 	hash := sha256.Sum256(audio)
@@ -73,12 +73,12 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob) error {
 	key := "tts/" + hex.EncodeToString(keyHash[:])
 	err = w.storage.PutObject(ctx, key, bytes.NewReader(audio), audioSize, "audio/mpeg")
 	if err != nil {
-		return fmt.Errorf("worker.GenerateAudio: PutObject: %w", err)
+		return w.handleRetryable(ctx, jobID, "PutObject", isLastAttempt, err)
 	}
 
 	err = w.repo.CompleteJob(ctx, jobID, key, digest, audioSize)
 	if err != nil {
-		return fmt.Errorf("worker.GenerateAudio: %w", err)
+		return w.handleRetryable(ctx, jobID, "CompleteJob", isLastAttempt, err)
 	}
 
 	err = w.repo.PutToBank(ctx, &tts.BankEntry{
@@ -89,7 +89,7 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob) error {
 		SizeBytes: audioSize,
 	})
 	if err != nil {
-		return fmt.Errorf("worker.GenerateAudio: %w", err)
+		return w.handleRetryable(ctx, jobID, "PutToBank", isLastAttempt, err)
 	}
 
 	return nil
@@ -109,4 +109,18 @@ func (w *TTS) markFailedWithRetry(ctx context.Context, jobID uuid.UUID) error {
 		}
 	}
 	return lastErr
+}
+
+func (w *TTS) handleRetryable(ctx context.Context, jobID uuid.UUID, opName string, isLastAttempt bool, opErr error) error {
+	if !isLastAttempt {
+		return fmt.Errorf("worker.Handle: %s: %w", opName, opErr)
+	}
+	if failErr := w.markFailedWithRetry(ctx, jobID); failErr != nil {
+		slog.ErrorContext(ctx, "worker.Handle: last attempt, mark failed failed",
+			"job_id", jobID, "op", opName, "op_err", opErr, "db_err", failErr)
+		return nil
+	}
+	slog.WarnContext(ctx, "worker.Handle: job marked failed after final delivery",
+		"job_id", jobID, "op", opName, "op_err", opErr)
+	return nil
 }

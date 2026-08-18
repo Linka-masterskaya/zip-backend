@@ -92,7 +92,7 @@ func TestHandleOK(t *testing.T) {
 	repo := &fakeAudioBank{}
 
 	w := NewTTS(synth, stor, repo)
-	err := w.Handle(context.Background(), job)
+	err := w.Handle(context.Background(), job, false)
 
 	require.NoError(t, err)
 	assert.True(t, stor.called)
@@ -141,7 +141,7 @@ func TestHandleOKVerifiesKeyAndDigest(t *testing.T) {
 	}
 
 	w := NewTTS(synth, stor, repo)
-	err := w.Handle(context.Background(), job)
+	err := w.Handle(context.Background(), job, false)
 	require.NoError(t, err)
 }
 
@@ -155,7 +155,7 @@ func TestHandleSynthesizeError(t *testing.T) {
 	repo := &fakeAudioBank{}
 
 	w := NewTTS(synth, stor, repo)
-	err := w.Handle(context.Background(), testJob())
+	err := w.Handle(context.Background(), testJob(), false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection refused")
@@ -177,7 +177,7 @@ func TestHandlePutObjectError(t *testing.T) {
 	repo := &fakeAudioBank{}
 
 	w := NewTTS(synth, stor, repo)
-	err := w.Handle(context.Background(), testJob())
+	err := w.Handle(context.Background(), testJob(), false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "PutObject")
@@ -198,7 +198,7 @@ func TestHandleCompleteJobError(t *testing.T) {
 	}
 
 	w := NewTTS(synth, stor, repo)
-	err := w.Handle(context.Background(), testJob())
+	err := w.Handle(context.Background(), testJob(), false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db connection lost")
@@ -220,7 +220,7 @@ func TestHandleInvalidJobID(t *testing.T) {
 	job.JobId = "not-a-uuid"
 
 	w := NewTTS(synth, stor, repo)
-	err := w.Handle(context.Background(), job)
+	err := w.Handle(context.Background(), job, false)
 
 	require.NoError(t, err, "bad job id должен ACK'аться без ошибки")
 	assert.False(t, synthCalled, "не должен синтезировать при bad job id")
@@ -240,7 +240,7 @@ func TestHandlePutToBankError(t *testing.T) {
 	}
 
 	w := NewTTS(synth, stor, repo)
-	err := w.Handle(context.Background(), testJob())
+	err := w.Handle(context.Background(), testJob(), false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate entry")

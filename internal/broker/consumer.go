@@ -5,8 +5,10 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/nats-io/nats.go/jetstream"
@@ -39,7 +41,7 @@ func consumeJobs[T any](
 	js jetstream.JetStream,
 	streamName, filterSubject string,
 	cfg config.ConsumerSettings,
-	handler func(context.Context, T) error,
+	handler func(context.Context, T, bool) error,
 ) error {
 	cons, err := js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
 		Durable:       cfg.Durable,
@@ -53,6 +55,9 @@ func consumeJobs[T any](
 		return fmt.Errorf("consumeJobs[%s]: create consumer: %w", cfg.Durable, err)
 	}
 
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -62,34 +67,60 @@ func consumeJobs[T any](
 
 		msgs, err := cons.Fetch(1, jetstream.FetchMaxWait(cfg.FetchMaxWait))
 		if err != nil {
-			return fmt.Errorf("consumeJobs[%s]: fetch: %w", cfg.Durable, err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
+			}
+			slog.ErrorContext(ctx, "consumeJobs: fetch failed, retrying", "consumer", cfg.Durable, "err", err)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+		backoff = time.Second
+
+		processBatch(ctx, msgs, cfg, handler)
+	}
+}
+
+func processBatch[T any](
+	ctx context.Context,
+	msgs jetstream.MessageBatch,
+	cfg config.ConsumerSettings,
+	handler func(context.Context, T, bool) error,
+) {
+	for msg := range msgs.Messages() {
+		var job T
+		if err := json.Unmarshal(msg.Data(), &job); err != nil {
+			slog.Error("consumeJobs: unmarshal, terminating message", "consumer", cfg.Durable, "err", err)
+			if termErr := msg.Term(); termErr != nil {
+				slog.Error("consumeJobs: term failed", "consumer", cfg.Durable, "err", termErr)
+			}
+			continue
 		}
 
-		for msg := range msgs.Messages() {
-			var job T
-			if err := json.Unmarshal(msg.Data(), &job); err != nil {
-				slog.Error("consumeJobs: unmarshal, terminating message", "consumer", cfg.Durable, "err", err)
-				if termErr := msg.Term(); termErr != nil {
-					slog.Error("consumeJobs: term failed", "consumer", cfg.Durable, "err", termErr)
-				}
-				continue
-			}
+		meta, metaErr := msg.Metadata()
+		isLastAttempt := metaErr == nil && cfg.MaxDeliver > 0 && meta.NumDelivered >= uint64(cfg.MaxDeliver)
 
-			if err := handler(ctx, job); err != nil {
-				slog.Error("consumeJobs: handler", "consumer", cfg.Durable, "err", err)
-				if nakErr := msg.Nak(); nakErr != nil {
-					slog.Error("consumeJobs: nak failed", "consumer", cfg.Durable, "err", nakErr)
-				}
-				continue
+		if err := handler(ctx, job, isLastAttempt); err != nil {
+			slog.Error("consumeJobs: handler", "consumer", cfg.Durable, "err", err)
+			if nakErr := msg.Nak(); nakErr != nil {
+				slog.Error("consumeJobs: nak failed", "consumer", cfg.Durable, "err", nakErr)
 			}
-
-			if ackErr := msg.Ack(); ackErr != nil {
-				slog.Error("consumeJobs: ack failed", "consumer", cfg.Durable, "err", ackErr)
-			}
+			continue
 		}
 
-		if err := msgs.Error(); err != nil {
-			slog.Error("consumeJobs: fetch batch error", "consumer", cfg.Durable, "err", err)
+		if ackErr := msg.Ack(); ackErr != nil {
+			slog.Error("consumeJobs: ack failed", "consumer", cfg.Durable, "err", ackErr)
 		}
+	}
+
+	if err := msgs.Error(); err != nil {
+		slog.Error("consumeJobs: fetch batch error", "consumer", cfg.Durable, "err", err)
 	}
 }
