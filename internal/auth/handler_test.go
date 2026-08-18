@@ -659,7 +659,7 @@ func TestRegister(t *testing.T) {
 					}).
 					Return(nil)
 			},
-			wantStatus: http.StatusCreated,
+			wantStatus: http.StatusAccepted,
 		},
 		{
 			name:       "malformed json",
@@ -683,7 +683,10 @@ func TestRegister(t *testing.T) {
 			wantCode:   "BAD_REQUEST",
 		},
 		{
-			name: "duplicate email",
+			// Занятый адрес отдельного кода больше не имеет: регистрация
+			// отвечает одинаково, поэтому здесь проверяем только то, что
+			// настоящая ошибка сервиса доходит до клиента.
+			name: "service failure propagates",
 			body: `{"email":"user@example.com","password":"strongpass123"}`,
 			mockSetup: func(m *MockauthServiceIface) {
 				m.EXPECT().
@@ -691,10 +694,10 @@ func TestRegister(t *testing.T) {
 						Email:    "user@example.com",
 						Password: "strongpass123",
 					}).
-					Return(apperr.ErrConflict.WithMessage("email already exists"))
+					Return(apperr.ErrInternal)
 			},
-			wantStatus: http.StatusConflict,
-			wantCode:   "CONFLICT",
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL",
 		},
 	}
 
@@ -731,7 +734,7 @@ func TestRegister(t *testing.T) {
 				}
 			}
 
-			if tt.wantStatus == http.StatusCreated {
+			if tt.wantStatus == http.StatusAccepted {
 				if rec.Body.Len() != 0 {
 					t.Errorf("body = %q, want empty", rec.Body.String())
 				}

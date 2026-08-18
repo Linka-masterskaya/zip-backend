@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -19,6 +20,10 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/student"
 )
 
+// Час — компромисс: retention измеряется днями, поэтому чаще незачем, а реже
+// значит держать освободившийся адрес занятым дольше нужного.
+const unverifiedCleanupInterval = time.Hour
+
 type modules struct {
 	packs    httpapi.PackHandlers
 	media    httpapi.MediaHandlers
@@ -28,6 +33,7 @@ type modules struct {
 	profile  httpapi.ProfileHandlers
 	pictures *picturebank.Handler
 	checker  *health.Checker
+	cleaner  *auth.RegistrationCleaner
 }
 
 // buildModules wires every domain module on top of the infrastructure.
@@ -80,7 +86,12 @@ func buildModules(in *infra) (*modules, error) {
 		CookieSecure:             cfg.Auth.CookieSecure,
 		RateLimit:                resendPolicy,
 	}
-	authService := auth.NewAuthService(auth.NewAuthRepo(in.db), in.redis, in.redis, in.mailer, authCfg, in.crypto)
+	authService := auth.NewAuthService(
+		auth.NewAuthRepo(in.db), in.redis, in.redis, in.mailer, authCfg, in.crypto,
+	)
+	registrationCleaner := auth.NewRegistrationCleanerFromPool(
+		in.db, cfg.Auth.UnverifiedRetention, unverifiedCleanupInterval,
+	)
 
 	profileService := profile.NewService(
 		profile.NewRepository(in.db), in.storage, in.mailer, in.crypto, in.redis,
@@ -122,5 +133,6 @@ func buildModules(in *infra) (*modules, error) {
 		},
 		pictures: picturebank.NewHandler(picturesService, cfg.PicturesBank.CacheTTL),
 		checker:  checker,
+		cleaner:  registrationCleaner,
 	}, nil
 }

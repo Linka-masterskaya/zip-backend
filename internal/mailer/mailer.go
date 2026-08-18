@@ -19,6 +19,7 @@ var subjects = map[Template]string{
 	EmailVerify:   "Подтверждение email",
 	PasswordReset: "Сброс пароля",
 	EmailChange:   "Смена email",
+	AccountExists: "Аккаунт уже существует",
 }
 
 //go:embed templates/*.html

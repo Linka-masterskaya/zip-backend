@@ -61,7 +61,7 @@ type authRepoIface interface {
 	) error
 
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error)
-	EmailExists(ctx context.Context, emailHash []byte) (bool, error)
+	replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, passwordHash string) error
 	CreateOrganization(ctx context.Context, params CreateOrganizationParams) error
 	CreateUser(ctx context.Context, params CreateUserParams) error
 	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
@@ -523,6 +523,73 @@ func (au *authService) rotateRefresh(
 	return newRefreshToken, nil
 }
 
+// reclaimUnverifiedRegistration отдаёт неподтверждённый адрес новому
+// регистранту: перезаписывает пароль, гасит прежние verify-токены и шлёт
+// свежее письмо. Прежние токены обязательно гасятся, иначе ссылка из старого
+// письма подтвердит адрес уже с чужим паролем.
+func (au *authService) reclaimUnverifiedRegistration(
+	ctx context.Context,
+	userIDRaw, email, password string,
+) error {
+	userID, err := uuid.Parse(userIDRaw)
+	if err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: %w", err)
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), au.cfg.BcryptCost)
+	if err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: hash password: %w", err)
+	}
+
+	tokenRaw := make([]byte, 32)
+	if _, err = rand.Read(tokenRaw); err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: %w", err)
+	}
+	tokenHash := sha256.Sum256(tokenRaw)
+
+	tokenID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: %w", err)
+	}
+
+	tx, err := au.repo.beginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: begin tx: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.ErrorContext(ctx, "tx rollback failed", logger.Err(err))
+		}
+	}()
+
+	txRepo := au.repo.withTx(tx)
+
+	// Гонка с подтверждением исключена: если адрес успели подтвердить между
+	// проверкой и этим апдейтом, строк не будет и вернётся 409.
+	if err = txRepo.replaceUnverifiedPassword(ctx, userID, string(passwordHash)); err != nil {
+		return err
+	}
+
+	if err = txRepo.rotateEmailTokens(
+		ctx, tokenID, userID, tokenHash[:], time.Now().Add(au.cfg.VerifyEmailTokenTTL),
+	); err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: rotate tokens: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: commit: %w", err)
+	}
+
+	verifyToken := base64.RawURLEncoding.EncodeToString(tokenRaw)
+	if err = au.mailer.Send(ctx, email, mailer.EmailVerify, mailer.EmailData{
+		Token: verifyToken, Email: email,
+	}); err != nil {
+		slog.Error("failed to send verify email", "err", err)
+	}
+
+	return nil
+}
+
 func (au *authService) createEmailVerifyToken(ctx context.Context, repo authRepoIface, userID uuid.UUID) (string, error) {
 	verifyToken := make([]byte, 32)
 
@@ -554,14 +621,27 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	emailHash := au.crp.Hash([]byte(email))
 
-	exists, err := au.repo.EmailExists(ctx, emailHash)
-	if err != nil {
-		return fmt.Errorf("authService.Register: check email exists: %w", err)
-	}
-
-	if exists {
+	existing, err := au.repo.GetUserByEmailHash(ctx, emailHash)
+	switch {
+	case err == nil && existing.EmailVerified:
+		// Ответ одинаков для занятого и свободного адреса: иначе регистрация
+		// становится оракулом и по ней можно перебирать базу пользователей.
+		// Владелец узнаёт о попытке из письма, а не атакующий — из кода ответа.
 		runDummyPasswordCompare(req.Password)
-		return apperr.ErrConflict.WithMessage("email already exists")
+		if mailErr := au.mailer.Send(ctx, email, mailer.AccountExists, mailer.EmailData{
+			Email: email,
+		}); mailErr != nil {
+			slog.Error("failed to send account exists email", "err", mailErr)
+		}
+		return nil
+	case err == nil:
+		// Регистрация на адрес, который занят, но не подтверждён: владение им
+		// не доказано, поэтому отдаём его тому, кто пришёл за ним сейчас.
+		return au.reclaimUnverifiedRegistration(ctx, existing.ID, email, req.Password)
+	case errors.Is(err, apperr.ErrUserNotFound):
+		// адрес свободен, продолжаем обычную регистрацию
+	default:
+		return fmt.Errorf("authService.Register: lookup email: %w", err)
 	}
 
 	emailEncrypted, err := au.crp.Encrypt([]byte(email))

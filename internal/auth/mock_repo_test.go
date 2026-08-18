@@ -115,19 +115,18 @@ func (mr *MockauthRepoIfaceMockRecorder) CreateVerifyToken(ctx, params any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateVerifyToken", reflect.TypeOf((*MockauthRepoIface)(nil).CreateVerifyToken), ctx, params)
 }
 
-// EmailExists mocks base method.
-func (m *MockauthRepoIface) EmailExists(ctx context.Context, emailHash []byte) (bool, error) {
+// replaceUnverifiedPassword mocks base method.
+func (m *MockauthRepoIface) replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, passwordHash string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EmailExists", ctx, emailHash)
-	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "replaceUnverifiedPassword", ctx, userID, passwordHash)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
-// EmailExists indicates an expected call of EmailExists.
-func (mr *MockauthRepoIfaceMockRecorder) EmailExists(ctx, emailHash any) *gomock.Call {
+// replaceUnverifiedPassword indicates an expected call of replaceUnverifiedPassword.
+func (mr *MockauthRepoIfaceMockRecorder) replaceUnverifiedPassword(ctx, userID, passwordHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmailExists", reflect.TypeOf((*MockauthRepoIface)(nil).EmailExists), ctx, emailHash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "replaceUnverifiedPassword", reflect.TypeOf((*MockauthRepoIface)(nil).replaceUnverifiedPassword), ctx, userID, passwordHash)
 }
 
 // GetUserByEmailHash mocks base method.

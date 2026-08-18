@@ -339,8 +339,17 @@ paths:
   /auth/register:
     post:
       tags: [auth]
-      summary: Регистрация по email (R4, p18) — шлёт verify-письмо
+      summary: Регистрация по email (R4, p18) — шлёт письмо
       description: |
+        Ответ не зависит от того, занят адрес или свободен: по коду ответа нельзя
+        перебирать базу пользователей. Что произошло, адресат узнаёт из письма.
+
+        - адрес свободен — заводим аккаунт и шлём письмо подтверждения;
+        - адрес занят, но не подтверждён — забираем его: пароль перезаписывается,
+          прежние verify-ссылки перестают работать, уходит новое письмо подтверждения;
+        - адрес занят подтверждённым аккаунтом — ничего не меняем, владельцу уходит
+          письмо «аккаунт уже существует» со ссылками на вход и восстановление.
+
         ДОПУЩЕНИЕ (открытый вопрос §8.1): регистрация создаёт новую личную организацию
         и назначает пользователю роль `defectologist`. Модель приглашений/общих org —
         не финализирована, при изменении меняется поведение этого эндпоинта.
@@ -349,10 +358,9 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/RegisterRequest' } } }
       responses:
-        '201':
-          description: Created; user registered, verification email is sent or queued. No response body.
+        '202':
+          description: Принято. Письмо отправлено или поставлено в очередь. Тела нет.
         '400': { $ref: '#/components/responses/BadRequest' }
-        '409': { $ref: '#/components/responses/Conflict' }
         '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/verify-email:

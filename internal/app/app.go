@@ -65,6 +65,24 @@ func Bootstrap(cfgPath string) (*App, error) {
 
 	rl := httpapi.NewRateLimits(in.redis, cfg)
 
+	// Уборка неподтверждённых регистраций живёт своим контекстом: её надо
+	// остановить раньше, чем закроется пул соединений.
+	cleanupCtx, stopCleanup := context.WithCancel(context.Background())
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		mods.cleaner.Run(cleanupCtx)
+	}()
+	closer.Add("registration cleanup", func(ctx context.Context) error {
+		stopCleanup()
+		select {
+		case <-cleanupDone:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
 	return &App{
 		cfg:        cfg,
 		closer:     closer,
