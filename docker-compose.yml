@@ -63,9 +63,12 @@ services:
       - "8025:8025"
       - "1025:1025"
     environment:
-      MP_SMTP_AUTH: "${SMTP_USERNAME:-admin}:${SMTP_PASSWORD:-smtppass}"
-      MP_UI_AUTH: "${UI_USERNAME:-admin}:${UI_PASSWORD:-webpass}"
+      # Приём писем без учётных данных: config.dev.yml ходит в SMTP без логина,
+      # а с MP_SMTP_AUTH отправка падала на 535 и терялась в логе — регистрация
+      # отвечала 202, но письмо не приходило.
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
+      MP_UI_AUTH: "${UI_USERNAME:-admin}:${UI_PASSWORD:-webpass}"
       MP_MAX_MESSAGES: 1000
     volumes:
       - mailpit-data:/data

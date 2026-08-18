@@ -16,7 +16,7 @@ type folderRepository interface {
 	Rename(context.Context, uuid.UUID, string, uuid.UUID, string) (*Folder, error)
 	Move(context.Context, uuid.UUID, string, uuid.UUID, *uuid.UUID) (*Folder, error)
 	Delete(context.Context, uuid.UUID, string, uuid.UUID) error
-	Contents(context.Context, uuid.UUID, uuid.UUID, ContentsInput) (*ContentsPage, error)
+	Contents(context.Context, uuid.UUID, ContentsInput) (*ContentsPage, error)
 }
 
 type Service struct {
@@ -99,14 +99,13 @@ func (s *Service) Delete(ctx context.Context, folderID uuid.UUID) error {
 	return mapError(s.repo.Delete(ctx, userID, role, folderID))
 }
 
-func (s *Service) Contents(
-	ctx context.Context,
-	folderID uuid.UUID,
-	input ContentsInput,
-) (*ContentsPage, error) {
+func (s *Service) Contents(ctx context.Context, input ContentsInput) (*ContentsPage, error) {
 	userID, _, err := actor(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if !validSection(input.Section) {
+		return nil, apperr.ErrBadRequest.WithMessage("section is required")
 	}
 	input.Limit, input.Offset, err = page(input.Limit, input.Offset)
 	if err != nil {
@@ -122,7 +121,7 @@ func (s *Service) Contents(
 		(input.Order != "asc" && input.Order != "desc") {
 		return nil, apperr.ErrBadRequest.WithMessage("invalid sort or order")
 	}
-	result, err := s.repo.Contents(ctx, userID, folderID, input)
+	result, err := s.repo.Contents(ctx, userID, input)
 	return result, mapError(err)
 }
 

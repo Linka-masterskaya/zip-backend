@@ -320,7 +320,9 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	// 202, а не 201: по коду ответа нельзя понять, завели аккаунт сейчас или
+	// адрес уже был занят. Что делать дальше, пользователь узнаёт из письма.
+	w.WriteHeader(http.StatusAccepted)
 
 	return nil
 }

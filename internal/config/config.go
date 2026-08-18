@@ -216,15 +216,18 @@ type AuthConfig struct {
 	EmailChangeTokenTTL      time.Duration `mapstructure:"email_change_token_ttl"`
 	BcryptCost               int           `mapstructure:"bcrypt_cost"`
 	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
-	CookieSecure             bool          `mapstructure:"cookie_secure"`
-	LoginRateLimit           int           `mapstructure:"login_rate_limit"`
-	RegisterRateLimit        int           `mapstructure:"register_rate_limit"`
-	RefreshRateLimit         int           `mapstructure:"refresh_rate_limit"`
-	PackRateLimit            int           `mapstructure:"pack_rate_limit"`
-	ForgotRateLimit          int           `mapstructure:"forgot_rate_limit"`
-	ResetRateLimit           int           `mapstructure:"reset_rate_limit"`
-	VerifyResendRateLimit    int           `mapstructure:"verify_resend_rate_limit"`
-	EmailConfirmRateLimit    int           `mapstructure:"email_confirm_rate_limit"`
+	// UnverifiedRetention — сколько живёт регистрация без подтверждения адреса.
+	// Ноль отключает уборку.
+	UnverifiedRetention   time.Duration `mapstructure:"unverified_retention"`
+	CookieSecure          bool          `mapstructure:"cookie_secure"`
+	LoginRateLimit        int           `mapstructure:"login_rate_limit"`
+	RegisterRateLimit     int           `mapstructure:"register_rate_limit"`
+	RefreshRateLimit      int           `mapstructure:"refresh_rate_limit"`
+	PackRateLimit         int           `mapstructure:"pack_rate_limit"`
+	ForgotRateLimit       int           `mapstructure:"forgot_rate_limit"`
+	ResetRateLimit        int           `mapstructure:"reset_rate_limit"`
+	VerifyResendRateLimit int           `mapstructure:"verify_resend_rate_limit"`
+	EmailConfirmRateLimit int           `mapstructure:"email_confirm_rate_limit"`
 }
 
 // ProfileConfig contains Profile settings.
@@ -430,6 +433,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.register_rate_limit", 5)
 	v.SetDefault("auth.refresh_rate_limit", 10)
 	v.SetDefault("auth.require_email_verification", false)
+	v.SetDefault("auth.unverified_retention", 168*time.Hour)
 	v.SetDefault("auth.cookie_secure", false)
 	v.SetDefault("auth.pack_rate_limit", 60)
 	v.SetDefault("auth.forgot_rate_limit", 3)
