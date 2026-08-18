@@ -527,6 +527,40 @@ func (au *authService) rotateRefresh(
 // регистранту: перезаписывает пароль, гасит прежние verify-токены и шлёт
 // свежее письмо. Прежние токены обязательно гасятся, иначе ссылка из старого
 // письма подтвердит адрес уже с чужим паролем.
+// handleTakenEmail разбирает случай, когда адрес уже кому-то принадлежит.
+// Возвращает true, если запрос обработан и заводить новый аккаунт не нужно.
+//
+// Ответ клиенту одинаков для занятого и свободного адреса: иначе регистрация
+// становится оракулом и по ней можно перебирать базу пользователей. Что
+// произошло, узнаёт владелец адреса из письма, а не атакующий из кода ответа.
+func (au *authService) handleTakenEmail(
+	ctx context.Context,
+	emailHash []byte,
+	email, password string,
+) (bool, error) {
+	existing, err := au.repo.GetUserByEmailHash(ctx, emailHash)
+	switch {
+	case errors.Is(err, apperr.ErrUserNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("authService.Register: lookup email: %w", err)
+	}
+
+	if !existing.EmailVerified {
+		// Владение неподтверждённым адресом не доказала ни одна сторона,
+		// поэтому он достаётся тому, кто пришёл за ним сейчас.
+		return true, au.reclaimUnverifiedRegistration(ctx, existing.ID, email, password)
+	}
+
+	runDummyPasswordCompare(password)
+	if mailErr := au.mailer.Send(ctx, email, mailer.AccountExists, mailer.EmailData{
+		Email: email,
+	}); mailErr != nil {
+		slog.Error("failed to send account exists email", "err", mailErr)
+	}
+	return true, nil
+}
+
 func (au *authService) reclaimUnverifiedRegistration(
 	ctx context.Context,
 	userIDRaw, email, password string,
@@ -621,27 +655,12 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	emailHash := au.crp.Hash([]byte(email))
 
-	existing, err := au.repo.GetUserByEmailHash(ctx, emailHash)
-	switch {
-	case err == nil && existing.EmailVerified:
-		// Ответ одинаков для занятого и свободного адреса: иначе регистрация
-		// становится оракулом и по ней можно перебирать базу пользователей.
-		// Владелец узнаёт о попытке из письма, а не атакующий — из кода ответа.
-		runDummyPasswordCompare(req.Password)
-		if mailErr := au.mailer.Send(ctx, email, mailer.AccountExists, mailer.EmailData{
-			Email: email,
-		}); mailErr != nil {
-			slog.Error("failed to send account exists email", "err", mailErr)
-		}
+	handled, err := au.handleTakenEmail(ctx, emailHash, email, req.Password)
+	if err != nil {
+		return err
+	}
+	if handled {
 		return nil
-	case err == nil:
-		// Регистрация на адрес, который занят, но не подтверждён: владение им
-		// не доказано, поэтому отдаём его тому, кто пришёл за ним сейчас.
-		return au.reclaimUnverifiedRegistration(ctx, existing.ID, email, req.Password)
-	case errors.Is(err, apperr.ErrUserNotFound):
-		// адрес свободен, продолжаем обычную регистрацию
-	default:
-		return fmt.Errorf("authService.Register: lookup email: %w", err)
 	}
 
 	emailEncrypted, err := au.crp.Encrypt([]byte(email))

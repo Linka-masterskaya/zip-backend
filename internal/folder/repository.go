@@ -352,95 +352,11 @@ func (r *Repository) Contents(
 	userID uuid.UUID,
 	input ContentsInput,
 ) (*ContentsPage, error) {
-	section := input.Section
-	if input.ParentID != nil {
-		var folderSection string
-		var ownerID uuid.UUID
-		err := r.pool.QueryRow(ctx, `
-			SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
-			Scan(&folderSection, &ownerID)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			return nil, ErrNotFound
-		case err != nil:
-			return nil, fmt.Errorf("folder contents access: %w", err)
-		// A folder addressed from the wrong section is reported as missing so
-		// the response never confirms that it exists elsewhere.
-		case folderSection != section:
-			return nil, ErrNotFound
-		case section != SectionLibrary && ownerID != userID:
-			return nil, ErrNotFound
-		}
+	if err := r.ensureParentVisible(ctx, userID, input); err != nil {
+		return nil, err
 	}
 
-	orderColumn := "name"
-	if input.Sort == "updated_at" {
-		orderColumn = "updated_at"
-	}
-	direction := "ASC"
-	if input.Order == "desc" {
-		direction = "DESC"
-	}
-
-	var query string
-	var args []any
-	if input.ParentID == nil {
-		// Root of a section holds folders only: packs.folder_id is NOT NULL,
-		// so a pack always lives inside some folder.
-		query = `
-		WITH items AS (
-			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
-			       f.student_id, false AS published, f.updated_at
-			FROM folders f
-			WHERE f.parent_id IS NULL
-			  AND f.section = $2
-			  AND ($2 = 'library' OR f.owner_id = $1)
-		)
-		SELECT type, id, name, kind, student_id, published, updated_at
-		FROM items
-		ORDER BY ` + orderColumn + ` ` + direction + `, id
-		LIMIT $3 OFFSET $4`
-		args = []any{userID, section, input.Limit, input.Offset}
-	} else {
-		packFolderColumn := "p.folder_id"
-		packScope := "AND p.owner_id = $2"
-		if section == SectionLibrary {
-			packFolderColumn = "p.library_folder_id"
-			packScope = "AND p.published_at IS NOT NULL"
-		}
-		studentAssignments := ""
-		if section == SectionStudents {
-			studentAssignments = `
-			UNION ALL
-			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       false, p.updated_at
-			FROM folders student_folder
-			JOIN pack_adaptations pa ON pa.student_id = student_folder.student_id
-			JOIN packs p ON p.id = pa.pack_id
-			WHERE student_folder.id = $1
-			  AND student_folder.owner_id = $2
-			  AND p.folder_id <> $1`
-		}
-		query = `
-		WITH items AS (
-			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
-			       f.student_id, false AS published, f.updated_at
-			FROM folders f
-			WHERE f.parent_id = $1
-			  AND f.section = $3
-			  AND ($3 = 'library' OR f.owner_id = $2)
-			UNION ALL
-			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       p.published_at IS NOT NULL, p.updated_at
-			FROM packs p
-			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
-		)
-		SELECT type, id, name, kind, student_id, published, updated_at
-		FROM items
-		ORDER BY ` + orderColumn + ` ` + direction + `, id
-		LIMIT $4 OFFSET $5`
-		args = []any{*input.ParentID, userID, section, input.Limit, input.Offset}
-	}
+	query, args := contentsQuery(userID, input)
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -463,6 +379,101 @@ func (r *Repository) Contents(
 		return nil, fmt.Errorf("folder contents rows: %w", err)
 	}
 	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset}, nil
+}
+
+// ensureParentVisible проверяет, что запрошенная папка существует и доступна.
+// Для корня раздела проверять нечего: он не строка в таблице.
+func (r *Repository) ensureParentVisible(
+	ctx context.Context,
+	userID uuid.UUID,
+	input ContentsInput,
+) error {
+	if input.ParentID == nil {
+		return nil
+	}
+
+	var section string
+	var ownerID uuid.UUID
+	err := r.pool.QueryRow(ctx, `
+		SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
+		Scan(&section, &ownerID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return fmt.Errorf("folder contents access: %w", err)
+	// Папка из другого раздела считается отсутствующей: ответ не должен
+	// подтверждать, что она существует где-то ещё.
+	case section != input.Section:
+		return ErrNotFound
+	case section != SectionLibrary && ownerID != userID:
+		return ErrNotFound
+	}
+	return nil
+}
+
+func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
+	orderColumn := "name"
+	if input.Sort == "updated_at" {
+		orderColumn = "updated_at"
+	}
+	direction := "ASC"
+	if input.Order == "desc" {
+		direction = "DESC"
+	}
+	order := "\n\t\tORDER BY " + orderColumn + " " + direction + ", id"
+
+	if input.ParentID == nil {
+		// Корень раздела содержит только папки: packs.folder_id объявлен
+		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
+		query := `
+		SELECT 'folder'::text AS type, f.id, f.name, f.kind,
+		       f.student_id, false AS published, f.updated_at
+		FROM folders f
+		WHERE f.parent_id IS NULL
+		  AND f.section = $2
+		  AND ($2 = 'library' OR f.owner_id = $1)` + order + `
+		LIMIT $3 OFFSET $4`
+		return query, []any{userID, input.Section, input.Limit, input.Offset}
+	}
+
+	packFolderColumn := "p.folder_id"
+	packScope := "AND p.owner_id = $2"
+	if input.Section == SectionLibrary {
+		packFolderColumn = "p.library_folder_id"
+		packScope = "AND p.published_at IS NOT NULL"
+	}
+	studentAssignments := ""
+	if input.Section == SectionStudents {
+		studentAssignments = `
+			UNION ALL
+			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
+			       false, p.updated_at
+			FROM folders student_folder
+			JOIN pack_adaptations pa ON pa.student_id = student_folder.student_id
+			JOIN packs p ON p.id = pa.pack_id
+			WHERE student_folder.id = $1
+			  AND student_folder.owner_id = $2
+			  AND p.folder_id <> $1`
+	}
+	query := `
+		WITH items AS (
+			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
+			       f.student_id, false AS published, f.updated_at
+			FROM folders f
+			WHERE f.parent_id = $1
+			  AND f.section = $3
+			  AND ($3 = 'library' OR f.owner_id = $2)
+			UNION ALL
+			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
+			       p.published_at IS NOT NULL, p.updated_at
+			FROM packs p
+			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
+		)
+		SELECT type, id, name, kind, student_id, published, updated_at
+		FROM items` + order + `
+		LIMIT $4 OFFSET $5`
+	return query, []any{*input.ParentID, userID, input.Section, input.Limit, input.Offset}
 }
 
 func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {
