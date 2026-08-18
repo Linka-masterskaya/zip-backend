@@ -686,8 +686,8 @@ func TestAuthService_Register_RollbackOnCreateUserError(t *testing.T) {
 		Return(emailHash)
 
 	repo.EXPECT().
-		EmailExists(gomock.Any(), emailHash).
-		Return(false, nil)
+		GetUserByEmailHash(gomock.Any(), emailHash).
+		Return(nil, apperr.ErrUserNotFound)
 
 	crypto.EXPECT().
 		Encrypt([]byte(email)).

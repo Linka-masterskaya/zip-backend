@@ -237,6 +237,20 @@ func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passw
 		return "", apperr.ErrInternal.WithMessage("password credentials not found")
 	}
 
+	// Переход по ссылке из письма доказывает владение адресом ровно так же,
+	// как и verify-флоу. Без этого владелец захваченного адреса сбрасывает
+	// пароль, но всё равно упирается в 403 на входе.
+	if _, err = tx.Exec(ctx, `
+		UPDATE users
+		SET email_verified = true,
+		    updated_at = now()
+		WHERE id = $1
+		  AND email_verified = false
+		  AND deleted_at IS NULL
+	`, userID); err != nil {
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken verify email: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("authRepo.ResetPasswordByToken commit: %w", err)
 	}
@@ -405,24 +419,6 @@ func isEmailHashUniqueViolation(err error) bool {
 		pgErr.ConstraintName == "auth_cred_email_hash_uniq"
 }
 
-func (r *authRepo) EmailExists(ctx context.Context, emailHash []byte) (bool, error) {
-	var exists bool
-
-	query := `
-	SELECT EXISTS(
-	SELECT *
-	FROM auth_cred
-	WHERE email_hash = $1)
-	`
-
-	err := r.db.QueryRow(ctx, query, emailHash).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-
-	return exists, nil
-}
-
 func (r *authRepo) CreateOrganization(ctx context.Context, params CreateOrganizationParams) error {
 	query := `
 	INSERT INTO organizations(
@@ -514,4 +510,31 @@ func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTok
 	)
 
 	return err
+}
+
+// replaceUnverifiedPassword перезаписывает пароль неподтверждённой регистрации.
+// Пока адрес не подтверждён, владение им не доказала ни одна сторона, поэтому
+// повторная регистрация на тот же адрес имеет право забрать его себе.
+func (r *authRepo) replaceUnverifiedPassword(
+	ctx context.Context,
+	userID uuid.UUID,
+	passwordHash string,
+) error {
+	res, err := r.db.Exec(ctx, `
+		UPDATE auth_cred AS c
+		SET password_hash = $1,
+		    updated_at = now()
+		FROM users AS u
+		WHERE c.user_id = $2
+		  AND u.id = c.user_id
+		  AND u.email_verified = false
+		  AND u.deleted_at IS NULL
+	`, passwordHash, userID)
+	if err != nil {
+		return fmt.Errorf("authRepo.replaceUnverifiedPassword: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return apperr.ErrConflict.WithMessage("email already exists")
+	}
+	return nil
 }

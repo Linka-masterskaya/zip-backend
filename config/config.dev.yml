@@ -122,7 +122,9 @@ auth:
   login_rate_limit: 5
   register_rate_limit: 5
   refresh_rate_limit: 10
-  require_email_verification: false
+  # Совпадает с prod: расхождение здесь маскирует 403 на боевом входе.
+  # Письмо ловится локально в mailpit (http://localhost:8025).
+  require_email_verification: true
   pack_rate_limit: 60
   forgot_rate_limit: 3
   reset_rate_limit: 3

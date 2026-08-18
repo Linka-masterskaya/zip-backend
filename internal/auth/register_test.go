@@ -204,21 +204,67 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	assert.Equal(t, expectedTokenHash[:], tokenHash)
 }
 
-func TestAuthService_Register_IntegrationDuplicateEmail(t *testing.T) {
+func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
 	truncateAll(t)
 	ctx := registerCtx(t)
 
 	mailerFake := &registerMailerFake{}
 	svc := newRegisterTestService(mailerFake)
 
-	err := svc.Register(ctx, RegisterRequest{
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
 		Email:    "duplicate@example.com",
 		Password: "strongpass123",
-	})
+	}))
+
+	var firstHash string
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT password_hash FROM auth_cred`).Scan(&firstHash))
+
+	// Адрес занят, но не подтверждён — повторная регистрация забирает его.
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Email:    " DUPLICATE@example.com ",
+		Password: "anotherStrongPassword123",
+	}))
+
+	counts := getRegisterCounts(t, ctx)
+	assert.Equal(t, 1, counts.users, "второй пользователь заводиться не должен")
+	assert.Equal(t, 1, counts.organizations)
+	assert.Equal(t, 1, counts.authCred)
+	assert.Equal(t, 2, mailerFake.calls, "письмо уходит на каждую попытку")
+
+	var secondHash string
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT password_hash FROM auth_cred`).Scan(&secondHash))
+	assert.NotEqual(t, firstHash, secondHash, "пароль должен быть перезаписан")
+
+	// Ссылка из первого письма не должна подтверждать адрес с чужим паролем.
+	var activeTokens, usedTokens int
+	require.NoError(t, testPool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM verify_tokens WHERE used_at IS NULL),
+			(SELECT count(*) FROM verify_tokens WHERE used_at IS NOT NULL)
+	`).Scan(&activeTokens, &usedTokens))
+	assert.Equal(t, 1, activeTokens)
+	assert.Equal(t, 1, usedTokens)
+}
+
+func TestAuthService_Register_IntegrationVerifiedEmailConflicts(t *testing.T) {
+	truncateAll(t)
+	ctx := registerCtx(t)
+
+	mailerFake := &registerMailerFake{}
+	svc := newRegisterTestService(mailerFake)
+
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Email:    "verified@example.com",
+		Password: "strongpass123",
+	}))
+
+	_, err := testPool.Exec(ctx, `UPDATE users SET email_verified = true`)
 	require.NoError(t, err)
 
 	err = svc.Register(ctx, RegisterRequest{
-		Email:    " DUPLICATE@example.com ",
+		Email:    "verified@example.com",
 		Password: "anotherStrongPassword123",
 	})
 	require.Error(t, err)
@@ -229,10 +275,8 @@ func TestAuthService_Register_IntegrationDuplicateEmail(t *testing.T) {
 
 	counts := getRegisterCounts(t, ctx)
 	assert.Equal(t, 1, counts.users)
-	assert.Equal(t, 1, counts.organizations)
 	assert.Equal(t, 1, counts.authCred)
-	assert.Equal(t, 1, counts.verifyTokens)
-	assert.Equal(t, 1, mailerFake.calls)
+	assert.Equal(t, 1, mailerFake.calls, "подтверждённому адресу письмо не шлём")
 }
 
 func TestAuthService_Register_MailerErrorIsSuccess(t *testing.T) {
