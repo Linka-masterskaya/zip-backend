@@ -1,13 +1,13 @@
 openapi: 3.0.3
 info:
-  title: Linka Backend API — Auth & Profile
+  title: Linka Backend API
   version: 0.3.0
   description: |
     Auth + Profile для Linka Editor. Сверено с дизайном.
     Без username. Вход по email. Refresh — httpOnly cookie (SameSite=Strict). Access — Bearer JWT (HS256, 15m).
 servers:
-  - url: http://localhost:8080/api/v1
-    description: dev
+  - url: /api/v1
+    description: API v1
 tags:
   - name: auth
   - name: profile
@@ -158,6 +158,30 @@ components:
         created_at:        { type: string, format: date-time }
         updated_at:        { type: string, format: date-time }
 
+    CreatePackRequest:
+      type: object
+      required: [title, folder_id]
+      properties:
+        title: { type: string }
+        folder_id: { type: string, format: uuid }
+
+    UpdatePackRequest:
+      type: object
+      properties:
+        title: { type: string }
+        folder_id: { type: string, format: uuid }
+        age_min: { type: integer, minimum: 3, maximum: 18, nullable: true }
+        age_max: { type: integer, minimum: 3, maximum: 18, nullable: true }
+        difficulty: { type: string, enum: [easy, medium, hard], nullable: true }
+        goals: { type: array, items: { type: string } }
+        notes: { type: string, nullable: true }
+
+    MovePackRequest:
+      type: object
+      required: [folder_id]
+      properties:
+        folder_id: { type: string, format: uuid }
+
     PackListItem:
       allOf:
         - { $ref: '#/components/schemas/Pack' }
@@ -168,17 +192,38 @@ components:
             is_favorite: { type: boolean }
             section: { type: string, enum: [library, my, students] }
 
-    Media:
+    MediaFile:
       type: object
-      required: [id, uploader_id, sha256, mime_type, size_bytes, created_at, url]
+      required: [id, uploader_id, name, sha256, media_type, mime_type, size_bytes, created_at]
       properties:
         id:          { type: string, format: uuid }
         uploader_id: { type: string, format: uuid }
+        name:        { type: string, description: "Имя файла, по нему идёт поиск" }
         sha256:      { type: string, pattern: '^[a-f0-9]{64}$' }
+        media_type:  { type: string, description: "Первая часть MIME-типа, например image или audio" }
         mime_type:   { type: string }
         size_bytes:  { type: integer, format: int64 }
         created_at:  { type: string, format: date-time }
-        url:         { type: string, format: uri, description: Временная presigned MinIO URL }
+
+    Media:
+      allOf:
+        - $ref: '#/components/schemas/MediaFile'
+        - type: object
+          required: [url]
+          properties:
+            url: { type: string, format: uri, description: Временная presigned MinIO URL }
+
+    MediaPage:
+      type: object
+      required: [items]
+      description: Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`.
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFile' }
+        next_cursor:
+          type: string
+          description: Курсор следующей страницы. Отсутствует, если страница последняя.
 
     PictureCategory:
       type: object
@@ -256,9 +301,21 @@ components:
         name:           { type: string }
         age:            { type: integer, minimum: 0, maximum: 100, nullable: true }
         status:         { type: string, enum: [active, paused, archived, one_time] }
+        last_lesson_at: { type: string, format: date, nullable: true, description: Дата последнего занятия }
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
 
+    StudentListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Student' }
+        total:
+          type: integer
+          description: Общее количество записей для пагинации
+           
     ContentItem:
       type: object
       required: [type, id, name, updated_at]
@@ -313,12 +370,21 @@ paths:
   /auth/verify-email/resend:
     post:
       tags: [auth]
-      summary: Переслать письмо верификации текущему пользователю
-      description: "Если verify-письмо потеряно. Использует email из access-токена. Под rate-limit (A-10)."
-      security: [{ bearerAuth: [] }]
+      summary: Переслать письмо верификации
+      description: "Публичный endpoint: email передаётся в теле запроса. Под rate-limit."
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
       responses:
-        '202': { description: Если email ещё не подтверждён — письмо отправлено }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '202': { description: Запрос принят }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/login:
@@ -361,25 +427,6 @@ paths:
       security: [{ refreshCookie: [] }]
       responses:
         '204': { description: "Refresh-семья удалена, cookie очищен" }
-
-  /auth/yandex:
-    get:
-      tags: [auth]
-      summary: Старт Яндекс OAuth (R6, p17 «Войти с Яндекс ID»)
-      security: []
-      responses: { '302': { description: Redirect на Яндекс } }
-
-  /auth/yandex/callback:
-    get:
-      tags: [auth]
-      summary: Яндекс callback — upsert user, токены
-      security: []
-      parameters:
-        - { name: code, in: query, required: true, schema: { type: string } }
-        - { name: state, in: query, required: true, schema: { type: string } }
-      responses:
-        '302': { description: Redirect на frontend с refresh-cookie }
-        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /auth/password/forgot:
     post:
@@ -607,6 +654,19 @@ paths:
         '404': { description: Папка не найдена }
 
   /media:
+    get:
+      tags: [media]
+      summary: Список media организации с поиском, фильтром и курсорной пагинацией
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: query, in: query, required: false, schema: { type: string }, description: "Поиск по имени, регистронезависимый" }
+        - { name: type, in: query, required: false, schema: { type: string }, description: "Фильтр по media_type, например image или audio" }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: "Курсор из next_cursor предыдущей страницы" }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 20, default: 5 } }
+      responses:
+        '200': { description: Страница media, content: { application/json: { schema: { $ref: '#/components/schemas/MediaPage' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [media]
       summary: Загрузить изображение или аудио в приватное объектное хранилище
@@ -642,7 +702,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '204': { description: Метаданные, объект MinIO и занятая квота удалены }
+        '204': { description: 'Метаданные, объект MinIO и занятая квота удалены' }
         '404': { description: Media не найдено или принадлежит другому пользователю }
         '409': { description: Media ещё используется набором или адаптацией }
 
@@ -701,7 +761,7 @@ paths:
             image/gif:  { schema: { type: string, format: binary } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503': { description: Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME }
+        '503': { description: 'Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME' }
 
   /pictures/{id}/import:
     post:
@@ -721,6 +781,19 @@ paths:
         '429': { $ref: '#/components/responses/TooMany' }
 
   /packs:
+    post:
+      tags: [packs]
+      summary: Создать набор
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePackRequest' }
+      responses:
+        '201': { description: Набор создан, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     get:
       tags: [packs]
       summary: Найти наборы во всех доступных папках
@@ -746,6 +819,64 @@ paths:
                 items: { $ref: '#/components/schemas/PackListItem' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /packs/{id}:
+    get:
+      tags: [packs]
+      summary: Получить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Набор, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+    patch:
+      tags: [packs]
+      summary: Обновить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdatePackRequest' }
+      responses:
+        '200': { description: Набор обновлён, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+    delete:
+      tags: [packs]
+      summary: Удалить набор
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Набор удалён }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
+
+  /packs/{id}/move:
+    post:
+      tags: [packs]
+      summary: Переместить набор в другую папку
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovePackRequest' }
+      responses:
+        '200': { description: Набор перемещён, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден }
 
   /packs/{id}/config:
     put:
@@ -1009,7 +1140,7 @@ paths:
         '201': { description: Набор импортирован, content: { application/json: { schema: { $ref: '#/components/schemas/Pack' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '413': { description: Архив, распакованные данные или квота превышены }
+        '413': { description: 'Архив, распакованные данные или квота превышены' }
 
   /packs/{id}/publication:
     post:
@@ -1062,14 +1193,21 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
     get:
       tags: [students]
-      summary: Ученики текущего дефектолога
+      summary: Ученики текущего дефектолога (с пагинацией и сортировкой)
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 }, description: "Количество записей на странице" }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 }, description: "Смещение для пагинации" }
+        - { name: sort_by, in: query, schema: { type: string, enum: [name, age, status, last_lesson_at], default: name }, description: "Поле для сортировки" }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc }, description: "Направление сортировки" }
       responses:
         '200':
-          description: Список
+          description: Пагинированный список учеников
           content:
             application/json:
-              schema: { type: array, items: { $ref: '#/components/schemas/Student' } }
+              schema: { items: { $ref: '#/components/schemas/StudentListResponse' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /students/{id}:
     patch:

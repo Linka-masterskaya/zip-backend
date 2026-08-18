@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
+	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
@@ -14,7 +15,7 @@ import (
 
 type repository interface {
 	Create(context.Context, uuid.UUID, []byte, CreateInput) (*storedStudent, error)
-	List(context.Context, uuid.UUID) ([]storedStudent, error)
+	List(context.Context, uuid.UUID, ListInput) ([]storedStudent, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, storedUpdate) (*storedStudent, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 }
@@ -53,15 +54,33 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 	return s.decode(stored)
 }
 
-func (s *Service) List(ctx context.Context) ([]Student, error) {
+func (s *Service) List(ctx context.Context, input ListInput) (*ListResult, error) {
 	ownerID, err := owner(ctx)
 	if err != nil {
 		return nil, err
 	}
-	stored, err := s.repo.List(ctx, ownerID)
+
+	if input.Limit <= 0 {
+		input.Limit = 50
+	}
+	if input.Limit > 100 {
+		input.Limit = 100
+	}
+	if input.Offset < 0 {
+		input.Offset = 0
+	}
+	if !validSortBy(input.SortBy) {
+		return nil, apperr.ErrBadRequest.WithMessage("invalid sort_by. allowed: name, age, status, last_lesson_at")
+	}
+	if input.Order != "" && strings.ToLower(input.Order) != "asc" && strings.ToLower(input.Order) != "desc" {
+		return nil, apperr.ErrBadRequest.WithMessage("invalid order. allowed: asc, desc")
+	}
+
+	stored, total, err := s.repo.List(ctx, ownerID, input)
 	if err != nil {
 		return nil, err
 	}
+
 	result := make([]Student, 0, len(stored))
 	for index := range stored {
 		item, decodeErr := s.decode(&stored[index])
@@ -70,7 +89,7 @@ func (s *Service) List(ctx context.Context) ([]Student, error) {
 		}
 		result = append(result, *item)
 	}
-	return result, nil
+	return &ListResult{Items: result, Total: total}, nil
 }
 
 func (s *Service) Update(
@@ -82,7 +101,7 @@ func (s *Service) Update(
 	if err != nil {
 		return nil, err
 	}
-	if input.Email == nil && input.Name == nil && input.Age == nil && input.Status == nil {
+	if input.Email == nil && input.Name == nil && input.Age == nil && input.Status == nil && input.LastLessonAt == nil {
 		return nil, apperr.ErrBadRequest
 	}
 	storedInput, err := s.prepareUpdate(input)
@@ -98,7 +117,7 @@ func (s *Service) Update(
 }
 
 func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
-	result := storedUpdate{Name: input.Name, Age: input.Age, Status: input.Status}
+	result := storedUpdate{Name: input.Name, Age: input.Age, Status: input.Status, LastLessonAt: input.LastLessonAt}
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		input.Name = &value
@@ -130,6 +149,13 @@ func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 	if input.Status != nil && !validStatus(*input.Status) {
 		return storedUpdate{}, apperr.ErrBadRequest
 	}
+	if input.LastLessonAt != nil {
+		today := time.Now().Truncate(24 * time.Hour)
+		if input.LastLessonAt.After(today) {
+			return storedUpdate{}, apperr.ErrBadRequest.WithMessage("last_lesson_at cannot be in the future")
+		}
+		result.LastLessonSet = true
+	}
 	return result, nil
 }
 
@@ -148,7 +174,7 @@ func (s *Service) decode(stored *storedStudent) (*Student, error) {
 	}
 	return &Student{
 		ID: stored.ID, Email: string(email), EmailVerified: stored.EmailVerified,
-		Name: stored.Name, Age: stored.Age, Status: stored.Status,
+		Name: stored.Name, Age: stored.Age, Status: stored.Status, LastLessonAt: stored.LastLessonAt,
 		CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt,
 	}, nil
 }
@@ -207,5 +233,14 @@ func mapStudentError(err error) error {
 		return apperr.ErrConflict
 	default:
 		return err
+	}
+}
+
+func validSortBy(field string) bool {
+	switch field {
+	case "", "name", "age", "status", "last_lesson_at":
+		return true
+	default:
+		return false
 	}
 }

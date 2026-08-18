@@ -28,13 +28,13 @@ if [ -z "${1:-}" ]; then
   exit 1
 fi
 
-POSTGRES_USER=$(sed -n 's/^POSTGRES_USER=//p' .env | tail -1)
-POSTGRES_DB=$(sed -n 's/^POSTGRES_DB=//p' .env | tail -1)
-
-if [ -z "$POSTGRES_USER" ] || [ -z "$POSTGRES_DB" ]; then
+mapfile -t database_settings < <(bash scripts/read-deploy-db-settings.sh .env)
+if [ "${#database_settings[@]}" -ne 2 ]; then
   echo "POSTGRES_USER and POSTGRES_DB must be set in .env"
   exit 1
 fi
+POSTGRES_USER=${database_settings[0]}
+POSTGRES_DB=${database_settings[1]}
 
 NEW_VERSION=$1
 PREV_VERSION=$(cat .version 2>/dev/null || echo "")

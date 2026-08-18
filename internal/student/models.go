@@ -14,6 +14,7 @@ type Student struct {
 	Name          string     `json:"name"`
 	Age           *int       `json:"age"`
 	Status        string     `json:"status"`
+	LastLessonAt  *time.Time `json:"last_lesson_at"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 	DeletedAt     *time.Time `json:"-"`
@@ -26,23 +27,25 @@ type storedStudent struct {
 	Name           string
 	Age            *int
 	Status         string
+	LastLessonAt   *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	DeletedAt      *time.Time
 }
 
 type CreateInput struct {
-	Email  string
-	Name   string
-	Age    *int
-	Status string
+	Email  string `json:"email"`
+	Name   string `json:"name"`
+	Age    *int   `json:"age"`
+	Status string `json:"status"`
 }
 
 type UpdateInput struct {
-	Email  *string
-	Name   *string
-	Age    *int
-	Status *string
+	Email        *string    `json:"email"`
+	Name         *string    `json:"name"`
+	Age          *int       `json:"age"`
+	Status       *string    `json:"status"`
+	LastLessonAt *time.Time `json:"last_lesson_at"`
 }
 
 type storedUpdate struct {
@@ -51,4 +54,18 @@ type storedUpdate struct {
 	Name           *string
 	Age            *int
 	Status         *string
+	LastLessonAt   *time.Time
+	LastLessonSet  bool
+}
+
+type ListInput struct {
+	SortBy string
+	Order  string
+	Limit  int
+	Offset int
+}
+
+type ListResult struct {
+	Items []Student `json:"items"`
+	Total int       `json:"total"`
 }

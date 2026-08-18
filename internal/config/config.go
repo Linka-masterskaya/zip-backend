@@ -2,7 +2,6 @@
 package config
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
@@ -69,6 +68,7 @@ type AppConfig struct {
 	FrontendURL    string   `mapstructure:"frontend_url"`
 	MigrationsDir  string   `mapstructure:"migrations_dir"`
 	TrustedProxies []string `mapstructure:"trusted_proxies"`
+	DocsEnabled    bool     `mapstructure:"docs_enabled"`
 }
 
 // DBConfig contains database connection settings.
@@ -197,13 +197,14 @@ type FeatureFlagsConfig struct {
 
 // SMTPConfig contains Email settings.
 type SMTPConfig struct {
-	Host     string        `mapstructure:"host"`
-	Port     int           `mapstructure:"port"`
-	Username string        `mapstructure:"username"`
-	Password string        `mapstructure:"password"`
-	From     string        `mapstructure:"from_email"`
-	TLS      bool          `mapstructure:"tls"`
-	Timeout  time.Duration `mapstructure:"timeout"`
+	Host             string        `mapstructure:"host"`
+	Port             int           `mapstructure:"port"`
+	Username         string        `mapstructure:"username"`
+	Password         string        `mapstructure:"password"`
+	From             string        `mapstructure:"from_email"`
+	TLS              bool          `mapstructure:"tls"`
+	Timeout          time.Duration `mapstructure:"timeout"`
+	RequireFromMatch bool          `mapstructure:"require_from_match"`
 }
 
 // AuthConfig contains authentication and security settings.
@@ -285,8 +286,14 @@ func LoadMigration(path string) (*MigrationConfig, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal migration config: %w", err)
 	}
+	cfg.App.Env = strings.TrimSpace(cfg.App.Env)
 	if cfg.DB.URL == "" {
 		return nil, fmt.Errorf("validate migration config: db.url is required")
+	}
+	if isProductionEnvironment(cfg.App.Env) {
+		if err := validatePostgresProductionURL(cfg.DB.URL); err != nil {
+			return nil, fmt.Errorf("validate migration config: %w", err)
+		}
 	}
 	return &cfg, nil
 }
@@ -317,6 +324,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.frontend_url", "http://localhost:3000")
 	v.SetDefault("app.migrations_dir", "./migrations")
 	v.SetDefault("app.trusted_proxies", []string{})
+	v.SetDefault("app.docs_enabled", false)
 
 	// Server defaults
 	v.SetDefault("server.metrics_port", "9090")
@@ -373,8 +381,8 @@ func setDefaults(v *viper.Viper) {
 
 	// MinIO defaults
 	v.SetDefault("minio.endpoint", "localhost:9000")
-	v.SetDefault("minio.access_key", "minioadmin")
-	v.SetDefault("minio.secret_key", "minioadmin")
+	v.SetDefault("minio.access_key", "")
+	v.SetDefault("minio.secret_key", "")
 	v.SetDefault("minio.bucket", "linka-media")
 	v.SetDefault("minio.use_ssl", false)
 
@@ -404,11 +412,12 @@ func setDefaults(v *viper.Viper) {
 	// SMTP defaults
 	v.SetDefault("smtp.host", "smtp.yandex.ru")
 	v.SetDefault("smtp.port", 587)
-	v.SetDefault("smtp.username", "noreply@yandex.com")
-	v.SetDefault("smtp.password", "your-app-password")
-	v.SetDefault("smtp.from_email", "noreply@yandex.com")
+	v.SetDefault("smtp.username", "")
+	v.SetDefault("smtp.password", "")
+	v.SetDefault("smtp.from_email", "")
 	v.SetDefault("smtp.tls", true)
 	v.SetDefault("smtp.timeout", "10s")
+	v.SetDefault("smtp.require_from_match", false)
 
 	// Crypto defaults
 	v.SetDefault("crypto.aes_key", "")
@@ -468,8 +477,16 @@ func setDefaults(v *viper.Viper) {
 // validateConfig validates required configuration fields.
 func validateConfig(cfg *Config) error {
 	// App validation
+	cfg.App.Env = strings.TrimSpace(cfg.App.Env)
 	if err := validateAppConfig(&cfg.App); err != nil {
 		return err
+	}
+
+	// Production validation
+	if isProductionEnvironment(cfg.App.Env) {
+		if err := validateProductionConfig(cfg); err != nil {
+			return err
+		}
 	}
 
 	// DB validation
@@ -539,22 +556,13 @@ func validateJWTConfig(cfg *JWTConfig) error {
 }
 
 func validateCryptoCongig(cfg *CryptoConfig) error {
-	aes, err := base64.StdEncoding.DecodeString(cfg.AESKeyRaw)
-	if err != nil {
-		return fmt.Errorf("crypto.aes_key: invalid base64: %w", err)
+	if len(cfg.AESKey) == 0 || len(cfg.HMACKey) == 0 {
+		aesKey, hmacKey, err := decodeConfiguredCryptoKeys(cfg.AESKeyRaw, cfg.HMACKeyRaw)
+		if err != nil {
+			return err
+		}
+		cfg.AESKey = aesKey
+		cfg.HMACKey = hmacKey
 	}
-	if len(aes) != 32 {
-		return fmt.Errorf("crypto.aes_key: must be 32 bytes, got %d", len(aes))
-	}
-	cfg.AESKey = aes
-
-	hmacKey, err := base64.StdEncoding.DecodeString(cfg.HMACKeyRaw)
-	if err != nil {
-		return fmt.Errorf("crypto.hmac_key: invalid base64: %w", err)
-	}
-	if len(hmacKey) < 32 {
-		return fmt.Errorf("crypto.hmac_key: must be at least 32 bytes, got %d", len(hmacKey))
-	}
-	cfg.HMACKey = hmacKey
 	return nil
 }

@@ -4,6 +4,7 @@ app:
   public_url: "http://localhost:8080"
   frontend_url: "http://localhost:3000"
   migrations_dir: "./migrations"
+  docs_enabled: true
   trusted_proxies:
     - "127.0.0.1"
     - "10.0.0.0/8"
@@ -59,20 +60,23 @@ nats:
 
 minio:
   endpoint: "localhost:9000"
-  access_key: "minioadmin"
-  secret_key: "minioadmin"
+  # DEV ONLY: documented fixture credentials; production validation rejects them.
+  access_key: "linka-dev-minio"
+  secret_key: "linka-dev-minio-secret"
   bucket: "linka-media"
   use_ssl: false
   timeout: "15s"
 
 jwt:
-  secret: "92bd02979f8be5d4d05a81619d0d69499280093cdc1cdb1f300ac09177c53665"
+  # DEV ONLY: production validation rejects this fixture.
+  secret: "dev-only-jwt-secret-do-not-use-in-production-2026"
   access_ttl: "15m"
   refresh_ttl: "720h"
 
 crypto:
-  aes_key: "6dlGlnc2GSsJD1i46iimfgTPUzv9J10zbPIS9Um8vN8="
-  hmac_key: "LwhuzYj/PvQFpfun4y+XylcRdhIr8fOcGPFSyfWzlDU="
+  # DEV ONLY: base64-encoded 32-byte fixtures; never use for real data.
+  aes_key: "ZGV2LW9ubHktYWVzLWtleS1ub3QtZm9yLXByb2QhISE="
+  hmac_key: "ZGV2LW9ubHktaG1hYy1rZXktbm90LWZvci1wcm9kISE="
 
 yandex:
   client_id: ""
@@ -98,13 +102,15 @@ feature_flags:
   local_bank: false
 
 smtp:
-  host: "smtp.yandex.ru"
-  port: 587
-  username: "noreply@yandex.com"
-  password: "your-app-password"
-  from_email: "noreply@yandex.com"
-  tls: true
+  # Local Mailpit only; no external credentials are tracked.
+  host: "mailpit"
+  port: 1025
+  username: ""
+  password: ""
+  from_email: "linka-dev@example.test"
+  tls: false
   timeout: "10s"
+  require_from_match: false
 
 auth:
   access_token_ttl: 15m

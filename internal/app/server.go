@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 
+	apidocs "github.com/Linka-masterskaya/zip-backend/docs/api"
+
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
@@ -50,6 +52,7 @@ func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redi
 	httpapi.RegisterPictureBankRoutes(mux, authMW, rl.Pictures, mods.pictures)
 	httpapi.RegisterAuthRoutes(mux, authMW, rl, redis, mods.auth)
 	httpapi.RegisterProfileRoutes(mux, authMW, rl, mods.profile)
+	registerDocsRoutes(mux, cfg.App.DocsEnabled)
 
 	handler := middleware.Chain(
 		mux,
@@ -66,6 +69,12 @@ func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redi
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
+	}
+}
+
+func registerDocsRoutes(mux *http.ServeMux, enabled bool) {
+	if enabled {
+		apidocs.RegisterRoutes(mux)
 	}
 }
 
