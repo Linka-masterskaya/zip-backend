@@ -68,7 +68,7 @@ func seedUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	id, err := uuid.NewV7()
 	require.NoError(t, err)
 	_, err = pool.Exec(context.Background(),
-		`INSERT INTO users (id, email_verified) VALUES ($1, false)`, id)
+		`INSERT INTO users (id, email_verified, display_name) VALUES ($1, false, 'Test User')`, id)
 	require.NoError(t, err)
 	return id
 }
@@ -552,8 +552,8 @@ func TestDeleteStaleUnverifiedUsersKeepsVerifiedRecentAndOwners(t *testing.T) {
 		require.NoError(t, err)
 		userID := uuid.New()
 		_, err = testPool.Exec(ctx, `
-			INSERT INTO users (id, org_id, email_verified, created_at)
-			VALUES ($1, $2, $3, now() - $4::interval)`,
+			INSERT INTO users (id, org_id, email_verified, display_name, created_at)
+			VALUES ($1, $2, $3, 'Test User', now() - $4::interval)`,
 			userID, orgID, verified, age.String())
 		require.NoError(t, err)
 		return userID
