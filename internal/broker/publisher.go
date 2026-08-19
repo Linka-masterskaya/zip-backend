@@ -47,13 +47,13 @@ func (p *Publisher) PublishTTSJob(ctx context.Context, job TTSJob) error {
 		return fmt.Errorf("PublishTTSJob: marshal: %w", err)
 	}
 
-	ack, err := p.js.Publish(ctx, SubjectTTSJobs, payload)
+	ack, err := p.js.Publish(ctx, SubjectTTSJobs, payload, jetstream.WithMsgID(job.JobId))
 	if err != nil {
 		return fmt.Errorf("PublishTTSJob: publish: %w", err)
 	}
 
 	if ack.Duplicate {
-		slog.Warn("duplicate TTS job detected", "pack_id", job.PackID, "card_id", job.CardID)
+		slog.Warn("duplicate TTS job detected", "job_id", job.JobId)
 	}
 
 	return nil

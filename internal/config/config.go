@@ -30,6 +30,8 @@ type Config struct {
 	Crypto       CryptoConfig       `mapstructure:"crypto"`
 	RateLimit    RateLimitConfig    `mapstructure:"rate_limit"`
 	Server       ServerConfig       `mapstructure:"server"`
+	TTS          TTSConfig          `mapstructure:"ttsapi"`
+	Cron         CronConfig         `mapstructure:"cron"`
 }
 
 // MigrationConfig contains only the settings required by the migration binary.
@@ -248,6 +250,36 @@ type CORSConfig struct {
 	MaxAge           int      `mapstructure:"max_age"`
 }
 
+// TTSConfig contains TTS settings.
+type TTSConfig struct {
+	ServiceURL    string        `mapstructure:"service_url"`
+	Timeout       time.Duration `mapstructure:"timeout"`
+	MaxConcurrent int           `mapstructure:"max_concurrent"`
+	RateLimit     int           `mapstructure:"rate_limit"`
+	MaxTextLen    int           `mapstructure:"max_text_len"`
+	MaxBodySize   int64         `mapstructure:"max_body_size"`
+	MimeType      string        `mapstructure:"mime_type"`
+}
+
+// CronConfig contains scheduled task settings.
+type CronConfig struct {
+	VoiceRefresh VoiceRefreshCron `mapstructure:"voice_refresh"`
+	TTSCleanup   TTSCleanupCron   `mapstructure:"tts_cleanup"`
+}
+
+// VoiceRefreshCron contains voice cache refresh settings.
+type VoiceRefreshCron struct {
+	Interval time.Duration `mapstructure:"interval"`
+}
+
+// TTSCleanupCron contains TTS cleanup job settings.
+type TTSCleanupCron struct {
+	Interval    time.Duration `mapstructure:"interval"`
+	CleanPeriod time.Duration `mapstructure:"clean_period"`
+	JobsTTL     time.Duration `mapstructure:"jobs_ttl"`
+	Limit       int           `mapstructure:"limit"`
+}
+
 // Load reads application settings from a configuration file and applies
 // environment overrides. Feature flags are deliberately owned by the file.
 func Load(path string) (*Config, error) {
@@ -447,6 +479,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("profile.email_change_rate_limit", 3)
 	v.SetDefault("profile.email_confirm_rate_limit", 10)
 
+	// TTSApi defaults
+	v.SetDefault("ttsapi.timeout", "30s")
+	v.SetDefault("ttsapi.max_text_len", 5000)
+	v.SetDefault("ttsapi.max_body_size", 65536)
+	v.SetDefault("ttsapi.mime_type", "audio/mpeg")
+	v.SetDefault("ttsapi.max_concurrent", 10)
+	v.SetDefault("ttsapi.rate_limit", 120)
+
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})
 	v.SetDefault("cors.allow_methods", []string{
@@ -476,6 +516,13 @@ func setDefaults(v *viper.Viper) {
 	})
 	v.SetDefault("cors.allow_credentials", true)
 	v.SetDefault("cors.max_age", 86400)
+
+	// Cron defaults
+	v.SetDefault("cron.voice_refresh.interval", "1h")
+	v.SetDefault("cron.tts_cleanup.interval", "6h")
+	v.SetDefault("cron.tts_cleanup.clean_period", "2160h") // 90 days
+	v.SetDefault("cron.tts_cleanup.jobs_ttl", "72h")       // 3 days
+	v.SetDefault("cron.tts_cleanup.limit", 100)
 }
 
 // validateConfig validates required configuration fields.
@@ -516,6 +563,17 @@ func validateConfig(cfg *Config) error {
 	// Crypto validation
 	if err := validateCryptoCongig(&cfg.Crypto); err != nil {
 		return err
+	}
+
+	// TTSapi validation
+	if cfg.TTS.ServiceURL == "" {
+		return fmt.Errorf("ttsapi.service_url is required")
+	}
+	if cfg.TTS.RateLimit <= 0 {
+		return fmt.Errorf("ttsapi.rate_limit must be > 0")
+	}
+	if cfg.TTS.MaxConcurrent <= 0 {
+		return fmt.Errorf("ttsapi.max_concurrent must be > 0")
 	}
 	return nil
 }
@@ -568,5 +626,6 @@ func validateCryptoCongig(cfg *CryptoConfig) error {
 		cfg.AESKey = aesKey
 		cfg.HMACKey = hmacKey
 	}
+
 	return nil
 }

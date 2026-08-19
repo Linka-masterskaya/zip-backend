@@ -24,10 +24,13 @@ var (
 
 // App owns the assembled servers and everything they must release on shutdown.
 type App struct {
-	cfg        *config.Config
-	closer     *Closer
-	apiSrv     *http.Server
-	metricsSrv *http.Server
+	cfg             *config.Config
+	closer          *Closer
+	apiSrv          *http.Server
+	metricsSrv      *http.Server
+	ttsRun          func(context.Context) error
+	voiceRefreshRun func(context.Context)
+	ttsCleanupRun   func(context.Context)
 }
 
 // Bootstrap loads configuration, creates infrastructure and wires the servers.
@@ -88,6 +91,15 @@ func Bootstrap(cfgPath string) (*App, error) {
 		closer:     closer,
 		apiSrv:     newAPIServer(cfg, mods, rl, in.redis),
 		metricsSrv: newMetricsServer(cfg, mods.checker),
+		ttsRun: func(ctx context.Context) error {
+			return mods.ttsConsumer.ConsumeTTSJobs(ctx, mods.ttsWorker.Handle)
+		},
+		voiceRefreshRun: func(ctx context.Context) {
+			mods.voiceRefresher.Run(ctx, cfg.Cron.VoiceRefresh.Interval)
+		},
+		ttsCleanupRun: func(ctx context.Context) {
+			mods.ttsCleaner.Run(ctx, cfg.Cron.TTSCleanup.Interval)
+		},
 	}, nil
 }
 
@@ -115,6 +127,9 @@ func (a *App) Run(ctx context.Context) error {
 		<-gctx.Done()
 		return a.shutdown()
 	})
+	g.Go(func() error { return a.ttsRun(gctx) })
+	g.Go(func() error { a.voiceRefreshRun(gctx); return nil })
+	g.Go(func() error { a.ttsCleanupRun(gctx); return nil })
 
 	return g.Wait()
 }
