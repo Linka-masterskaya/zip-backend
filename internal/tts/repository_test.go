@@ -27,7 +27,7 @@ func TestCreateMediaFileIsolatesOrgs(t *testing.T) {
 		INSERT INTO organizations (id, name) VALUES ($1, 'org A'), ($2, 'org B')`, orgA, orgB)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `
-		INSERT INTO users (id, org_id) VALUES ($1, $3), ($2, $4)`, userA, userB, orgA, orgB)
+    INSERT INTO users (id, org_id, display_name) VALUES ($1, $3, 'User A'), ($2, $4, 'User B')`, userA, userB, orgA, orgB)
 	require.NoError(t, err)
 
 	minioKey := "tts/shared-key-abc"
