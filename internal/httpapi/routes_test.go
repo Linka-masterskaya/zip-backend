@@ -149,6 +149,7 @@ func TestRegisterProfileRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"GET /api/v1/profile/me",
 		"PATCH /api/v1/profile/me",
+		"DELETE /api/v1/profile/me",
 		"PUT /api/v1/profile/me/avatar",
 		"DELETE /api/v1/profile/me/avatar",
 		"POST /api/v1/profile/me/email",

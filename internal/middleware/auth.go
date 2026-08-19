@@ -2,6 +2,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,15 +22,45 @@ const (
 
 type AuthMW struct {
 	jwtSecret []byte
+	sessions  SessionVersionStore
+	users     ActiveUserStore
 }
 
 type AccessClaims struct {
-	Role string `json:"role"`
+	Role           string `json:"role"`
+	SessionVersion int64  `json:"sess_ver"`
 	jwt.RegisteredClaims
 }
 
-func NewAuthMW(secret []byte) *AuthMW {
-	return &AuthMW{jwtSecret: secret}
+// SessionVersionStore provides the current user session generation. Bulk
+// session revocation increments this value, invalidating both refresh and
+// access tokens issued under an older generation.
+type SessionVersionStore interface {
+	GetUserSessionVersion(ctx context.Context, userID string) (int64, error)
+}
+
+// ActiveUserStore checks the authoritative PostgreSQL account state. It keeps
+// soft-delete effective even if ephemeral session-revocation state is lost.
+type ActiveUserStore interface {
+	IsUserActive(ctx context.Context, userID uuid.UUID) (bool, error)
+}
+
+// WithActiveUserStore configures the authoritative account-state check used in
+// production. It returns the receiver to keep server wiring concise.
+func (m *AuthMW) WithActiveUserStore(users ActiveUserStore) *AuthMW {
+	m.users = users
+	return m
+}
+
+// NewAuthMW creates JWT authentication middleware. The optional session store
+// keeps the constructor backwards-compatible for isolated tests while
+// production supplies Redis and therefore validates access-token revocation.
+func NewAuthMW(secret []byte, sessions ...SessionVersionStore) *AuthMW {
+	mw := &AuthMW{jwtSecret: secret}
+	if len(sessions) > 0 {
+		mw.sessions = sessions[0]
+	}
+	return mw
 }
 
 func (m *AuthMW) AuthMiddleware(next AppHandler) AppHandler {
@@ -77,6 +108,30 @@ func (m *AuthMW) AuthMiddleware(next AppHandler) AppHandler {
 		userID, err := uuid.Parse(claims.Subject)
 		if err != nil {
 			return apperr.ErrJWTTokenInvalid.WithError(fmt.Errorf("auth parse sub: %w", err))
+		}
+
+		if m.users != nil {
+			active, err := m.users.IsUserActive(r.Context(), userID)
+			if err != nil {
+				return apperr.ErrInternal.WithError(fmt.Errorf("auth read account state: %w", err))
+			}
+			if !active {
+				return apperr.ErrJWTTokenInvalid.WithError(fmt.Errorf("auth account is deleted or unavailable"))
+			}
+		}
+
+		if m.sessions != nil {
+			currentVersion, err := m.sessions.GetUserSessionVersion(r.Context(), userID.String())
+			if err != nil {
+				return apperr.ErrInternal.WithError(fmt.Errorf("auth read session version: %w", err))
+			}
+			if claims.SessionVersion != currentVersion {
+				return apperr.ErrJWTTokenInvalid.WithError(fmt.Errorf(
+					"auth session revoked: token version %d, current version %d",
+					claims.SessionVersion,
+					currentVersion,
+				))
+			}
 		}
 
 		ctx := authctx.SetUserIDToCtx(r.Context(), userID)

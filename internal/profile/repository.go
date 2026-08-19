@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -44,14 +45,16 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 
 // UserAvatar represents user avatar data from database.
 type UserAvatar struct {
-	OrgID     sql.NullString
-	AvatarKey sql.NullString
+	OrgID      sql.NullString
+	AvatarKey  sql.NullString
+	AvatarSize sql.NullInt64
 }
 
 // AvatarState represents current avatar state including storage usage.
 type AvatarState struct {
 	OrgID      sql.NullString
 	AvatarKey  string
+	AvatarSize sql.NullInt64
 	UsedBytes  int64
 	QuotaBytes int64
 	HasOrg     bool
@@ -62,6 +65,17 @@ type AvatarChange struct {
 	OldKey  string
 	OldSize int64
 	OrgID   sql.NullString
+}
+
+// AvatarCleanupJob is a durable outbox record for deleting a detached avatar
+// object and reconciling organization storage usage.
+type AvatarCleanupJob struct {
+	ID            int64
+	ObjectKey     string
+	OrgID         sql.NullString
+	ObjectSize    sql.NullInt64
+	QuotaAdjusted bool
+	Attempts      int
 }
 
 // GetUserProfile retrieves user data by ID, joining the users and auth_cred tables.
@@ -113,11 +127,11 @@ func (r *Repository) AvatarState(ctx context.Context, userID string) (AvatarStat
 	var usedBytes sql.NullInt64
 	var quotaBytes sql.NullInt64
 	err := r.db.QueryRow(ctx, `
-		SELECT u.org_id::text, u.avatar_key, o.storage_used_bytes, o.storage_quota_bytes
+		SELECT u.org_id::text, u.avatar_key, u.avatar_size_bytes, o.storage_used_bytes, o.storage_quota_bytes
 		FROM users u
 		LEFT JOIN organizations o ON o.id = u.org_id
-		WHERE u.id = $1
-	`, userID).Scan(&state.OrgID, &avatarKey, &usedBytes, &quotaBytes)
+		WHERE u.id = $1 AND u.deleted_at IS NULL
+	`, userID).Scan(&state.OrgID, &avatarKey, &state.AvatarSize, &usedBytes, &quotaBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AvatarState{}, ErrUserNotFound
 	}
@@ -159,7 +173,7 @@ func (r *Repository) RestoreAvatarIfEmpty(ctx context.Context, userID string, ol
 	if current.AvatarKey.Valid {
 		return false, nil
 	}
-	if err = updateUserAvatar(ctx, tx, userID, &oldKey); err != nil {
+	if err = updateUserAvatar(ctx, tx, userID, &oldKey, &oldSize); err != nil {
 		return false, err
 	}
 	if current.OrgID.Valid && oldSize != 0 {
@@ -176,7 +190,7 @@ func (r *Repository) RestoreAvatarIfEmpty(ctx context.Context, userID string, ol
 // CurrentAvatarKey returns current avatar key for a user.
 func (r *Repository) CurrentAvatarKey(ctx context.Context, userID string) (string, error) {
 	var avatarKey sql.NullString
-	err := r.db.QueryRow(ctx, `SELECT avatar_key FROM users WHERE id = $1`, userID).Scan(&avatarKey)
+	err := r.db.QueryRow(ctx, `SELECT avatar_key FROM users WHERE id = $1 AND deleted_at IS NULL`, userID).Scan(&avatarKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrUserNotFound
 	}
@@ -184,6 +198,212 @@ func (r *Repository) CurrentAvatarKey(ctx context.Context, userID string) (strin
 		return "", fmt.Errorf("read current avatar key: %w", err)
 	}
 	return nullStringValue(avatarKey), nil
+}
+
+// SoftDeleteUser marks a user as deleted, detaches the avatar, and invalidates
+// all outstanding user verification/reset tokens in one transaction. Object
+// storage cleanup is represented by a durable outbox row created in the same
+// transaction, then executed by the service/worker after this state commits.
+func (r *Repository) SoftDeleteUser(ctx context.Context, userID string) (AvatarChange, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return AvatarChange{}, fmt.Errorf("begin soft-delete user tx: %w", err)
+	}
+	defer rollbackAvatarTx(ctx, tx, "soft-delete user")
+
+	current, err := lockUserAvatar(ctx, tx, userID)
+	if err != nil {
+		return AvatarChange{}, err
+	}
+	oldKey := nullStringValue(current.AvatarKey)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE users
+		SET deleted_at = now(), avatar_key = NULL, avatar_size_bytes = NULL, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, userID)
+	if err != nil {
+		return AvatarChange{}, fmt.Errorf("soft-delete user: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return AvatarChange{}, ErrUserNotFound
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE verify_tokens
+		SET used_at = now()
+		WHERE user_id = $1
+		  AND used_at IS NULL
+	`, userID)
+	if err != nil {
+		return AvatarChange{}, fmt.Errorf("invalidate user tokens during soft-delete: %w", err)
+	}
+
+	if oldKey != "" {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO avatar_cleanup_jobs (object_key, org_id, object_size_bytes)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (object_key) DO NOTHING
+		`, oldKey, nullableUUIDText(current.OrgID), nullableInt64Value(current.AvatarSize))
+		if err != nil {
+			return AvatarChange{}, fmt.Errorf("enqueue avatar cleanup during soft-delete: %w", err)
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return AvatarChange{}, fmt.Errorf("commit soft-delete user: %w", err)
+	}
+	return AvatarChange{OldKey: oldKey, OrgID: current.OrgID}, nil
+}
+
+// ClaimAvatarCleanupJob claims one due cleanup job. When objectKey is empty,
+// the oldest due job is claimed. The lease prevents another application
+// instance from processing the same job until the retry window expires.
+func (r *Repository) ClaimAvatarCleanupJob(ctx context.Context, objectKey string) (*AvatarCleanupJob, error) {
+	var job AvatarCleanupJob
+	var orgID sql.NullString
+	var objectSize sql.NullInt64
+	err := r.db.QueryRow(ctx, `
+		WITH candidate AS (
+			SELECT id
+			FROM avatar_cleanup_jobs
+			WHERE completed_at IS NULL
+			  AND next_attempt_at <= now()
+			  AND ($1 = '' OR object_key = $1)
+			ORDER BY id
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		)
+		UPDATE avatar_cleanup_jobs j
+		SET attempts = j.attempts + 1,
+			next_attempt_at = now() + interval '30 seconds'
+		FROM candidate c
+		WHERE j.id = c.id
+		RETURNING j.id, j.object_key, j.org_id::text, j.object_size_bytes,
+		          j.quota_adjusted, j.attempts
+	`, objectKey).Scan(
+		&job.ID,
+		&job.ObjectKey,
+		&orgID,
+		&objectSize,
+		&job.QuotaAdjusted,
+		&job.Attempts,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim avatar cleanup job: %w", err)
+	}
+	job.OrgID = orgID
+	job.ObjectSize = objectSize
+	return &job, nil
+}
+
+// SetAvatarCleanupSize persists object size before deletion so a crash after
+// RemoveObject cannot make quota reconciliation impossible.
+func (r *Repository) SetAvatarCleanupSize(ctx context.Context, jobID int64, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("avatar cleanup size must be non-negative")
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE avatar_cleanup_jobs
+		SET object_size_bytes = $2, last_error = NULL
+		WHERE id = $1 AND completed_at IS NULL
+	`, jobID, size)
+	if err != nil {
+		return fmt.Errorf("persist avatar cleanup size: %w", err)
+	}
+	return nil
+}
+
+// AdjustAvatarCleanupQuota decrements organization usage exactly once for a
+// cleanup job. The flag and organization update are committed atomically.
+func (r *Repository) AdjustAvatarCleanupQuota(ctx context.Context, jobID int64, size int64) error {
+	if size <= 0 {
+		_, err := r.db.Exec(ctx, `
+			UPDATE avatar_cleanup_jobs
+			SET quota_adjusted = TRUE, last_error = NULL
+			WHERE id = $1 AND completed_at IS NULL
+		`, jobID)
+		if err != nil {
+			return fmt.Errorf("mark zero-size avatar cleanup quota adjusted: %w", err)
+		}
+		return nil
+	}
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin avatar cleanup quota tx: %w", err)
+	}
+	defer rollbackAvatarTx(ctx, tx, "avatar cleanup quota")
+
+	var orgID sql.NullString
+	var adjusted bool
+	err = tx.QueryRow(ctx, `
+		SELECT org_id::text, quota_adjusted
+		FROM avatar_cleanup_jobs
+		WHERE id = $1 AND completed_at IS NULL
+		FOR UPDATE
+	`, jobID).Scan(&orgID, &adjusted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock avatar cleanup quota job: %w", err)
+	}
+	if adjusted {
+		return tx.Commit(ctx)
+	}
+
+	if orgID.Valid {
+		if err = updateOrgStorageUsage(ctx, tx, orgID.String, -size, false); err != nil {
+			return fmt.Errorf("decrement avatar cleanup organization usage: %w", err)
+		}
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE avatar_cleanup_jobs
+		SET quota_adjusted = TRUE, last_error = NULL
+		WHERE id = $1
+	`, jobID); err != nil {
+		return fmt.Errorf("mark avatar cleanup quota adjusted: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit avatar cleanup quota tx: %w", err)
+	}
+	return nil
+}
+
+// CompleteAvatarCleanup marks a cleanup job done after the object has been
+// removed (or was already absent).
+func (r *Repository) CompleteAvatarCleanup(ctx context.Context, jobID int64) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE avatar_cleanup_jobs
+		SET completed_at = now(), last_error = NULL
+		WHERE id = $1
+	`, jobID)
+	if err != nil {
+		return fmt.Errorf("complete avatar cleanup job: %w", err)
+	}
+	return nil
+}
+
+// RetryAvatarCleanup releases a failed job for bounded exponential-ish retry.
+func (r *Repository) RetryAvatarCleanup(ctx context.Context, jobID int64, cause error) error {
+	message := "cleanup failed"
+	if cause != nil {
+		message = cause.Error()
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE avatar_cleanup_jobs
+		SET last_error = $2,
+			next_attempt_at = now() + make_interval(secs => LEAST(300, GREATEST(5, attempts * 5)))
+		WHERE id = $1 AND completed_at IS NULL
+	`, jobID, message)
+	if err != nil {
+		return fmt.Errorf("schedule avatar cleanup retry: %w", err)
+	}
+	return nil
 }
 
 // AddOrgStorageUsage adds delta to organization storage usage.
@@ -217,7 +437,12 @@ func (r *Repository) changeAvatar(ctx context.Context, userID, expectedOldKey st
 	if nullStringValue(current.AvatarKey) != expectedOldKey {
 		return AvatarChange{}, ErrAvatarChanged
 	}
-	if err = updateUserAvatar(ctx, tx, userID, newKey); err != nil {
+	var newSize *int64
+	if newKey != nil {
+		size := oldSize + storageDelta
+		newSize = &size
+	}
+	if err = updateUserAvatar(ctx, tx, userID, newKey, newSize); err != nil {
 		return AvatarChange{}, err
 	}
 	if current.OrgID.Valid && storageDelta != 0 {
@@ -242,8 +467,8 @@ func rollbackAvatarTx(ctx context.Context, tx pgx.Tx, operation string) {
 func lockUserAvatar(ctx context.Context, tx pgx.Tx, userID string) (UserAvatar, error) {
 	var avatar UserAvatar
 	err := tx.QueryRow(ctx, `
-		SELECT org_id::text, avatar_key FROM users WHERE id = $1 FOR UPDATE
-	`, userID).Scan(&avatar.OrgID, &avatar.AvatarKey)
+		SELECT org_id::text, avatar_key, avatar_size_bytes FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+	`, userID).Scan(&avatar.OrgID, &avatar.AvatarKey, &avatar.AvatarSize)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserAvatar{}, ErrUserNotFound
 	}
@@ -254,12 +479,22 @@ func lockUserAvatar(ctx context.Context, tx pgx.Tx, userID string) (UserAvatar, 
 }
 
 // updateUserAvatar updates user's avatar key.
-func updateUserAvatar(ctx context.Context, tx pgx.Tx, userID string, newKey *string) error {
-	var avatarKey any
+func updateUserAvatar(ctx context.Context, tx pgx.Tx, userID string, newKey *string, newSize *int64) error {
+	var avatarKey, avatarSize any
 	if newKey != nil {
 		avatarKey = *newKey
 	}
-	_, err := tx.Exec(ctx, `UPDATE users SET avatar_key = $2, updated_at = now() WHERE id = $1`, userID, avatarKey)
+	if newSize != nil {
+		if *newSize < 0 {
+			return fmt.Errorf("avatar size must be non-negative")
+		}
+		avatarSize = *newSize
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE users
+		SET avatar_key = $2, avatar_size_bytes = $3, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, userID, avatarKey, avatarSize)
 	if err != nil {
 		return fmt.Errorf("update user avatar key: %w", err)
 	}
@@ -284,6 +519,21 @@ func updateOrgStorageUsage(ctx context.Context, tx pgx.Tx, orgID string, delta i
 }
 
 // nullStringValue returns string from sql.NullString or empty string.
+
+func nullableUUIDText(value sql.NullString) any {
+	if !value.Valid || value.String == "" {
+		return nil
+	}
+	return value.String
+}
+
+func nullableInt64Value(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
+}
+
 func nullStringValue(value sql.NullString) string {
 	result := ""
 	if value.Valid {
@@ -336,7 +586,9 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*User, error) 
 	return &user, nil
 }
 
-// FindByEmailHash retrieves a user by email hash.
+// FindByEmailHash retrieves the owner of an email hash, including soft-deleted
+// users. Email identity remains reserved after soft-delete, so availability
+// checks must not treat a deleted account's address as free.
 func (r *Repository) FindByEmailHash(ctx context.Context, emailHash []byte) (*User, error) {
 	var user User
 	var displayName sql.NullString
@@ -346,7 +598,7 @@ func (r *Repository) FindByEmailHash(ctx context.Context, emailHash []byte) (*Us
 		SELECT u.id, ac.email_encrypted, u.email_verified, u.display_name, u.created_at, u.updated_at
 		FROM users u
 		JOIN auth_cred ac ON ac.user_id = u.id
-		WHERE ac.email_hash = $1 AND u.deleted_at IS NULL
+		WHERE ac.email_hash = $1
 	`, emailHash).Scan(
 		&user.ID, &emailEncrypted,
 		&user.EmailVerified, &displayName,
@@ -371,14 +623,41 @@ func (r *Repository) FindByEmailHash(ctx context.Context, emailHash []byte) (*Us
 
 // ============ Token Methods ============
 
-// CreateToken creates a new verification token.
+// CreateToken creates a new verification token. Token creation takes a
+// shared row lock on the active user so account soft-delete cannot commit
+// between the active-user check and token insertion. SoftDeleteUser takes
+// FOR UPDATE on the same row, giving both operations a single serialization
+// point.
 func (r *Repository) CreateToken(ctx context.Context, token *Token) error {
-	_, err := r.db.Exec(ctx, `
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin create token tx: %w", err)
+	}
+	defer rollbackAvatarTx(ctx, tx, "create token")
+
+	var active int
+	err = tx.QueryRow(ctx, `
+		SELECT 1
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR KEY SHARE
+	`, token.UserID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock active user for token creation: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO verify_tokens (id, user_id, purpose, token_hash, payload, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, token.ID, token.UserID, string(token.Type), token.TokenHash, token.Payload, token.ExpiresAt, token.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("create token: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit create token tx: %w", err)
 	}
 	return nil
 }
@@ -470,6 +749,7 @@ func (r *Repository) FindByIDWithTx(ctx context.Context, tx pgx.Tx, id uuid.UUID
 		FROM users u
 		LEFT JOIN auth_cred ac ON ac.user_id = u.id
 		WHERE u.id = $1 AND u.deleted_at IS NULL
+		FOR UPDATE OF u
 	`, id).Scan(
 		&user.ID, &emailEncrypted,
 		&user.EmailVerified, &displayName,
@@ -492,7 +772,8 @@ func (r *Repository) FindByIDWithTx(ctx context.Context, tx pgx.Tx, id uuid.UUID
 	return &user, nil
 }
 
-// FindByEmailHashWithTx retrieves a user by email hash within a transaction.
+// FindByEmailHashWithTx retrieves the owner of an email hash within a
+// transaction, including soft-deleted users. See FindByEmailHash.
 func (r *Repository) FindByEmailHashWithTx(ctx context.Context, tx pgx.Tx, emailHash []byte) (*User, error) {
 	var user User
 	var displayName sql.NullString
@@ -502,7 +783,7 @@ func (r *Repository) FindByEmailHashWithTx(ctx context.Context, tx pgx.Tx, email
 		SELECT u.id, ac.email_encrypted, u.email_verified, u.display_name, u.created_at, u.updated_at
 		FROM users u
 		JOIN auth_cred ac ON ac.user_id = u.id
-		WHERE ac.email_hash = $1 AND u.deleted_at IS NULL
+		WHERE ac.email_hash = $1
 	`, emailHash).Scan(
 		&user.ID, &emailEncrypted,
 		&user.EmailVerified, &displayName,
@@ -525,18 +806,31 @@ func (r *Repository) FindByEmailHashWithTx(ctx context.Context, tx pgx.Tx, email
 	return &user, nil
 }
 
+func isEmailHashUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23505" &&
+		pgErr.ConstraintName == "auth_cred_email_hash_uniq"
+}
+
 // UpdateEmailWithTx updates only the user's email and email_verified status within a transaction.
 func (r *Repository) UpdateEmailWithTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, emailEncrypted []byte, emailHash []byte, emailVerified bool) error {
-	_, err := tx.Exec(ctx, `
+	authTag, err := tx.Exec(ctx, `
         UPDATE auth_cred
         SET email_encrypted = $2, email_hash = $3, updated_at = now()
         WHERE user_id = $1
     `, userID, emailEncrypted, emailHash)
 	if err != nil {
+		if isEmailHashUniqueViolation(err) {
+			return ErrEmailAlreadyUsed
+		}
 		return fmt.Errorf("update auth_cred with tx: %w", err)
 	}
+	if authTag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
 
-	_, err = tx.Exec(ctx, `
+	userTag, err := tx.Exec(ctx, `
         UPDATE users
         SET email_verified = $2, updated_at = now()
         WHERE id = $1 AND deleted_at IS NULL
@@ -544,13 +838,18 @@ func (r *Repository) UpdateEmailWithTx(ctx context.Context, tx pgx.Tx, userID uu
 	if err != nil {
 		return fmt.Errorf("update user with tx: %w", err)
 	}
+	if userTag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
 
 	return nil
 }
 
-// MarkTokenUsedWithTx marks a token as used within a transaction.
+// MarkTokenUsedWithTx marks a token as used within a transaction. A zero-row
+// update is not success: it means the token disappeared or was invalidated by
+// another operation.
 func (r *Repository) MarkTokenUsedWithTx(ctx context.Context, tx pgx.Tx, id string) error {
-	_, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE verify_tokens
 		SET used_at = now()
 		WHERE id = $1 AND used_at IS NULL
@@ -558,5 +857,25 @@ func (r *Repository) MarkTokenUsedWithTx(ctx context.Context, tx pgx.Tx, id stri
 	if err != nil {
 		return fmt.Errorf("mark token used with tx: %w", err)
 	}
-	return nil
+	if tag.RowsAffected() != 0 {
+		return nil
+	}
+
+	var used bool
+	err = tx.QueryRow(ctx, `
+		SELECT used_at IS NOT NULL
+		FROM verify_tokens
+		WHERE id = $1
+	`, id).Scan(&used)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrTokenNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read token state after mark-used conflict: %w", err)
+	}
+	if used {
+		return ErrTokenAlreadyUsed
+	}
+
+	return fmt.Errorf("token %s was not marked used", id)
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sync/errgroup"
@@ -24,10 +25,11 @@ var (
 
 // App owns the assembled servers and everything they must release on shutdown.
 type App struct {
-	cfg        *config.Config
-	closer     *Closer
-	apiSrv     *http.Server
-	metricsSrv *http.Server
+	cfg         *config.Config
+	closer      *Closer
+	apiSrv      *http.Server
+	metricsSrv  *http.Server
+	backgrounds []func(context.Context) error
 }
 
 // Bootstrap loads configuration, creates infrastructure and wires the servers.
@@ -84,10 +86,11 @@ func Bootstrap(cfgPath string) (*App, error) {
 	})
 
 	return &App{
-		cfg:        cfg,
-		closer:     closer,
-		apiSrv:     newAPIServer(cfg, mods, rl, in.redis),
-		metricsSrv: newMetricsServer(cfg, mods.checker),
+		cfg:         cfg,
+		closer:      closer,
+		apiSrv:      newAPIServer(cfg, mods, rl, in.redis, in.db),
+		metricsSrv:  newMetricsServer(cfg, mods.checker),
+		backgrounds: mods.backgrounds,
 	}, nil
 }
 
@@ -111,8 +114,21 @@ func (a *App) Run(ctx context.Context) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return serveHTTP(gctx, a.apiSrv) })
 	g.Go(func() error { return serveHTTP(gctx, a.metricsSrv) })
+
+	var backgroundWG sync.WaitGroup
+	for _, runBackground := range a.backgrounds {
+		backgroundWG.Add(1)
+		g.Go(func() error {
+			defer backgroundWG.Done()
+			return runBackground(gctx)
+		})
+	}
 	g.Go(func() error {
 		<-gctx.Done()
+		// Background workers share DB/Redis/MinIO with the HTTP server. Let
+		// them observe cancellation before infrastructure is closed underneath
+		// them.
+		backgroundWG.Wait()
 		return a.shutdown()
 	})
 

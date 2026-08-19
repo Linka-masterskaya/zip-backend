@@ -11,6 +11,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,9 +30,11 @@ type fakeCache struct {
 
 	err error
 
-	revokeCalls   int
-	revokedUserID string
-	revokeErr     error
+	revokeCalls       int
+	revokedUserID     string
+	revokeErr         error
+	sessionVersion    int64
+	sessionVersionErr error
 }
 
 type rollbackSpyTx struct {
@@ -53,11 +56,35 @@ func (f *fakeCache) StoreRefresh(
 	return f.err
 }
 
+func (f *fakeCache) StoreRefreshForLogin(
+	_ context.Context,
+	jti string,
+	rec cache.RefreshRecord,
+	ttl time.Duration,
+) (int64, error) {
+	f.called = true
+	f.jti = jti
+	f.rec = rec
+	f.ttl = ttl
+	if f.err != nil {
+		return 0, f.err
+	}
+	if f.sessionVersionErr != nil {
+		return 0, f.sessionVersionErr
+	}
+	f.rec.SessionVersion = f.sessionVersion
+	return f.sessionVersion, nil
+}
+
 func (f *fakeCache) RevokeAllSessions(_ context.Context, userID string) error {
 	f.revokeCalls++
 	f.revokedUserID = userID
 
 	return f.revokeErr
+}
+
+func (f *fakeCache) GetUserSessionVersion(_ context.Context, _ string) (int64, error) {
+	return f.sessionVersion, f.sessionVersionErr
 }
 
 type fakeCrypto struct {
@@ -108,7 +135,7 @@ func TestAuthService_Login_Success(t *testing.T) {
 			EmailVerified: true,
 		}, nil)
 
-	cacheStore := &fakeCache{}
+	cacheStore := &fakeCache{sessionVersion: 7}
 	crypto := &fakeCrypto{hash: []byte("email-hash")}
 
 	svc := NewAuthService(
@@ -132,6 +159,13 @@ func TestAuthService_Login_Success(t *testing.T) {
 	if result.AccessToken == "" {
 		t.Fatal("access token is empty")
 	}
+	parsed, err := jwt.ParseWithClaims(result.AccessToken, &AccessClaims{}, func(_ *jwt.Token) (any, error) {
+		return []byte(testAuthConfig().JWTSecret), nil
+	})
+	require.NoError(t, err)
+	claims, ok := parsed.Claims.(*AccessClaims)
+	require.True(t, ok)
+	require.Equal(t, int64(7), claims.SessionVersion)
 	if result.RefreshToken == "" {
 		t.Fatal("refresh token is empty")
 	}
@@ -157,6 +191,39 @@ func TestAuthService_Login_Success(t *testing.T) {
 			time.Hour,
 		)
 	}
+}
+
+func TestAuthService_Login_DeletionBarrierRejectsConcurrentSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+	password := "correct-password"
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	require.NoError(t, err)
+
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
+		Return(&User{
+			ID:            "user-id",
+			OrgID:         ptrString("org-id"),
+			PasswordHash:  ptrString(string(passwordHash)),
+			Role:          "defectologist",
+			EmailVerified: true,
+		}, nil)
+
+	cacheStore := &fakeCache{err: cache.ErrUserSessionsDisabled}
+	svc := NewAuthService(
+		repo,
+		cacheStore,
+		&fakeRateLimiter{allowed: true},
+		nil,
+		testAuthConfig(),
+		&fakeCrypto{hash: []byte("email-hash")},
+	)
+
+	result, err := svc.Login(context.Background(), "user@example.com", password)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrInvalidCredentials)
+	require.True(t, cacheStore.called)
 }
 
 func TestAuthService_Login_WrongPassword(t *testing.T) {
@@ -686,7 +753,7 @@ func TestAuthService_Register_RollbackOnCreateUserError(t *testing.T) {
 		Return(emailHash)
 
 	repo.EXPECT().
-		GetUserByEmailHash(gomock.Any(), emailHash).
+		GetUserByEmailHashForRegistration(gomock.Any(), emailHash).
 		Return(nil, apperr.ErrUserNotFound)
 
 	crypto.EXPECT().
@@ -725,6 +792,59 @@ func TestAuthService_Register_RollbackOnCreateUserError(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "create user")
 	assert.Equal(t, 1, tx.rollbackCalls)
+	assert.Equal(t, 0, tx.commitCalls)
+}
+
+func TestAuthService_Register_EmailUniqueRaceIsIndistinguishable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+	txRepo := NewMockauthRepoIface(ctrl)
+	crypto := NewMockcryptoService(ctrl)
+	tx := &rollbackSpyTx{}
+
+	email := "race@example.com"
+	emailHash := []byte("email-hash")
+
+	crypto.EXPECT().
+		Hash([]byte(email)).
+		Return(emailHash)
+	repo.EXPECT().
+		GetUserByEmailHashForRegistration(gomock.Any(), emailHash).
+		Return(nil, apperr.ErrUserNotFound)
+	crypto.EXPECT().
+		Encrypt([]byte(email)).
+		Return([]byte("encrypted-email"), nil)
+	repo.EXPECT().
+		beginTx(gomock.Any()).
+		Return(tx, nil)
+	repo.EXPECT().
+		withTx(tx).
+		Return(txRepo)
+	txRepo.EXPECT().
+		CreateOrganization(gomock.Any(), gomock.Any()).
+		Return(nil)
+	txRepo.EXPECT().
+		CreateUser(gomock.Any(), gomock.Any()).
+		Return(nil)
+	txRepo.EXPECT().
+		CreateAuthCred(gomock.Any(), gomock.Any()).
+		Return(errEmailAlreadyExists)
+
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		&registerMailerFake{},
+		testAuthConfig(),
+		crypto,
+	)
+
+	err := svc.Register(context.Background(), RegisterRequest{
+		Email:    email,
+		Password: "strongpass123",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, tx.rollbackCalls, "losing transaction must be rolled back")
 	assert.Equal(t, 0, tx.commitCalls)
 }
 

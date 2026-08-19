@@ -144,6 +144,21 @@ func (mr *MockauthRepoIfaceMockRecorder) GetUserByEmailHash(ctx, emailHash any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByEmailHash", reflect.TypeOf((*MockauthRepoIface)(nil).GetUserByEmailHash), ctx, emailHash)
 }
 
+// GetUserByEmailHashForRegistration mocks base method.
+func (m *MockauthRepoIface) GetUserByEmailHashForRegistration(ctx context.Context, emailHash []byte) (*User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserByEmailHashForRegistration", ctx, emailHash)
+	ret0, _ := ret[0].(*User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserByEmailHashForRegistration indicates an expected call of GetUserByEmailHashForRegistration.
+func (mr *MockauthRepoIfaceMockRecorder) GetUserByEmailHashForRegistration(ctx, emailHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByEmailHashForRegistration", reflect.TypeOf((*MockauthRepoIface)(nil).GetUserByEmailHashForRegistration), ctx, emailHash)
+}
+
 // GetUserByID mocks base method.
 func (m *MockauthRepoIface) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
 	m.ctrl.T.Helper()
@@ -285,6 +300,21 @@ func (m *MockrefreshStore) EXPECT() *MockrefreshStoreMockRecorder {
 	return m.recorder
 }
 
+// GetUserSessionVersion mocks base method.
+func (m *MockrefreshStore) GetUserSessionVersion(ctx context.Context, userID string) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserSessionVersion", ctx, userID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserSessionVersion indicates an expected call of GetUserSessionVersion.
+func (mr *MockrefreshStoreMockRecorder) GetUserSessionVersion(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserSessionVersion", reflect.TypeOf((*MockrefreshStore)(nil).GetUserSessionVersion), ctx, userID)
+}
+
 // GetRefresh mocks base method.
 func (m *MockrefreshStore) GetRefresh(ctx context.Context, jti string) (*cache.RefreshRecord, error) {
 	m.ctrl.T.Helper()
@@ -384,6 +414,21 @@ func (m *MockrefreshStore) StoreRefresh(ctx context.Context, jti string, rec cac
 func (mr *MockrefreshStoreMockRecorder) StoreRefresh(ctx, jti, rec, ttl any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StoreRefresh", reflect.TypeOf((*MockrefreshStore)(nil).StoreRefresh), ctx, jti, rec, ttl)
+}
+
+// StoreRefreshForLogin mocks base method.
+func (m *MockrefreshStore) StoreRefreshForLogin(ctx context.Context, jti string, rec cache.RefreshRecord, ttl time.Duration) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StoreRefreshForLogin", ctx, jti, rec, ttl)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// StoreRefreshForLogin indicates an expected call of StoreRefreshForLogin.
+func (mr *MockrefreshStoreMockRecorder) StoreRefreshForLogin(ctx, jti, rec, ttl any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StoreRefreshForLogin", reflect.TypeOf((*MockrefreshStore)(nil).StoreRefreshForLogin), ctx, jti, rec, ttl)
 }
 
 // MockcryptoService is a mock of cryptoService interface.

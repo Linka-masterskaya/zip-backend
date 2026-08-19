@@ -25,15 +25,16 @@ import (
 const unverifiedCleanupInterval = time.Hour
 
 type modules struct {
-	packs    httpapi.PackHandlers
-	media    httpapi.MediaHandlers
-	folders  httpapi.FolderHandlers
-	students httpapi.StudentHandlers
-	auth     httpapi.AuthHandlers
-	profile  httpapi.ProfileHandlers
-	pictures *picturebank.Handler
-	checker  *health.Checker
-	cleaner  *auth.RegistrationCleaner
+	packs       httpapi.PackHandlers
+	media       httpapi.MediaHandlers
+	folders     httpapi.FolderHandlers
+	students    httpapi.StudentHandlers
+	auth        httpapi.AuthHandlers
+	profile     httpapi.ProfileHandlers
+	pictures    *picturebank.Handler
+	checker     *health.Checker
+	cleaner     *auth.RegistrationCleaner
+	backgrounds []func(context.Context) error
 }
 
 // buildModules wires every domain module on top of the infrastructure.
@@ -131,8 +132,9 @@ func buildModules(in *infra) (*modules, error) {
 			Profile:        profile.NewHandler(profileService),
 			ChangePassword: profile.NewChangePasswordHandler(changePasswordService),
 		},
-		pictures: picturebank.NewHandler(picturesService, cfg.PicturesBank.CacheTTL),
-		checker:  checker,
-		cleaner:  registrationCleaner,
+		pictures:    picturebank.NewHandler(picturesService, cfg.PicturesBank.CacheTTL),
+		checker:     checker,
+		cleaner:     registrationCleaner,
+		backgrounds: []func(context.Context) error{profileService.RunAvatarCleanupWorker},
 	}, nil
 }

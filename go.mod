@@ -21,6 +21,7 @@ require (
 	github.com/wneessen/go-mail v0.8.0
 	go.uber.org/mock v0.6.0
 	golang.org/x/crypto v0.55.0
+	golang.org/x/image v0.44.0
 	golang.org/x/sync v0.22.0
 )
 

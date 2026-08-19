@@ -339,6 +339,7 @@ paths:
   /auth/register:
     post:
       tags: [auth]
+      operationId: register
       summary: Регистрация по email (R4, p18) — шлёт письмо
       description: |
         Ответ не зависит от того, занят адрес или свободен: по коду ответа нельзя
@@ -366,6 +367,7 @@ paths:
   /auth/verify-email:
     post:
       tags: [auth]
+      operationId: verifyEmail
       summary: Подтвердить email по токену
       security: []
       requestBody:
@@ -378,6 +380,7 @@ paths:
   /auth/verify-email/resend:
     post:
       tags: [auth]
+      operationId: resendVerifyEmail
       summary: Переслать письмо верификации
       description: "Публичный endpoint: email передаётся в теле запроса. Под rate-limit."
       security: []
@@ -398,6 +401,7 @@ paths:
   /auth/login:
     post:
       tags: [auth]
+      operationId: login
       summary: Вход по email (R5, p17)
       description: "При auth.require_email_verification=true неверифицированный email → 403."
       security: []
@@ -417,6 +421,7 @@ paths:
   /auth/refresh:
     post:
       tags: [auth]
+      operationId: refresh
       summary: Обновить access (ротация + reuse-detection)
       description: "Refresh передаётся только в HttpOnly cookie с SameSite=Lax. Повторное использование старого refresh отзывает всю семью токенов."
       security: [{ refreshCookie: [] }]
@@ -431,6 +436,7 @@ paths:
   /auth/logout:
     post:
       tags: [auth]
+      operationId: logout
       summary: Выход (p2 «Выйти») — отзыв refresh-семьи
       security: [{ refreshCookie: [] }]
       responses:
@@ -439,6 +445,7 @@ paths:
   /auth/password/forgot:
     post:
       tags: [auth]
+      operationId: forgotPassword
       summary: Запрос сброса (R7, p19) — всегда 202
       security: []
       requestBody:
@@ -451,6 +458,7 @@ paths:
   /auth/password/reset:
     post:
       tags: [auth]
+      operationId: resetPassword
       summary: Новый пароль по токену (R7, p20)
       security: []
       requestBody:
@@ -463,6 +471,7 @@ paths:
   /profile/me:
     get:
       tags: [profile]
+      operationId: getProfile
       summary: Мой профиль (p3)
       security: [{ bearerAuth: [] }]
       responses:
@@ -470,6 +479,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
     patch:
       tags: [profile]
+      operationId: updateProfile
       summary: Редактировать display_name (R12, p3/p12)
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -479,10 +489,20 @@ paths:
         '200': { description: Обновлён, content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+    delete:
+      tags: [profile]
+      operationId: deleteProfile
+      summary: Удалить профиль (soft-delete)
+      description: Пользователь помечается удалённым, активные сессии отзываются, аватар ставится в надёжную очередь удаления из объектного хранилища (обычно очищается сразу, временные сбои повторяются фоновым worker).
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Профиль удалён }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /profile/me/avatar:
     put:
       tags: [profile]
+      operationId: replaceAvatar
       summary: Загрузить аватар (R14, p4 «Заменить фото»)
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -500,6 +520,7 @@ paths:
         '413': { description: Файл слишком большой }
     delete:
       tags: [profile]
+      operationId: deleteAvatar
       summary: Удалить аватар (p4 «Удалить фото»)
       security: [{ bearerAuth: [] }]
       responses:
@@ -509,6 +530,7 @@ paths:
   /profile/me/password:
     post:
       tags: [profile]
+      operationId: changePassword
       summary: Сменить пароль inline (R15, p10 — нужен старый)
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -522,6 +544,7 @@ paths:
   /profile/me/email:
     post:
       tags: [profile]
+      operationId: requestEmailChange
       summary: Запрос смены email — подтверждение на СТАРЫЙ email (p13/p16)
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -536,6 +559,7 @@ paths:
   /profile/me/email/confirm:
     post:
       tags: [profile]
+      operationId: confirmEmailChange
       summary: Подтвердить смену email (p16 «Подтвердить»)
       description: "Токен из письма на СТАРЫЙ ящик. После confirm: email=new_email, email_verified=false, верификационное письмо уходит на НОВЫЙ адрес (владение новым ящиком не доказано старым письмом)."
       security: []

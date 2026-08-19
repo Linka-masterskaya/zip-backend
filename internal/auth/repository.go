@@ -23,6 +23,7 @@ type User struct {
 	PasswordHash  *string
 	Role          string
 	EmailVerified bool
+	Deleted       bool
 }
 
 type CreateOrganizationParams struct {
@@ -102,6 +103,48 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 	return &user, nil
 }
 
+// GetUserByEmailHashForRegistration returns the owner of an email hash even
+// when the user is soft-deleted. Soft-delete intentionally keeps auth_cred so
+// the email remains reserved; registration needs to see that row to preserve
+// the anti-enumeration response instead of falling through to a unique-key
+// conflict.
+func (r *authRepo) GetUserByEmailHashForRegistration(
+	ctx context.Context,
+	emailHash []byte,
+) (*User, error) {
+	var user User
+
+	query := `
+		SELECT
+			u.id,
+			u.org_id,
+			ac.password_hash,
+			ac.role,
+			u.email_verified,
+			(u.deleted_at IS NOT NULL) AS deleted
+		FROM users u
+		JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE ac.email_hash = $1
+	`
+
+	err := r.db.QueryRow(ctx, query, emailHash).Scan(
+		&user.ID,
+		&user.OrgID,
+		&user.PasswordHash,
+		&user.Role,
+		&user.EmailVerified,
+		&user.Deleted,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperr.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authRepo.GetUserByEmailHashForRegistration: %w", err)
+	}
+
+	return &user, nil
+}
+
 func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
 	var user User
 
@@ -157,6 +200,10 @@ func (r *authRepo) CreatePasswordResetToken(
 		}
 	}()
 
+	if err = lockActiveUserForTokenMutation(ctx, tx, userID); err != nil {
+		return "", err
+	}
+
 	_, err = tx.Exec(ctx, `
 		UPDATE verify_tokens
 		SET used_at = now()
@@ -209,22 +256,43 @@ func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passw
 
 	var userID uuid.UUID
 	err = tx.QueryRow(ctx, `
+		SELECT user_id
+		FROM verify_tokens
+		WHERE token_hash = $1
+		  AND purpose = $2
+		  AND used_at IS NULL
+		  AND expires_at > now()
+	`, hashPasswordResetToken(rawToken), passwordResetTokenPurpose).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", apperr.ErrInvalidResetToken
+	}
+	if err != nil {
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken find token owner: %w", err)
+	}
+
+	if err = lockActiveUserForTokenMutation(ctx, tx, userID); err != nil {
+		if errors.Is(err, apperr.ErrUserNotFound) {
+			return "", apperr.ErrInvalidResetToken
+		}
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken: %w", err)
+	}
+
+	res, err := tx.Exec(ctx, `
 		UPDATE verify_tokens
 		SET used_at = now()
 		WHERE token_hash = $1
 		  AND purpose = $2
 		  AND used_at IS NULL
 		  AND expires_at > now()
-		RETURNING user_id
-	`, hashPasswordResetToken(rawToken), passwordResetTokenPurpose).Scan(&userID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", apperr.ErrInvalidResetToken
-	}
+	`, hashPasswordResetToken(rawToken), passwordResetTokenPurpose)
 	if err != nil {
 		return "", fmt.Errorf("authRepo.ResetPasswordByToken consume token: %w", err)
 	}
+	if res.RowsAffected() == 0 {
+		return "", apperr.ErrInvalidResetToken
+	}
 
-	res, err := tx.Exec(ctx, `
+	res, err = tx.Exec(ctx, `
 		UPDATE auth_cred
 		SET password_hash = $1,
 		    updated_at = now()
@@ -278,35 +346,73 @@ func (r *authRepo) beginTx(ctx context.Context) (pgx.Tx, error) {
 	return tx, nil
 }
 
+// lockActiveUserForTokenMutation serializes token creation/consumption with
+// profile soft-delete. Callers that perform more than one statement must pass
+// a transaction-backed DBTX so the row lock is held until commit/rollback.
+func lockActiveUserForTokenMutation(ctx context.Context, db DBTX, userID any) error {
+	var active int
+	err := db.QueryRow(ctx, `
+		SELECT 1
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR KEY SHARE
+	`, userID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apperr.ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock active user for token mutation: %w", err)
+	}
+	return nil
+}
+
 func (r *authRepo) useEmailVerifyToken(
 	ctx context.Context,
 	token []byte,
 ) (uuid.UUID, uuid.UUID, error) {
-	query := `
-		UPDATE verify_tokens
-		SET used_at = now()
-		WHERE token_hash = $1
-			AND purpose = 'email_verify'
-			AND used_at IS NULL
-			AND expires_at > now()
-		RETURNING user_id, student_id
-	`
-
 	var userIDDB, studentIDDB pgtype.UUID
-	err := r.db.QueryRow(ctx, query, token).Scan(&userIDDB, &studentIDDB)
+	err := r.db.QueryRow(ctx, `
+		SELECT user_id, student_id
+		FROM verify_tokens
+		WHERE token_hash = $1
+		  AND purpose = 'email_verify'
+		  AND used_at IS NULL
+		  AND expires_at > now()
+	`, token).Scan(&userIDDB, &studentIDDB)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid
 	}
 	if err != nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken: %w", err)
+		return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken find owner: %w", err)
 	}
 
 	var userID, studentID uuid.UUID
 	if userIDDB.Valid {
 		userID = uuid.UUID(userIDDB.Bytes)
+		if err = lockActiveUserForTokenMutation(ctx, r.db, userID); err != nil {
+			if errors.Is(err, apperr.ErrUserNotFound) {
+				return uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid
+			}
+			return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken: %w", err)
+		}
 	}
 	if studentIDDB.Valid {
 		studentID = uuid.UUID(studentIDDB.Bytes)
+	}
+
+	res, err := r.db.Exec(ctx, `
+		UPDATE verify_tokens
+		SET used_at = now()
+		WHERE token_hash = $1
+		  AND purpose = 'email_verify'
+		  AND used_at IS NULL
+		  AND expires_at > now()
+	`, token)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken consume token: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid
 	}
 
 	return userID, studentID, nil
@@ -385,12 +491,17 @@ func (r *authRepo) rotateEmailTokens(
 	expiresAt time.Time,
 ) error {
 	query := `
-		WITH invalidated AS (
+		WITH active_user AS (
+			SELECT id
+			FROM users
+			WHERE id = $1 AND deleted_at IS NULL
+			FOR KEY SHARE
+		), invalidated AS (
 			UPDATE verify_tokens
 			SET used_at = now()
-			WHERE user_id = $1
-				AND used_at IS NULL
-				AND purpose = 'email_verify'
+			WHERE user_id = (SELECT id FROM active_user)
+			  AND used_at IS NULL
+			  AND purpose = 'email_verify'
 			RETURNING 1
 		)
 		INSERT INTO verify_tokens (
@@ -400,12 +511,16 @@ func (r *authRepo) rotateEmailTokens(
 			expires_at,
 			purpose
 		)
-		VALUES ($2, $1, $3, $4, 'email_verify')
+		SELECT $2, id, $3, $4, 'email_verify'
+		FROM active_user
 	`
 
-	_, err := r.db.Exec(ctx, query, userID, tokenID, tokenHash, expiresAt)
+	res, err := r.db.Exec(ctx, query, userID, tokenID, tokenHash, expiresAt)
 	if err != nil {
 		return fmt.Errorf("authRepo.rotateEmailTokens: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return apperr.ErrUserNotFound
 	}
 
 	return nil
@@ -474,7 +589,7 @@ $5)`
 
 	if err != nil {
 		if isEmailHashUniqueViolation(err) {
-			return apperr.ErrConflict.WithMessage("email already exists")
+			return errEmailAlreadyExists
 		}
 
 		return fmt.Errorf("authRepo.CreateAuthCred: %w", err)
@@ -485,21 +600,23 @@ $5)`
 
 func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error {
 	query := `
- INSERT INTO verify_tokens (
- id,
- user_id,
- token_hash,
- expires_at,
- purpose
- )
- VALUES (
- $1,
- $2,
- $3,
- $4,
- $5)`
+	WITH active_user AS (
+		SELECT id
+		FROM users
+		WHERE id = $2 AND deleted_at IS NULL
+		FOR KEY SHARE
+	)
+	INSERT INTO verify_tokens (
+		id,
+		user_id,
+		token_hash,
+		expires_at,
+		purpose
+	)
+	SELECT $1, id, $3, $4, $5
+	FROM active_user`
 
-	_, err := r.db.Exec(
+	res, err := r.db.Exec(
 		ctx,
 		query,
 		params.ID,
@@ -508,8 +625,13 @@ func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTok
 		params.ExpiresAt,
 		params.Purpose,
 	)
-
-	return err
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return apperr.ErrUserNotFound
+	}
+	return nil
 }
 
 // replaceUnverifiedPassword перезаписывает пароль неподтверждённой регистрации.
