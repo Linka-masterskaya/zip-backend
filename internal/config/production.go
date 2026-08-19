@@ -24,13 +24,16 @@ const (
 
 var leakedCredentialFingerprints = map[string]map[string]struct{}{
 	"jwt.secret": {
+		"32764387e4bc263f87e102ca57010c55ca8b3d9cb9fb0d809696a6f680e4384d": {},
 		"f16dd3036e8e542ced86fe8bc25d7d1f6c4b1622f0321069c17600c12b59415b": {},
 	},
 	"crypto.aes_key": {
 		"861009ec4d599fab1f40abc76e6f89880cff5833c79c548c99f9045f191cd90b": {},
+		"cbee3ab7885dfe98049d29d2d92bcb669ce3b37fa9b0f6e46a7a832772332b25": {},
 		"2cf5e6ec387461b4bf954f587ad4d957753fcbc48bf892b5e49996b90cf3b476": {},
 	},
 	"crypto.hmac_key": {
+		"9a17bb0290ef0facc1b39174d8ebf96578a99f2d091d019eef3ecfaebf40fd6b": {},
 		"f6d527e6d01865481134f29788be2afe7fc3c702e1a55d7ceafac5f35199e8dc": {},
 		"2cf5e6ec387461b4bf954f587ad4d957753fcbc48bf892b5e49996b90cf3b476": {},
 	},
