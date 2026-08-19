@@ -19,6 +19,13 @@ var (
 	httpRequestDuration  *prometheus.HistogramVec
 	httpRequestsInFlight prometheus.Gauge
 
+	emailSentTotal     *prometheus.CounterVec
+	emailSendDuration  *prometheus.HistogramVec
+	emailQueueSize     prometheus.Gauge
+	emailProviderUsage prometheus.Gauge
+	emailSentToday     prometheus.Gauge
+	emailDailyLimit    prometheus.Gauge
+
 	initOnce sync.Once
 )
 
@@ -51,9 +58,60 @@ func Initialize() {
 			},
 		)
 
+		emailSentTotal = prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "email_sent_total",
+				Help: "Total number of emails sent by template and status",
+			},
+			[]string{"template", "status"}, // status: success / error
+		)
+
+		emailSendDuration = prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "email_send_duration_seconds",
+				Help:    "Email sending latency in seconds",
+				Buckets: []float64{0.1, 0.5, 1, 3, 5, 10},
+			},
+			[]string{"template"},
+		)
+
+		emailQueueSize = prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "email_queue_size",
+				Help: "Current number of emails in the queue",
+			},
+		)
+
+		emailProviderUsage = prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "email_provider_usage_percent",
+				Help: "Current email provider usage as percentage of limit",
+			},
+		)
+
+		emailSentToday = prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "email_sent_today",
+				Help: "Number of emails sent today (resets at midnight)",
+			},
+		)
+
+		emailDailyLimit = prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "email_daily_limit",
+				Help: "Daily email sending limit from configuration",
+			},
+		)
+
 		registry.MustRegister(httpRequestsTotal)
 		registry.MustRegister(httpRequestDuration)
 		registry.MustRegister(httpRequestsInFlight)
+		registry.MustRegister(emailSentTotal)
+		registry.MustRegister(emailSendDuration)
+		registry.MustRegister(emailQueueSize)
+		registry.MustRegister(emailProviderUsage)
+		registry.MustRegister(emailSentToday)
+		registry.MustRegister(emailDailyLimit)
 
 		registry.MustRegister(collectors.NewGoCollector())
 		registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -83,4 +141,25 @@ func IncInFlight() {
 // DecInFlight - decrements the active requests counter.
 func DecInFlight() {
 	httpRequestsInFlight.Dec()
+}
+
+// ObserveEmailSend - records email sending metrics.
+func ObserveEmailSend(template, status string, duration float64) {
+	emailSentTotal.WithLabelValues(template, status).Inc()
+	emailSendDuration.WithLabelValues(template).Observe(duration)
+}
+
+// TrackProviderUsage - updates email provider usage metric.
+func TrackProviderUsage(percent float64) {
+	emailProviderUsage.Set(percent)
+}
+
+// SetEmailSentToday - sets today's email counter value.
+func SetEmailSentToday(value float64) {
+	emailSentToday.Set(value)
+}
+
+// SetDailyLimit - sets daily limit from configuration.
+func SetDailyLimit(limit int) {
+	emailDailyLimit.Set(float64(limit))
 }

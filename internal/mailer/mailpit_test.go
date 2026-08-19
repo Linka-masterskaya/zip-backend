@@ -3,15 +3,78 @@ package mailer
 import (
 	"context"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
+	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// ============================================================
+// ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ТЕСТОВ
+// ============================================================
+
+var (
+	testSender   *SMTPSender
+	testCache    *cache.Client
+	testCleanup  func()
+	testCfg      config.SMTPConfig
+	mailpitReady bool
+)
+
+// ============================================================
+// ИНИЦИАЛИЗАЦИЯ (TestMain)
+// ============================================================
+
+func TestMain(m *testing.M) {
+	// Инициализация метрик
+	metrics.Initialize()
+
+	// Проверяем доступность Mailpit
+	mailpitReady = isMailpitAvailable()
+
+	if mailpitReady {
+		testCfg = GetMailpitConfig()
+
+		// Поднимаем Redis через testcontainers
+		redisClient, cleanupRedis, err := testutil.NewRedisNoT()
+		if err != nil {
+			panic("failed to create Redis container: " + err.Error())
+		}
+
+		testCache = cache.NewClientFromRedis(redisClient)
+
+		var errSender error
+		testSender, errSender = NewSMTPSender(testCfg, "http://localhost:3000", testCache)
+		if errSender != nil {
+			panic("failed to create test sender: " + errSender.Error())
+		}
+
+		testCleanup = func() {
+			if err := testCache.Close(); err != nil {
+				// log only
+			}
+			cleanupRedis()
+		}
+	}
+
+	// Запускаем тесты
+	code := m.Run()
+
+	// Выполняем cleanup после всех тестов
+	if testCleanup != nil {
+		testCleanup()
+	}
+
+	os.Exit(code)
+}
 
 // ============================================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -37,13 +100,14 @@ func isMailpitAvailable() bool {
 // GetMailpitConfig returns the Mailpit configuration for tests.
 func GetMailpitConfig() config.SMTPConfig {
 	return config.SMTPConfig{
-		Host:     "localhost",
-		Port:     1025,
-		From:     "noreply@linka.local",
-		Username: "admin",
-		Password: "smtppass",
-		Timeout:  10 * time.Second,
-		TLS:      false,
+		Host:       "localhost",
+		Port:       1025,
+		From:       "noreply@linka.local",
+		Username:   "admin",
+		Password:   "smtppass",
+		Timeout:    10 * time.Second,
+		TLS:        false,
+		DailyLimit: 300,
 	}
 }
 
@@ -52,18 +116,14 @@ func GetMailpitConfig() config.SMTPConfig {
 // ============================================================
 
 func TestMailpit_SendEmailVerify(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", EmailVerify, EmailData{
+	err := testSender.Send(ctx, "test@example.com", EmailVerify, EmailData{
 		Token:    "verify-token-123",
 		Username: "TestUser",
 		Email:    "test@example.com",
@@ -74,18 +134,14 @@ func TestMailpit_SendEmailVerify(t *testing.T) {
 }
 
 func TestMailpit_SendPasswordReset(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", PasswordReset, EmailData{
+	err := testSender.Send(ctx, "test@example.com", PasswordReset, EmailData{
 		Token:    "reset-token-456",
 		Username: "TestUser",
 		Email:    "test@example.com",
@@ -96,18 +152,14 @@ func TestMailpit_SendPasswordReset(t *testing.T) {
 }
 
 func TestMailpit_SendEmailChange(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", EmailChange, EmailData{
+	err := testSender.Send(ctx, "test@example.com", EmailChange, EmailData{
 		Token:    "change-token-789",
 		Username: "TestUser",
 		Email:    "old@example.com",
@@ -119,13 +171,9 @@ func TestMailpit_SendEmailChange(t *testing.T) {
 }
 
 func TestMailpit_SendAllTemplates(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	tests := []struct {
 		name     string
@@ -167,7 +215,7 @@ func TestMailpit_SendAllTemplates(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			err := sender.Send(ctx, "recipient@example.com", tt.template, tt.data)
+			err := testSender.Send(ctx, "recipient@example.com", tt.template, tt.data)
 
 			assert.NoError(t, err, "Should send %s successfully", tt.name)
 			t.Logf("✓ %s sent successfully", tt.name)
@@ -176,24 +224,19 @@ func TestMailpit_SendAllTemplates(t *testing.T) {
 }
 
 func TestMailpit_SendWithSpecialCharacters(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
 
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	// Данные со спецсимволами
 	username := "Тест Пользователь!"
 	email := "user+test@example.com"
 	newEmail := "new+user@example.com"
 	token := "token-with-🚀-emoji"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err = sender.Send(ctx, "test@example.com", EmailChange, EmailData{
+	err := testSender.Send(ctx, "test@example.com", EmailChange, EmailData{
 		Token:    token,
 		Username: username,
 		Email:    email,
@@ -205,20 +248,15 @@ func TestMailpit_SendWithSpecialCharacters(t *testing.T) {
 }
 
 func TestMailpit_SendWithEmptyData(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", EmailVerify, EmailData{
+	err := testSender.Send(ctx, "test@example.com", EmailVerify, EmailData{
 		Token: "minimal-token",
-		// Username, Email - пустые
 	})
 
 	assert.NoError(t, err, "Should send email with minimal data")
@@ -226,13 +264,9 @@ func TestMailpit_SendWithEmptyData(t *testing.T) {
 }
 
 func TestMailpit_SendMultipleRecipients(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	recipients := []string{
 		"user1@example.com",
@@ -245,7 +279,7 @@ func TestMailpit_SendMultipleRecipients(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			err := sender.Send(ctx, recipient, EmailVerify, EmailData{
+			err := testSender.Send(ctx, recipient, EmailVerify, EmailData{
 				Token:    "test-token-" + recipient,
 				Username: "TestUser",
 				Email:    recipient,
@@ -258,13 +292,9 @@ func TestMailpit_SendMultipleRecipients(t *testing.T) {
 }
 
 func TestMailpit_ConcurrentSends(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	var wg sync.WaitGroup
 	numGoroutines := 5
@@ -278,7 +308,7 @@ func TestMailpit_ConcurrentSends(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			err := sender.Send(ctx,
+			err := testSender.Send(ctx,
 				"test@example.com",
 				EmailVerify,
 				EmailData{
@@ -307,18 +337,14 @@ func TestMailpit_ConcurrentSends(t *testing.T) {
 }
 
 func TestMailpit_InvalidEmail(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "invalid-email", EmailVerify, EmailData{
+	err := testSender.Send(ctx, "invalid-email", EmailVerify, EmailData{
 		Token:    "test-token",
 		Username: "TestUser",
 		Email:    "test@example.com",
@@ -330,19 +356,14 @@ func TestMailpit_InvalidEmail(t *testing.T) {
 }
 
 func TestMailpit_TemplateNotFound(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Используем несуществующий шаблон
-	err = sender.Send(ctx, "test@example.com", "nonexistent", EmailData{
+	err := testSender.Send(ctx, "test@example.com", "nonexistent", EmailData{
 		Token:    "test-token",
 		Username: "TestUser",
 		Email:    "test@example.com",
@@ -354,18 +375,14 @@ func TestMailpit_TemplateNotFound(t *testing.T) {
 }
 
 func TestMailpit_EmptyHTML(t *testing.T) {
-	if !isMailpitAvailable() {
+	if !mailpitReady {
 		t.Skip("Mailpit not available, skipping test")
 	}
-
-	cfg := GetMailpitConfig()
-	sender, err := NewSMTPSender(cfg, "http://localhost:3000")
-	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = sender.Send(ctx, "test@example.com", EmailVerify, EmailData{
+	err := testSender.Send(ctx, "test@example.com", EmailVerify, EmailData{
 		Token:    "",
 		Username: "",
 		Email:    "",
@@ -373,4 +390,135 @@ func TestMailpit_EmptyHTML(t *testing.T) {
 
 	assert.NoError(t, err, "Should handle empty data gracefully")
 	t.Log("✓ Empty data handled gracefully")
+}
+
+func TestMailpit_RedisCounterIncrement(t *testing.T) {
+	if !mailpitReady {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Получаем текущее значение счетчика
+	initialCount, err := testCache.GetEmailSentToday(ctx)
+	require.NoError(t, err)
+
+	// Отправляем письмо
+	err = testSender.Send(ctx, "test@example.com", EmailVerify, EmailData{
+		Token:    "test-token",
+		Username: "TestUser",
+		Email:    "test@example.com",
+	})
+	require.NoError(t, err)
+
+	// Проверяем, что счетчик увеличился
+	newCount, err := testCache.GetEmailSentToday(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, initialCount+1, newCount, "Redis counter should be incremented")
+
+	t.Log("✓ Redis counter incremented successfully")
+}
+
+func TestMailpit_RedisCounterMultipleEmails(t *testing.T) {
+	if !mailpitReady {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Получаем текущее значение
+	initialCount, err := testCache.GetEmailSentToday(ctx)
+	require.NoError(t, err)
+
+	// Отправляем 3 письма
+	for i := 0; i < 3; i++ {
+		err := testSender.Send(ctx, "test@example.com", EmailVerify, EmailData{
+			Token:    "test-token-" + string(rune('A'+i)),
+			Username: "TestUser",
+			Email:    "test@example.com",
+		})
+		require.NoError(t, err)
+	}
+
+	// Проверяем, что счетчик увеличился на 3
+	newCount, err := testCache.GetEmailSentToday(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, initialCount+3, newCount, "Redis counter should be incremented by 3")
+
+	t.Log("✓ Redis counter correctly counts multiple emails")
+}
+
+func TestMailpit_EmailCounterMetric(t *testing.T) {
+	if !mailpitReady {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Отправляем письмо
+	err := testSender.Send(ctx, "test@example.com", EmailVerify, EmailData{
+		Token:    "test-token",
+		Username: "TestUser",
+		Email:    "test@example.com",
+	})
+	require.NoError(t, err)
+
+	// Проверяем, что счетчик в Redis увеличился
+	count, err := testCache.GetEmailSentToday(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, count, int64(0), "Counter should be > 0")
+
+	t.Log("✓ Email counter metric updated successfully")
+}
+
+// ============================================================
+// ТЕСТЫ БЕЗ REDIS (используют отдельный sender)
+// ============================================================
+
+func TestMailpit_SenderWithoutRedis(t *testing.T) {
+	if !mailpitReady {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
+	cfg := GetMailpitConfig()
+	sender, err := NewSMTPSender(cfg, "http://localhost:3000", nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err = sender.Send(ctx, "test@example.com", EmailVerify, EmailData{
+		Token:    "test-token",
+		Username: "TestUser",
+		Email:    "test@example.com",
+	})
+
+	assert.NoError(t, err, "Should send email without Redis")
+	t.Log("✓ Email sent successfully without Redis")
+}
+
+func TestMailpit_RedisCounterWithoutCache(t *testing.T) {
+	if !mailpitReady {
+		t.Skip("Mailpit not available, skipping test")
+	}
+
+	cfg := GetMailpitConfig()
+	sender, err := NewSMTPSender(cfg, "http://localhost:3000", nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err = sender.Send(ctx, "test@example.com", EmailVerify, EmailData{
+		Token:    "test-token",
+		Username: "TestUser",
+		Email:    "test@example.com",
+	})
+	require.NoError(t, err)
+
+	assert.Nil(t, sender.cache, "cache should be nil")
+	t.Log("✓ Sender works without Redis without panic")
 }

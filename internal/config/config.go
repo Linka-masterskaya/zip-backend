@@ -153,6 +153,7 @@ type JWTConfig struct {
 	RefreshTTL time.Duration `mapstructure:"refresh_ttl"`
 }
 
+// RateLimitConfig describes rate-limit configuration.
 type RateLimitConfig struct {
 	Resend RateLimitRule `mapstructure:"resend"`
 }
@@ -205,6 +206,7 @@ type SMTPConfig struct {
 	TLS              bool          `mapstructure:"tls"`
 	Timeout          time.Duration `mapstructure:"timeout"`
 	RequireFromMatch bool          `mapstructure:"require_from_match"`
+	DailyLimit       int           `mapstructure:"daily_limit"`
 }
 
 // AuthConfig contains authentication and security settings.
@@ -330,7 +332,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.docs_enabled", false)
 
 	// Server defaults
-	v.SetDefault("server.metrics_port", "9090")
+	v.SetDefault("server.metrics_port", "9091")
 	v.SetDefault("server.read_timeout", "10s")
 	v.SetDefault("server.write_timeout", "30s")
 	v.SetDefault("server.idle_timeout", "60s")
@@ -421,6 +423,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("smtp.tls", true)
 	v.SetDefault("smtp.timeout", "10s")
 	v.SetDefault("smtp.require_from_match", false)
+	v.SetDefault("daily_limit", 300)
 
 	// Crypto defaults
 	v.SetDefault("crypto.aes_key", "")

@@ -5,11 +5,14 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/mail"
 	"strings"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/Linka-masterskaya/zip-backend/internal/metrics"
 
 	gomail "github.com/wneessen/go-mail"
 )
@@ -31,6 +34,7 @@ type SMTPSender struct {
 	from        string
 	frontendURL string
 	templates   map[Template]*template.Template
+	cache       *cache.Client
 }
 
 func newClient(cfg config.SMTPConfig) (*gomail.Client, error) {
@@ -63,7 +67,7 @@ func newClient(cfg config.SMTPConfig) (*gomail.Client, error) {
 }
 
 // NewSMTPSender - creates a new instance of 'SMTPSender'.
-func NewSMTPSender(cfg config.SMTPConfig, frontendURL string) (*SMTPSender, error) {
+func NewSMTPSender(cfg config.SMTPConfig, frontendURL string, cacheClient *cache.Client) (*SMTPSender, error) {
 	if err := validateSMTPConfig(cfg); err != nil {
 		return nil, fmt.Errorf("invalid SMTP config: %w", err)
 	}
@@ -77,16 +81,35 @@ func NewSMTPSender(cfg config.SMTPConfig, frontendURL string) (*SMTPSender, erro
 		return nil, fmt.Errorf("create smtp client: 'frontendURL' is empty")
 	}
 
+	limit := cfg.DailyLimit
+	if limit <= 0 {
+		limit = 300
+	}
+
+	// Save daily limit to metrics
+	metrics.SetDailyLimit(limit)
+
 	s := &SMTPSender{
 		client:      client,
 		from:        cfg.From,
 		frontendURL: frontendURL,
-
-		templates: make(map[Template]*template.Template),
+		templates:   make(map[Template]*template.Template),
+		cache:       cacheClient,
 	}
 
 	if err := s.loadTemplates(); err != nil {
 		return nil, fmt.Errorf("load templates: %w", err)
+	}
+
+	if cacheClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if count, err := cacheClient.GetEmailSentToday(ctx); err == nil {
+			metrics.SetEmailSentToday(float64(count))
+		} else {
+			slog.Warn("Failed to get email counter on startup", "error", err)
+		}
 	}
 
 	return s, nil
@@ -125,6 +148,8 @@ func (s *SMTPSender) Send(
 	tmpl Template,
 	data EmailData,
 ) error {
+	start := time.Now()
+
 	if _, err := mail.ParseAddress(to); err != nil {
 		return fmt.Errorf("invalid recipient email: %w", err)
 	}
@@ -160,6 +185,23 @@ func (s *SMTPSender) Send(
 	msg.SetBodyString(gomail.TypeTextHTML, html.String())
 
 	err := s.client.DialAndSendWithContext(ctx, msg)
+
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+
+	metrics.ObserveEmailSend(string(tmpl), status, time.Since(start).Seconds())
+
+	if err == nil && s.cache != nil {
+		newCount, incrErr := s.cache.IncrEmailSentToday(ctx)
+		if incrErr == nil {
+			metrics.SetEmailSentToday(float64(newCount))
+		} else {
+			slog.Warn("Failed to increment email counter", "error", incrErr)
+		}
+	}
+
 	if err != nil {
 		return err
 	}
@@ -234,4 +276,9 @@ func isLocalSMTP(host string) bool {
 		}
 	}
 	return false
+}
+
+// GetCache returns the Redis client for testing purposes.
+func (s *SMTPSender) GetCache() *cache.Client {
+	return s.cache
 }
