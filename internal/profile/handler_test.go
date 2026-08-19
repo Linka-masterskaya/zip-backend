@@ -181,8 +181,8 @@ func TestHandler_DeleteProfile(t *testing.T) {
 		},
 	}
 	handler := NewHandler(service)
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/profile/me", nil)
-	req = req.WithContext(authctx.SetUserIDToCtx(req.Context(), userID))
+	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	req := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/api/v1/profile/me", nil)
 	rec := httptest.NewRecorder()
 
 	err := handler.DeleteProfile(rec, req)

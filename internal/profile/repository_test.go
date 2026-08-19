@@ -745,6 +745,16 @@ func TestRepository_CreateToken_SerializesWithUserDeletion(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = deleteTx.Rollback(ctx) }()
 
+	var lockedUserID uuid.UUID
+	err = deleteTx.QueryRow(ctx, `
+		SELECT id
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, userID).Scan(&lockedUserID)
+	require.NoError(t, err)
+	require.Equal(t, userID, lockedUserID)
+
 	_, err = deleteTx.Exec(ctx, `UPDATE users SET deleted_at = now() WHERE id = $1`, userID)
 	require.NoError(t, err)
 

@@ -12,54 +12,54 @@ import (
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-
-	// (POST /auth/register)
-	Register(w http.ResponseWriter, r *http.Request)
-
-	// (POST /auth/verify-email)
-	VerifyEmail(w http.ResponseWriter, r *http.Request)
-
-	// (POST /auth/verify-email/resend)
-	ResendVerifyEmail(w http.ResponseWriter, r *http.Request)
-
+	// Login Вход по email (R5, p17)
 	// (POST /auth/login)
 	Login(w http.ResponseWriter, r *http.Request)
-
-	// (POST /auth/refresh)
-	Refresh(w http.ResponseWriter, r *http.Request)
-
+	// Logout Выход (p2 «Выйти») — отзыв refresh-семьи
 	// (POST /auth/logout)
 	Logout(w http.ResponseWriter, r *http.Request)
-
+	// ForgotPassword Запрос сброса (R7, p19) — всегда 202
 	// (POST /auth/password/forgot)
 	ForgotPassword(w http.ResponseWriter, r *http.Request)
-
+	// ResetPassword Новый пароль по токену (R7, p20)
 	// (POST /auth/password/reset)
 	ResetPassword(w http.ResponseWriter, r *http.Request)
-
-	// (GET /profile/me)
-	GetProfile(w http.ResponseWriter, r *http.Request)
-
-	// (PATCH /profile/me)
-	UpdateProfile(w http.ResponseWriter, r *http.Request)
-
+	// Refresh Обновить access (ротация + reuse-detection)
+	// (POST /auth/refresh)
+	Refresh(w http.ResponseWriter, r *http.Request)
+	// Register Регистрация по email (R4, p18) — шлёт письмо
+	// (POST /auth/register)
+	Register(w http.ResponseWriter, r *http.Request)
+	// VerifyEmail Подтвердить email по токену
+	// (POST /auth/verify-email)
+	VerifyEmail(w http.ResponseWriter, r *http.Request)
+	// ResendVerifyEmail Переслать письмо верификации
+	// (POST /auth/verify-email/resend)
+	ResendVerifyEmail(w http.ResponseWriter, r *http.Request)
+	// DeleteProfile Удалить профиль (soft-delete)
 	// (DELETE /profile/me)
 	DeleteProfile(w http.ResponseWriter, r *http.Request)
-
-	// (PUT /profile/me/avatar)
-	ReplaceAvatar(w http.ResponseWriter, r *http.Request)
-
+	// GetProfile Мой профиль (p3)
+	// (GET /profile/me)
+	GetProfile(w http.ResponseWriter, r *http.Request)
+	// UpdateProfile Редактировать display_name (R12, p3/p12)
+	// (PATCH /profile/me)
+	UpdateProfile(w http.ResponseWriter, r *http.Request)
+	// DeleteAvatar Удалить аватар (p4 «Удалить фото»)
 	// (DELETE /profile/me/avatar)
 	DeleteAvatar(w http.ResponseWriter, r *http.Request)
-
-	// (POST /profile/me/password)
-	ChangePassword(w http.ResponseWriter, r *http.Request)
-
+	// ReplaceAvatar Загрузить аватар (R14, p4 «Заменить фото»)
+	// (PUT /profile/me/avatar)
+	ReplaceAvatar(w http.ResponseWriter, r *http.Request)
+	// RequestEmailChange Запрос смены email — подтверждение на СТАРЫЙ email (p13/p16)
 	// (POST /profile/me/email)
 	RequestEmailChange(w http.ResponseWriter, r *http.Request)
-
+	// ConfirmEmailChange Подтвердить смену email (p16 «Подтвердить»)
 	// (POST /profile/me/email/confirm)
 	ConfirmEmailChange(w http.ResponseWriter, r *http.Request)
+	// ChangePassword Сменить пароль inline (R15, p10 — нужен старый)
+	// (POST /profile/me/password)
+	ChangePassword(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -71,67 +71,11 @@ type ServerInterfaceWrapper struct {
 
 type MiddlewareFunc func(http.Handler) http.Handler
 
-// Register operation middleware
-func (siw *ServerInterfaceWrapper) Register(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.Register(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// VerifyEmail operation middleware
-func (siw *ServerInterfaceWrapper) VerifyEmail(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.VerifyEmail(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ResendVerifyEmail operation middleware
-func (siw *ServerInterfaceWrapper) ResendVerifyEmail(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ResendVerifyEmail(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // Login operation middleware
 func (siw *ServerInterfaceWrapper) Login(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Login(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// Refresh operation middleware
-func (siw *ServerInterfaceWrapper) Refresh(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.Refresh(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -183,6 +127,76 @@ func (siw *ServerInterfaceWrapper) ResetPassword(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// Refresh operation middleware
+func (siw *ServerInterfaceWrapper) Refresh(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Refresh(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// Register operation middleware
+func (siw *ServerInterfaceWrapper) Register(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Register(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// VerifyEmail operation middleware
+func (siw *ServerInterfaceWrapper) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.VerifyEmail(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResendVerifyEmail operation middleware
+func (siw *ServerInterfaceWrapper) ResendVerifyEmail(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResendVerifyEmail(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteProfile operation middleware
+func (siw *ServerInterfaceWrapper) DeleteProfile(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteProfile(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetProfile operation middleware
 func (siw *ServerInterfaceWrapper) GetProfile(w http.ResponseWriter, r *http.Request) {
 
@@ -211,34 +225,6 @@ func (siw *ServerInterfaceWrapper) UpdateProfile(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
-// DeleteProfile operation middleware
-func (siw *ServerInterfaceWrapper) DeleteProfile(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteProfile(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ReplaceAvatar operation middleware
-func (siw *ServerInterfaceWrapper) ReplaceAvatar(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ReplaceAvatar(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // DeleteAvatar operation middleware
 func (siw *ServerInterfaceWrapper) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
 
@@ -253,11 +239,11 @@ func (siw *ServerInterfaceWrapper) DeleteAvatar(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
-// ChangePassword operation middleware
-func (siw *ServerInterfaceWrapper) ChangePassword(w http.ResponseWriter, r *http.Request) {
+// ReplaceAvatar operation middleware
+func (siw *ServerInterfaceWrapper) ReplaceAvatar(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ChangePassword(w, r)
+		siw.Handler.ReplaceAvatar(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -286,6 +272,20 @@ func (siw *ServerInterfaceWrapper) ConfirmEmailChange(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ConfirmEmailChange(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChangePassword operation middleware
+func (siw *ServerInterfaceWrapper) ChangePassword(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChangePassword(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -414,6 +414,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		HandlerMiddlewares: options.Middlewares,
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
+
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/register", wrapper.Register)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/verify-email", wrapper.VerifyEmail)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/verify-email/resend", wrapper.ResendVerifyEmail)
@@ -422,11 +423,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/logout", wrapper.Logout)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/password/forgot", wrapper.ForgotPassword)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/password/reset", wrapper.ResetPassword)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/profile/me", wrapper.DeleteProfile)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/profile/me", wrapper.GetProfile)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/profile/me", wrapper.UpdateProfile)
-	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/profile/me", wrapper.DeleteProfile)
-	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/profile/me/avatar", wrapper.ReplaceAvatar)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/profile/me/avatar", wrapper.DeleteAvatar)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/profile/me/avatar", wrapper.ReplaceAvatar)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/profile/me/password", wrapper.ChangePassword)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/profile/me/email", wrapper.RequestEmailChange)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/profile/me/email/confirm", wrapper.ConfirmEmailChange)
