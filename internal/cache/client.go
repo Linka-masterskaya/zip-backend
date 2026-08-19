@@ -38,7 +38,7 @@ type Client struct {
 	rdb *redis.Client
 }
 
-// NewClientFromRedis creates 'Client' from 'redis.Client'
+// NewClientFromRedis creates 'Client' from 'redis.Client'.
 func NewClientFromRedis(rdb *redis.Client) *Client {
 	return &Client{rdb: rdb}
 }

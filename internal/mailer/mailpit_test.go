@@ -58,9 +58,7 @@ func TestMain(m *testing.M) {
 		}
 
 		testCleanup = func() {
-			if err := testCache.Close(); err != nil {
-				// log only
-			}
+			testCache.Close()
 			cleanupRedis()
 		}
 	}
