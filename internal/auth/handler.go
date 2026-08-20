@@ -375,19 +375,13 @@ func (h *authHandlers) RegisterRoutes(
 		cfg.App.TrustedProxies,
 	)
 
-	resendPolicy := middleware.RateLimitPolicy{
-		Scope:  cfg.RateLimit.Resend.Scope,
-		Limit:  cfg.RateLimit.Resend.Limit,
-		Window: cfg.RateLimit.Resend.Window,
-	}
-
+	// RateLimitByUser удалён, resendPolicy больше не нужна
 	mux.Handle("POST /api/v1/auth/verify-email/resend",
 		verifyResendIPLimit(
-			middleware.ErrorMiddleware(
-				middleware.RateLimitByUser(cacheClient, resendPolicy)(h.ResendEmail),
-			),
+			middleware.ErrorMiddleware(h.ResendEmail),
 		),
 	)
+
 	verifyEmailIPLimit := middleware.RateLimit(
 		cacheClient,
 		"email-confirm",

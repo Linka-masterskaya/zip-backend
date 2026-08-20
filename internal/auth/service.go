@@ -69,6 +69,7 @@ type refreshStore interface {
 	IsFamilyRevoked(ctx context.Context, fid string) (bool, error)
 	IsSessionRevoked(ctx context.Context, rec cache.RefreshRecord) (bool, error)
 	RotateRefresh(ctx context.Context, req cache.RotateRefreshRequest) error
+	Allow(ctx context.Context, req cache.RateLimitRequest) (bool, int64, error)
 }
 
 type cryptoService interface {
@@ -375,7 +376,11 @@ func (au *authService) verifyEmail(
 }
 
 func (au *authService) resendEmail(ctx context.Context, email string) error {
-	// Ищем пользователя по email
+	email = normalizeEmail(email)
+	if err := ValidateEmail(email); err != nil {
+		return err
+	}
+
 	emailHash := au.crp.Hash([]byte(email))
 	user, err := au.repo.GetUserByEmailHash(ctx, emailHash)
 	if err != nil {
@@ -393,7 +398,6 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 		return fmt.Errorf("authService.resendEmail: parse user id: %w", err)
 	}
 
-	// Получаем email для отправки
 	cred, err := au.repo.GetAuthCredByUserID(ctx, userID)
 	if err != nil {
 		return err
