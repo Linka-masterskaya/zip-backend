@@ -206,7 +206,7 @@ type SMTPConfig struct {
 	TLS              bool          `mapstructure:"tls"`
 	Timeout          time.Duration `mapstructure:"timeout"`
 	RequireFromMatch bool          `mapstructure:"require_from_match"`
-	DailyLimit       int           `mapstructure:"daily_limit"`
+	DailyLimit       int           `mapstructure:"daily_limit_alert"`
 }
 
 // AuthConfig contains authentication and security settings.
@@ -423,7 +423,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("smtp.tls", true)
 	v.SetDefault("smtp.timeout", "10s")
 	v.SetDefault("smtp.require_from_match", false)
-	v.SetDefault("daily_limit", 300)
+	v.SetDefault("smtp.daily_limit_alert", 300)
 
 	// Crypto defaults
 	v.SetDefault("crypto.aes_key", "")

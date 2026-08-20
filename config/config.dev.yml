@@ -120,7 +120,7 @@ smtp:
   tls: false
   timeout: "10s"
   require_from_match: false
-  daily_limit: 300
+  daily_limit_alert: 300
 
 auth:
   access_token_ttl: 15m

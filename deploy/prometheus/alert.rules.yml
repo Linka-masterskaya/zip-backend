@@ -36,7 +36,7 @@ groups:
 
       # Alert on provider limit approaching (80%)
       - alert: EmailProviderLimitApproaching
-        expr: (email_sent_today / email_daily_limit) * 100 > 80
+        expr: (email_sent_today / email_daily_limit_alert) * 100 > 80
         for: 5m
         labels:
           severity: warning
@@ -46,7 +46,7 @@ groups:
 
       # Alert on provider limit critical (95%)
       - alert: EmailProviderLimitCritical
-        expr: (email_sent_today / email_daily_limit) * 100 > 95
+        expr: (email_sent_today / email_daily_limit_alert) * 100 > 95
         for: 2m
         labels:
           severity: critical

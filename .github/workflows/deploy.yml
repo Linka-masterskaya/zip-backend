@@ -136,7 +136,7 @@ jobs:
           CI_SMTP_TLS: ${{ vars.SMTP_TLS }}
           CI_SMTP_TIMEOUT: "10s"
           CI_SMTP_REQUIRE_FROM_MATCH: "true"
-          CI_SMTP_DAILY_LIMIT: "300"
+          CI_SMTP_DAILY_LIMIT_ALERT: "300"
           CI_AUTH_RESET_PASSWORD_TOKEN_TTL: "1h"
           CI_AUTH_BCRYPT_COST: "12"
           CI_AUTH_REFRESH_RATE_LIMIT: "10"

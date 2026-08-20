@@ -976,7 +976,7 @@
             "pluginVersion": "10.0.0",
             "targets": [
                 {
-                    "expr": "(email_sent_today / email_daily_limit) * 100",
+                    "expr": "(email_sent_today / email_daily_limit_alert) * 100",
                     "refId": "A"
                 }
             ],
