@@ -786,6 +786,7 @@ func TestAuthService_Register_RollbackOnCreateUserError(t *testing.T) {
 	)
 
 	err := svc.Register(context.Background(), RegisterRequest{
+		Name:     "Тест",
 		Email:    " user@example.com ",
 		Password: "strongpass123",
 	})

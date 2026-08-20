@@ -33,6 +33,7 @@ type CreateOrganizationParams struct {
 
 type CreateUserParams struct {
 	ID             uuid.UUID
+	Name           string
 	OrganizationID uuid.UUID
 }
 
@@ -552,13 +553,15 @@ func (r *authRepo) CreateUser(ctx context.Context, params CreateUserParams) erro
 	query := `
 	INSERT INTO users(
 	id,
+	display_name,
 	org_id)
 	VALUES(
 	$1,
-	$2
+	$2,
+	$3
 	)`
 
-	_, err := r.db.Exec(ctx, query, params.ID, params.OrganizationID)
+	_, err := r.db.Exec(ctx, query, params.ID, params.Name, params.OrganizationID)
 	return err
 }
 

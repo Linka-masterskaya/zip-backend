@@ -29,8 +29,8 @@ func TestServerDefaults(t *testing.T) {
 		}
 	}
 
-	if cfg.Server.MetricsPort != "9090" {
-		t.Errorf("MetricsPort = %q, want %q", cfg.Server.MetricsPort, "9090")
+	if cfg.Server.MetricsPort != "9091" {
+		t.Errorf("MetricsPort = %q, want %q", cfg.Server.MetricsPort, "9091")
 	}
 }
 

@@ -110,7 +110,7 @@ func seedStudentUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 	require.NoError(t, err)
 	_, err = pool.Exec(
 		context.Background(),
-		`INSERT INTO users (id, org_id) VALUES ($1, $2)`,
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`,
 		userID, orgID,
 	)
 	require.NoError(t, err)

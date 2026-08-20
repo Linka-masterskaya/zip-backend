@@ -45,9 +45,10 @@ components:
 
     RegisterRequest:
       type: object
-      required: [email, password]
-      description: "p18 — только email+пароль. Повтор пароля проверяет фронт."
+      required: [name, email, password]
+      description: "p18 — имя, email и пароль. Повтор пароля проверяет фронт."
       properties:
+        name:     { type: string, minLength: 2, maxLength: 100 }
         email:    { type: string, format: email }
         password: { type: string, format: password, minLength: 8, maxLength: 72 }
 
@@ -1282,3 +1283,70 @@ paths:
         '204': { description: Soft-delete выполнен }
         '404': { description: Ученик не найден }
         '409': { $ref: '#/components/responses/Conflict' }
+
+  /tts:
+    post:
+      tags: [tts]
+      summary: Создать задачу на озвучку текста
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, voice]
+              properties:
+                text:  { type: string, maxLength: 5000 }
+                voice: { type: string }
+      responses:
+        '200':
+          description: Задача создана
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /tts/{id}:
+    get:
+      tags: [tts]
+      summary: Статус задачи озвучки
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Статус задачи
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:   { type: string, enum: [pending, in_progress, succeeded, failed] }
+                  media_id: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: Задача не найдена }
+
+  /tts/voices:
+    get:
+      tags: [tts]
+      summary: Список доступных голосов
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Список голосов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  voices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:   { type: string }
+                        name: { type: string }

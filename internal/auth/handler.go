@@ -74,6 +74,7 @@ type ResetPasswordRequest struct {
 
 // RegisterRequest описывает тело запроса на регистрацию по email.
 type RegisterRequest struct {
+	Name     string `json:"name"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
@@ -308,6 +309,9 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
 		return apperr.ErrBadRequest.WithError(err)
 	}
 
+	if err := ValidateName(req.Name); err != nil {
+		return err
+	}
 	if err := ValidateEmail(req.Email); err != nil {
 		return err
 	}

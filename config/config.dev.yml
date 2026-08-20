@@ -9,6 +9,15 @@ app:
     - "127.0.0.1"
     - "10.0.0.0/8"
 
+server:
+  metrics_port: "9091"
+  read_timeout: "10s"
+  write_timeout: "30s"
+  idle_timeout: "60s"
+  metrics_read_timeout: "5s"
+  metrics_write_timeout: "5s"
+  shutdown_timeout: "30s"
+
 db:
   url: "postgres://linka:linka@localhost:5432/linka?sslmode=disable"
   max_conns: 25
@@ -111,6 +120,7 @@ smtp:
   tls: false
   timeout: "10s"
   require_from_match: false
+  daily_limit_alert: 300
 
 auth:
   access_token_ttl: 15m
@@ -172,3 +182,21 @@ cors:
     - "X-Total-Count"
   allow_credentials: true
   max_age: 86400
+
+ttsapi:
+  service_url: "https://tts.linka.su"
+  mime_type: "audio/mpeg"
+  timeout: 30s
+  rate_limit: 120
+  max_concurrent: 10
+  max_text_len: 5000
+  max_body_size: 65536
+
+cron:
+  voice_refresh:
+    interval: 1h
+  tts_cleanup:
+    interval: 6h
+    clean_period: 2160h  # 90 days
+    jobs_ttl: 72h        # 3 days
+    limit: 100

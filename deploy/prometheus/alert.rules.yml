@@ -1,0 +1,55 @@
+groups:
+  - name: email_alerts
+    interval: 30s
+    rules:
+      # Alert on email send errors
+      - alert: EmailSendErrors
+        expr: rate(email_sent_total{status="error"}[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Email send errors"
+          description: "{{ $value }} errors per second over last 5 minutes"
+
+      # Alert on error rate spike (>10%)
+      - alert: EmailErrorRateSpike
+        expr: |
+          (rate(email_sent_total{status="error"}[5m]) / 
+           (rate(email_sent_total{status="success"}[5m]) + rate(email_sent_total{status="error"}[5m]))) > 0.1
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Email error rate spike (>10%)"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      # Alert on sending stopped
+      - alert: EmailSendingStopped
+        expr: rate(email_sent_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Email sending stopped"
+          description: "No emails sent in the last 5 minutes"
+
+      # Alert on provider limit approaching (80%)
+      - alert: EmailProviderLimitApproaching
+        expr: (email_sent_today / email_daily_limit_alert) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Email provider limit approaching"
+          description: "{{ $value }}% of daily limit used"
+
+      # Alert on provider limit critical (95%)
+      - alert: EmailProviderLimitCritical
+        expr: (email_sent_today / email_daily_limit_alert) * 100 > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Email provider limit critical"
+          description: "{{ $value }}% of daily limit used"

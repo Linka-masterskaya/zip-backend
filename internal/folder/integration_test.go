@@ -192,7 +192,7 @@ func TestLibraryAdminIsScopedToOrganization(t *testing.T) {
 		`SELECT org_id FROM users WHERE id = $1`, ownerID).Scan(&ownerOrgID))
 	sameOrgHeadID := uuid.New()
 	_, err = pool.Exec(t.Context(),
-		`INSERT INTO users (id, org_id) VALUES ($1, $2)`, sameOrgHeadID, ownerOrgID)
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, sameOrgHeadID, ownerOrgID)
 	require.NoError(t, err)
 	sameOrgHeadCtx := folderContextWithRole(sameOrgHeadID, "head_defectologist")
 
@@ -233,7 +233,7 @@ func seedFolderUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 	require.NoError(t, err)
 	_, err = pool.Exec(
 		context.Background(),
-		`INSERT INTO users (id, org_id) VALUES ($1, $2)`,
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`,
 		userID, orgID,
 	)
 	require.NoError(t, err)

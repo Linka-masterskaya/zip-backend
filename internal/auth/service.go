@@ -722,7 +722,8 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 		return fmt.Errorf("authService.Register: create organization: %w", err)
 	}
 
-	userParams := CreateUserParams{ID: uuid.New(), OrganizationID: orgParams.ID}
+	name := strings.TrimSpace(req.Name)
+	userParams := CreateUserParams{ID: uuid.New(), Name: name, OrganizationID: orgParams.ID}
 
 	if err := txRepo.CreateUser(ctx, userParams); err != nil {
 		return fmt.Errorf("authService.Register: create user: %w", err)

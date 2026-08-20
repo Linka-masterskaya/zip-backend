@@ -3,14 +3,30 @@ services:
     build: .
     ports:
       - "8080:8080"
+    networks:
+      - linka-net
+    env_file:
+      - .env    
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
 
   prometheus:
     image: prom/prometheus:v2.51.0
     container_name: prometheus
     ports:
-      - "9090:9090"
+      - "9090:9090"    
+    networks:
+      - linka-net
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml
     depends_on:
       - zip-backend
 
@@ -28,6 +44,8 @@ services:
       - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources
     ports:
       - "3000:3000"
+    networks:
+      - linka-net
     depends_on:
       - prometheus
     healthcheck:
@@ -48,6 +66,8 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    networks:
+      - linka-net
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
       interval: 10s
@@ -62,6 +82,8 @@ services:
     ports:
       - "8025:8025"
       - "1025:1025"
+    networks:
+      - linka-net
     environment:
       # Приём писем без учётных данных: config.dev.yml ходит в SMTP без логина,
       # а с MP_SMTP_AUTH отправка падала на 535 и терялась в логе — регистрация
@@ -83,3 +105,6 @@ volumes:
   grafana_data:
   postgres_data:
   mailpit-data:
+    
+networks:
+  linka-net:
