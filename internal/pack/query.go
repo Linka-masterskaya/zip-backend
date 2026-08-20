@@ -445,6 +445,54 @@ const deleteVersionMediaUsagesForPackQuery = `
 	WHERE source_type = 'pack_version'
 	  AND source_id IN (SELECT id FROM pack_versions WHERE pack_id = $1)`
 
+const putFavoriteQuery = `
+	WITH accessible AS (
+		SELECT p.id
+		FROM packs p
+		JOIN users u ON u.id = $1
+		WHERE p.id = $2
+		  AND (
+			(p.owner_id = u.id AND p.org_id = u.org_id)
+			OR p.published_at IS NOT NULL
+		  )
+		  AND u.deleted_at IS NULL
+	)
+	INSERT INTO favorite_packs (user_id, pack_id)
+	SELECT $1, id FROM accessible
+	ON CONFLICT (user_id, pack_id) DO UPDATE SET pack_id = EXCLUDED.pack_id
+	RETURNING pack_id`
+
+const deleteFavoriteQuery = `
+	DELETE FROM favorite_packs WHERE user_id = $1 AND pack_id = $2`
+
+const listFavoritePacksQuery = `
+	WITH active_user AS (
+		SELECT id, org_id
+		FROM users
+		WHERE id = $1
+		  AND org_id IS NOT NULL
+		  AND deleted_at IS NULL
+	), favorites AS (
+		SELECT p.id, p.org_id, p.owner_id,
+		       CASE WHEN p.owner_id = u.id THEN p.folder_id ELSE p.library_folder_id
+		       END AS result_folder_id,
+		       p.library_folder_id, p.published_at, p.title, p.status,
+		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.created_at, p.updated_at, f.section, fp.created_at AS favorited_at
+		FROM active_user u
+		JOIN favorite_packs fp ON fp.user_id = u.id
+		JOIN packs p ON p.id = fp.pack_id AND p.org_id = u.org_id
+		JOIN folders f ON f.id = CASE WHEN p.owner_id = u.id THEN p.folder_id ELSE p.library_folder_id END
+		              AND f.org_id = u.org_id
+		WHERE p.owner_id = u.id OR p.published_at IS NOT NULL
+	)
+	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
+	       published_at, title, status, age_min, age_max, difficulty,
+	       goals, notes, config, true AS is_favorite, section, created_at, updated_at
+	FROM favorites
+	ORDER BY favorited_at DESC, id
+	LIMIT $2 OFFSET $3`
+
 const packColumns = `
 	id, org_id, owner_id, folder_id, library_folder_id, published_at,
 	title, status, age_min, age_max,
