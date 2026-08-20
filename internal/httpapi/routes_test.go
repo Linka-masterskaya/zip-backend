@@ -157,3 +157,16 @@ func TestRegisterProfileRoutesPatterns(t *testing.T) {
 		"POST /api/v1/profile/me/password",
 	})
 }
+
+func TestRegisterSettingsRoutesPatterns(t *testing.T) {
+	m := &recordingMux{}
+	RegisterSettingsRoutes(m, middleware.NewAuthMW([]byte("test-secret")), SettingsHandlers{})
+
+	assertPatterns(t, m.patterns, []string{
+		"GET /api/v1/settings",
+		"PUT /api/v1/settings",
+		"GET /api/v1/settings/templates",
+		"POST /api/v1/settings/templates",
+		"DELETE /api/v1/settings/templates/{id}",
+	})
+}

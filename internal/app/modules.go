@@ -19,6 +19,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/picturebank"
 	"github.com/Linka-masterskaya/zip-backend/internal/profile"
+	"github.com/Linka-masterskaya/zip-backend/internal/settings"
 	"github.com/Linka-masterskaya/zip-backend/internal/student"
 	"github.com/Linka-masterskaya/zip-backend/internal/tts"
 	"github.com/Linka-masterskaya/zip-backend/internal/ttsapi"
@@ -41,6 +42,7 @@ type modules struct {
 	cleaner        *auth.RegistrationCleaner
 	backgrounds    []func(context.Context) error
 	tts            httpapi.TTSHandlers
+	settings       httpapi.SettingsHandlers
 	ttsWorker      *worker.TTS
 	ttsConsumer    *broker.Consumer
 	voiceRefresher *cron.VoiceRefresher
@@ -169,6 +171,11 @@ func buildModules(in *infra) (*modules, error) {
 		},
 	)
 
+	settingsService := settings.NewService(
+		settings.NewRepository(in.db),
+		ttsService,
+	)
+
 	ttsWorker := worker.NewTTS(
 		ttsClient,
 		in.storage,
@@ -228,6 +235,9 @@ func buildModules(in *infra) (*modules, error) {
 				ttsService,
 				cfg.TTS.MaxBodySize,
 			),
+		},
+		settings: httpapi.SettingsHandlers{
+			Settings: settings.NewHandler(settingsService),
 		},
 		ttsWorker:      ttsWorker,
 		ttsConsumer:    ttsConsumer,
