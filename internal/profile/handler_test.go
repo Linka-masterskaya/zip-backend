@@ -24,6 +24,7 @@ type mockService struct {
 	updateDisplayNameFn  func(ctx context.Context, userID uuid.UUID, displayName string) (*Response, error)
 	replaceAvatarFn      func(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error)
 	deleteAvatarFn       func(ctx context.Context, userID string) error
+	deleteProfileFn      func(ctx context.Context, userID string) error
 	requestEmailChangeFn func(ctx context.Context, userID uuid.UUID, newEmail string) error
 	confirmEmailChangeFn func(ctx context.Context, tokenStr string) error
 }
@@ -52,6 +53,13 @@ func (m *mockService) ReplaceAvatar(ctx context.Context, userID string, reader i
 func (m *mockService) DeleteAvatar(ctx context.Context, userID string) error {
 	if m.deleteAvatarFn != nil {
 		return m.deleteAvatarFn(ctx, userID)
+	}
+	return nil
+}
+
+func (m *mockService) DeleteProfile(ctx context.Context, userID string) error {
+	if m.deleteProfileFn != nil {
+		return m.deleteProfileFn(ctx, userID)
 	}
 	return nil
 }
@@ -160,4 +168,26 @@ func TestHandler_GetProfile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandler_DeleteProfile(t *testing.T) {
+	userID := uuid.New()
+	called := false
+	service := &mockService{
+		deleteProfileFn: func(_ context.Context, gotUserID string) error {
+			called = true
+			assert.Equal(t, userID.String(), gotUserID)
+			return nil
+		},
+	}
+	handler := NewHandler(service)
+	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	req := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/api/v1/profile/me", nil)
+	rec := httptest.NewRecorder()
+
+	err := handler.DeleteProfile(rec, req)
+
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
 }

@@ -9,6 +9,9 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	apidocs "github.com/Linka-masterskaya/zip-backend/docs/api"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
@@ -41,8 +44,31 @@ func serveHTTPListener(srv *http.Server, ln net.Listener) error {
 	return nil
 }
 
-func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redis *cache.Client) *http.Server {
+type activeUserStore struct {
+	db *pgxpool.Pool
+}
+
+func (s activeUserStore) IsUserActive(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var active bool
+	err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL
+		)
+	`, userID).Scan(&active)
+	if err != nil {
+		return false, fmt.Errorf("check active user: %w", err)
+	}
+	return active, nil
+}
+
+func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redis *cache.Client, db *pgxpool.Pool) *http.Server {
 	authMW := middleware.NewAuthMW([]byte(cfg.JWT.Secret))
+	if redis != nil {
+		authMW = middleware.NewAuthMW([]byte(cfg.JWT.Secret), redis)
+	}
+	if db != nil {
+		authMW.WithActiveUserStore(activeUserStore{db: db})
+	}
 	mux := http.NewServeMux()
 
 	httpapi.RegisterPackRoutes(mux, authMW, rl.Packs, mods.packs)

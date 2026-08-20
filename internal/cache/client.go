@@ -25,6 +25,10 @@ var (
 	// ErrSessionRevoked is returned when a refresh token predates the
 	// user's latest bulk session revocation.
 	ErrSessionRevoked = errors.New("redis: refresh session is revoked")
+
+	// ErrUserSessionsDisabled is returned when account deletion has disabled
+	// creation of new sessions for the user.
+	ErrUserSessionsDisabled = errors.New("redis: user sessions are disabled")
 )
 
 type Config struct {
@@ -101,6 +105,57 @@ if count == 1 then
     redis.call("EXPIRE", KEYS[1], ARGV[1])
 end
 return count
+`)
+
+// storeRefreshForLogin serializes login session issuance with account
+// disabling. If deletion wins the race, no refresh session is stored. If login
+// wins, DisableUserSessions increments the version afterwards, making the
+// freshly-issued session stale before it can be used.
+//
+// Return values:
+// -1 - new sessions are disabled for the user;
+// >=0 - the session version stamped into the new refresh record.
+var storeRefreshForLogin = redis.NewScript(`
+-- KEYS[1]: refresh token key
+-- KEYS[2]: refresh family key
+-- KEYS[3]: user session version key
+-- KEYS[4]: user sessions disabled key
+
+-- ARGV[1]: family ID
+-- ARGV[2]: user ID
+-- ARGV[3]: TTL in seconds
+
+if redis.call("GET", KEYS[4]) == "1" then
+	return -1
+end
+
+local current_version = tonumber(redis.call("GET", KEYS[3]) or "0")
+redis.call(
+	"HSET",
+	KEYS[1],
+	"fid", ARGV[1],
+	"status", "active",
+	"user_id", ARGV[2],
+	"sess_ver", current_version
+)
+redis.call("EXPIRE", KEYS[1], ARGV[3])
+redis.call("SET", KEYS[2], "active", "EX", ARGV[3])
+return current_version
+`)
+
+const userSessionsDisableBarrierTTL = 10 * time.Minute
+
+// disableUserSessions atomically prevents future login sessions and advances
+// the version that invalidates all access/refresh sessions already issued.
+// The barrier has a TTL so a process crash before the PostgreSQL soft-delete
+// cannot leave an otherwise-active account permanently locked in Redis.
+var disableUserSessions = redis.NewScript(`
+-- KEYS[1]: user session version key
+-- KEYS[2]: user sessions disabled key
+-- ARGV[1]: barrier TTL in seconds
+local version = redis.call("INCR", KEYS[1])
+redis.call("SET", KEYS[2], "1", "EX", ARGV[1])
+return version
 `)
 
 // rotateRefresh atomically checks and revokes the old refresh token,
@@ -274,35 +329,76 @@ func (c *Client) IsSessionRevoked(ctx context.Context, rec RefreshRecord) (bool,
 	return rec.SessionVersion < version, nil
 }
 
-// StoreRefresh saves a refresh token and marks its family active, with ttl.
-// The record is stamped with the user's current session version
-// (RevokeAllSessions) so it can later be recognized as stale in bulk.
+// StoreRefresh saves a refresh token for non-login callers. It is kept as a
+// compatibility wrapper around StoreRefreshForLogin.
 func (c *Client) StoreRefresh(ctx context.Context, jti string, rec RefreshRecord, ttl time.Duration) error {
-	version, err := c.GetUserSessionVersion(ctx, rec.UserID)
-	if err != nil {
-		return fmt.Errorf("redis.StoreRefresh: %w", err)
-	}
-	rec.SessionVersion = version
+	_, err := c.StoreRefreshForLogin(ctx, jti, rec, ttl)
+	return err
+}
 
+// StoreRefreshForLogin atomically checks that account deletion has not disabled
+// new sessions, stores the refresh record, and returns the exact session
+// version stamped into it. The returned version must be used for the access JWT.
+func (c *Client) StoreRefreshForLogin(
+	ctx context.Context,
+	jti string,
+	rec RefreshRecord,
+	ttl time.Duration,
+) (int64, error) {
 	tokenKey := "refresh:" + jti
 	familyKey := "refresh_family:" + rec.FID
+	sessionVersionKey := "user_session_version:" + rec.UserID
+	disabledKey := "user_sessions_disabled:" + rec.UserID
 
-	_, err = c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.HSet(ctx, tokenKey, rec)
-		pipe.Expire(ctx, tokenKey, ttl)
-		pipe.Set(ctx, familyKey, "active", ttl)
-		return nil
-	})
+	version, err := storeRefreshForLogin.Run(
+		ctx,
+		c.rdb,
+		[]string{tokenKey, familyKey, sessionVersionKey, disabledKey},
+		rec.FID,
+		rec.UserID,
+		int64(ttl.Seconds()),
+	).Int64()
 	if err != nil {
-		return fmt.Errorf("redis.StoreRefresh: %w", err)
+		return 0, fmt.Errorf("redis.StoreRefreshForLogin: %w", err)
+	}
+	if version == -1 {
+		return 0, ErrUserSessionsDisabled
+	}
+	return version, nil
+}
+
+// RevokeAllSessions advances the user's session generation. Refresh records
+// from older generations become stale, and access-token middleware rejects JWTs
+// carrying an older sess_ver claim. It does not prevent future logins.
+func (c *Client) RevokeAllSessions(ctx context.Context, userID string) error {
+	if err := c.rdb.Incr(ctx, "user_session_version:"+userID).Err(); err != nil {
+		return fmt.Errorf("redis.RevokeAllSessions: %w", err)
 	}
 	return nil
 }
 
-// RevokeAllSessions invalidates every refresh token issued so far for a user.
-func (c *Client) RevokeAllSessions(ctx context.Context, userID string) error {
-	if err := c.rdb.Incr(ctx, "user_session_version:"+userID).Err(); err != nil {
-		return fmt.Errorf("redis.RevokeAllSessions: %w", err)
+// DisableUserSessions atomically blocks future login session creation and
+// invalidates every session issued before this call. It is used by soft-delete.
+func (c *Client) DisableUserSessions(ctx context.Context, userID string) error {
+	_, err := disableUserSessions.Run(
+		ctx,
+		c.rdb,
+		[]string{"user_session_version:" + userID, "user_sessions_disabled:" + userID},
+		int64(userSessionsDisableBarrierTTL.Seconds()),
+	).Int64()
+	if err != nil {
+		return fmt.Errorf("redis.DisableUserSessions: %w", err)
+	}
+	return nil
+}
+
+// EnableUserSessions removes the deletion barrier after a failed database
+// soft-delete. The already-advanced session version is intentionally retained,
+// so sessions that were revoked while attempting deletion do not become valid
+// again.
+func (c *Client) EnableUserSessions(ctx context.Context, userID string) error {
+	if err := c.rdb.Del(ctx, "user_sessions_disabled:"+userID).Err(); err != nil {
+		return fmt.Errorf("redis.EnableUserSessions: %w", err)
 	}
 	return nil
 }

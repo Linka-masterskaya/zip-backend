@@ -287,6 +287,42 @@ func TestAuthService_Register_IntegrationVerifiedEmailIsIndistinguishable(t *tes
 	assert.Equal(t, 2, mailerFake.calls)
 }
 
+func TestAuthService_Register_IntegrationSoftDeletedEmailIsIndistinguishable(t *testing.T) {
+	truncateAll(t)
+	ctx := registerCtx(t)
+
+	mailerFake := &registerMailerFake{}
+	svc := newRegisterTestService(mailerFake)
+
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Email:    "deleted@example.com",
+		Password: "strongpass123",
+	}))
+
+	_, err := testPool.Exec(ctx, `
+		UPDATE users
+		SET email_verified = true,
+			deleted_at = now()
+	`)
+	require.NoError(t, err)
+
+	// Soft-delete keeps the email reserved, but the public registration
+	// response must stay indistinguishable from a free/occupied address.
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Email:    " DELETED@example.com ",
+		Password: "anotherStrongPassword123",
+	}))
+
+	counts := getRegisterCounts(t, ctx)
+	assert.Equal(t, 1, counts.users, "soft-deleted email must remain reserved")
+	assert.Equal(t, 1, counts.organizations)
+	assert.Equal(t, 1, counts.authCred)
+	assert.Equal(t, 1, counts.verifyTokens, "a new verify token must not be issued")
+	assert.Equal(t, 2, mailerFake.calls)
+	assert.Equal(t, mailer.AccountExists, mailerFake.template)
+	assert.Equal(t, "deleted@example.com", mailerFake.to)
+}
+
 func TestAuthService_Register_MailerErrorIsSuccess(t *testing.T) {
 	truncateAll(t)
 	ctx := registerCtx(t)
