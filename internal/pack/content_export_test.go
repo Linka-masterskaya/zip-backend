@@ -26,7 +26,7 @@ func TestContentServiceExportValidatesConfigBeforeArchive(t *testing.T) {
 	}
 	service := NewContentService(repo, nil, nil, nil)
 
-	_, err := service.Export(packContext(uuid.New()), repo.pack.ID)
+	_, err := service.Export(packContext(uuid.New()), repo.pack.ID, ExportFormatLinka2)
 
 	assertAppErrorStatus(t, err, http.StatusBadRequest)
 }
@@ -40,7 +40,7 @@ func TestContentServiceExportReturnsConflictForMissingMedia(t *testing.T) {
 	}
 	service := NewContentService(repo, fakeArchiveStorage{}, nil, nil)
 
-	_, err := service.Export(packContext(uuid.New()), repo.pack.ID)
+	_, err := service.Export(packContext(uuid.New()), repo.pack.ID, ExportFormatLinka2)
 
 	var appErr *apperr.AppError
 	require.ErrorAs(t, err, &appErr)
@@ -68,7 +68,7 @@ func TestContentServiceExportReturnsConflictForMissingPicture(t *testing.T) {
 		},
 	)
 
-	_, err := service.Export(packContext(uuid.New()), repo.pack.ID)
+	_, err := service.Export(packContext(uuid.New()), repo.pack.ID, ExportFormatLinka2)
 
 	var appErr *apperr.AppError
 	require.ErrorAs(t, err, &appErr)
@@ -92,7 +92,7 @@ func TestContentServiceExportAdaptationUsesSnapshotAndSafeFilename(t *testing.T)
 		nil,
 	)
 
-	archive, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New())
+	archive, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New(), ExportFormatLinka2)
 
 	require.NoError(t, err)
 	require.NotNil(t, archive)
@@ -105,7 +105,7 @@ func TestContentServiceExportAdaptationReturnsNotFound(t *testing.T) {
 	repo := &exportContentRepository{err: ErrAdaptationNotFound}
 	service := NewContentService(repo, nil, nil, nil)
 
-	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New())
+	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New(), ExportFormatLinka2)
 
 	assertAppErrorStatus(t, err, http.StatusNotFound)
 }
@@ -119,7 +119,7 @@ func TestContentServiceExportAdaptationReturnsConflictForMissingMedia(t *testing
 	}
 	service := NewContentService(repo, fakeArchiveStorage{}, nil, nil)
 
-	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New())
+	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New(), ExportFormatLinka2)
 
 	assertAppErrorStatus(t, err, http.StatusConflict)
 }
@@ -137,7 +137,7 @@ func TestContentServiceExportAdaptationValidatesConfig(t *testing.T) {
 	}
 	service := NewContentService(repo, nil, nil, nil)
 
-	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New())
+	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New(), ExportFormatLinka2)
 
 	assertAppErrorStatus(t, err, http.StatusBadRequest)
 }
@@ -156,7 +156,7 @@ func TestContentServiceExportReturnsStreamAndSafeFilename(t *testing.T) {
 		repo, fakeArchiveStorage{objects: map[string][]byte{"object": {1, 2, 3}}}, nil, nil,
 	)
 
-	archive, err := service.Export(packContext(uuid.New()), repo.pack.ID)
+	archive, err := service.Export(packContext(uuid.New()), repo.pack.ID, ExportFormatLinka2)
 
 	require.NoError(t, err)
 	require.NotNil(t, archive)

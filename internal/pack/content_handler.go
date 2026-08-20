@@ -22,8 +22,8 @@ const (
 
 type contentService interface {
 	SaveConfig(context.Context, uuid.UUID, json.RawMessage) (*Pack, error)
-	Export(context.Context, uuid.UUID) (*ExportArchive, error)
-	ExportAdaptation(context.Context, uuid.UUID) (*ExportArchive, error)
+	Export(context.Context, uuid.UUID, ExportFormat) (*ExportArchive, error)
+	ExportAdaptation(context.Context, uuid.UUID, ExportFormat) (*ExportArchive, error)
 	Import(context.Context, string, uuid.UUID, []byte) (*Pack, error)
 	Assign(context.Context, uuid.UUID, []uuid.UUID) ([]Adaptation, error)
 	Unassign(context.Context, uuid.UUID, uuid.UUID) error
@@ -82,7 +82,11 @@ func (h *ContentHandler) Export(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	archive, err := h.service.Export(r.Context(), packID)
+	format, err := ParseExportFormat(r.URL.Query().Get("format"))
+	if err != nil {
+		return err
+	}
+	archive, err := h.service.Export(r.Context(), packID, format)
 	if err != nil {
 		return err
 	}
@@ -94,7 +98,11 @@ func (h *ContentHandler) ExportAdaptation(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return err
 	}
-	archive, err := h.service.ExportAdaptation(r.Context(), adaptationID)
+	format, err := ParseExportFormat(r.URL.Query().Get("format"))
+	if err != nil {
+		return err
+	}
+	archive, err := h.service.ExportAdaptation(r.Context(), adaptationID, format)
 	if err != nil {
 		return err
 	}

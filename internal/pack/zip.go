@@ -90,6 +90,7 @@ func buildArchive(
 	config json.RawMessage,
 	files []*media.File,
 	storageClient archiveStorage,
+	format ExportFormat,
 	pictureLoaders ...PictureLoader,
 ) (*archiveStream, error) {
 	var pictureLoader PictureLoader
@@ -97,7 +98,7 @@ func buildArchive(
 		pictureLoader = pictureLoaders[0]
 	}
 	return buildArchiveWithLimit(
-		ctx, config, files, storageClient, pictureLoader, MaxArchiveSize,
+		ctx, config, files, storageClient, pictureLoader, format, MaxArchiveSize,
 	)
 }
 
@@ -107,6 +108,7 @@ func buildArchiveWithLimit(
 	files []*media.File,
 	storageClient archiveStorage,
 	pictureLoader PictureLoader,
+	format ExportFormat,
 	maxSize int64,
 ) (*archiveStream, error) {
 	if maxSize <= 0 {
@@ -116,12 +118,18 @@ func buildArchiveWithLimit(
 	if err != nil {
 		return nil, err
 	}
+	// Конвертация идёт после prepareArchiveConfig: Linka Looks знает
+	// только пути медиа внутри архива, а их проставляет именно она.
+	configPayload, err := exportPayload(archiveConfig, format)
+	if err != nil {
+		return nil, err
+	}
 	temporary, err := os.CreateTemp("", "linka-export-*.linka")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary archive: %w", err)
 	}
 	archive, err := writeTemporaryArchive(
-		ctx, temporary, archiveConfig, archiveFiles, storageClient, pictureLoader, maxSize,
+		ctx, temporary, archiveConfig, configPayload, archiveFiles, storageClient, pictureLoader, maxSize,
 	)
 	if err != nil {
 		cleanupTemporaryArchive(temporary)
@@ -134,6 +142,7 @@ func writeTemporaryArchive(
 	ctx context.Context,
 	temporary *os.File,
 	config *linka.Config,
+	configPayload any,
 	files []*media.File,
 	storageClient archiveStorage,
 	pictureLoader PictureLoader,
@@ -149,7 +158,7 @@ func writeTemporaryArchive(
 	if err := writeArchivePictures(ctx, writer, config, pictureLoader); err != nil {
 		return nil, err
 	}
-	exportedConfig, err := json.Marshal(config)
+	exportedConfig, err := json.Marshal(configPayload)
 	if err != nil {
 		return nil, fmt.Errorf("encode exported config: %w", err)
 	}
@@ -184,6 +193,14 @@ func cleanupTemporaryArchive(temporary *os.File) {
 	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		slog.Warn("remove incomplete archive", "path", path, "err", removeErr)
 	}
+}
+
+// exportPayload выбирает, что попадёт в config.json архива.
+func exportPayload(config *linka.Config, format ExportFormat) (any, error) {
+	if format == ExportFormatLooks3 {
+		return linka.ToLooks(config)
+	}
+	return config, nil
 }
 
 func prepareArchiveConfig(

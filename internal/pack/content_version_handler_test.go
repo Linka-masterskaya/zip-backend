@@ -206,7 +206,7 @@ func (f *fakeContentVersionService) SaveConfig(
 }
 
 func (f *fakeContentVersionService) Export(
-	ctx context.Context, packID uuid.UUID,
+	ctx context.Context, packID uuid.UUID, _ ExportFormat,
 ) (*ExportArchive, error) {
 	if f.exportFn != nil {
 		return f.exportFn(ctx, packID)
@@ -215,7 +215,7 @@ func (f *fakeContentVersionService) Export(
 }
 
 func (f *fakeContentVersionService) ExportAdaptation(
-	ctx context.Context, adaptationID uuid.UUID,
+	ctx context.Context, adaptationID uuid.UUID, _ ExportFormat,
 ) (*ExportArchive, error) {
 	if f.exportAdaptationFn != nil {
 		return f.exportAdaptationFn(ctx, adaptationID)

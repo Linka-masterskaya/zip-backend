@@ -945,6 +945,20 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: format
+          in: query
+          required: false
+          description: |
+            Формат `config.json` внутри архива.
+            `linka-2` — родной Linka Config 2.0 (по умолчанию).
+            `looks-3` — формат набора Linka Looks 3.0; конвертация обязательна,
+            потому что Linka Looks 3.2.10 не читает Linka Config 2.0 и молча
+            превращает его в пустую страницу
+            (см. docs/compatibility/linka-looks/ADR-001-linka-looks-3.2.10.md).
+          schema:
+            type: string
+            enum: [linka-2, looks-3]
+            default: linka-2
       responses:
         '200':
           description: Потоковый архив до 50 MiB
@@ -960,7 +974,7 @@ paths:
               schema: { type: string, format: binary }
         '400': { description: Сохранённый config не проходит валидацию Linka 2.0 }
         '404': { description: Набор не найден }
-        '409': { description: В config есть ссылка на отсутствующий media-файл }
+        '409': { description: В config есть ссылка на отсутствующий media-файл либо набор не выражается в запрошенном формате }
         '413': { description: Архив превышает 50 MiB }
 
   /packs/{id}/adaptations:
@@ -1034,6 +1048,17 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: format
+          in: query
+          required: false
+          description: |
+            Формат `config.json` внутри архива.
+            `linka-2` — родной Linka Config 2.0 (по умолчанию).
+            `looks-3` — формат набора Linka Looks 3.0.
+          schema:
+            type: string
+            enum: [linka-2, looks-3]
+            default: linka-2
       responses:
         '200':
           description: Потоковый архив адаптации до 50 MiB

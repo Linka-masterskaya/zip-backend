@@ -23,6 +23,21 @@ jobs:
           version: latest
           args: --config=.golangci.yml
 
+  migrations:
+    name: Migration order
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete pull request history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check migration order
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/check-migration-order.sh
+
   openapi:
     name: OpenAPI
     runs-on: ubuntu-latest
@@ -280,12 +295,13 @@ jobs:
   required-pr-checks:
     name: Required PR checks
     if: always()
-    needs: [lint, openapi, test, e2e, rotation-integration, build, secret-scan, trivy]
+    needs: [lint, migrations, openapi, test, e2e, rotation-integration, build, secret-scan, trivy]
     runs-on: ubuntu-latest
     steps:
       - name: Require every PR check
         env:
           LINT_RESULT: ${{ needs.lint.result }}
+          MIGRATIONS_RESULT: ${{ needs.migrations.result }}
           OPENAPI_RESULT: ${{ needs.openapi.result }}
           TEST_RESULT: ${{ needs.test.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
@@ -295,7 +311,7 @@ jobs:
           TRIVY_RESULT: ${{ needs.trivy.result }}
         run: |
           for result in \
-            "$LINT_RESULT" "$OPENAPI_RESULT" "$TEST_RESULT" "$E2E_RESULT" \
+            "$LINT_RESULT" "$MIGRATIONS_RESULT" "$OPENAPI_RESULT" "$TEST_RESULT" "$E2E_RESULT" \
             "$ROTATION_RESULT" "$BUILD_RESULT" "$SECRET_SCAN_RESULT" "$TRIVY_RESULT"; do
             [ "$result" = "success" ] || exit 1
           done
