@@ -17,33 +17,48 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
-	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
-	"github.com/Linka-masterskaya/zip-backend/migrations"
 )
+
+// ============ Test Mocks ============
+
+type testMailer struct{}
+
+func (m *testMailer) Send(ctx context.Context, to string, tmpl mailer.Template, data mailer.EmailData) error {
+	return nil
+}
+
+type testStorage struct{}
+
+func (s *testStorage) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
+	return nil
+}
+
+func (s *testStorage) RemoveObject(ctx context.Context, key string) error {
+	return nil
+}
+
+func (s *testStorage) ObjectSize(ctx context.Context, key string) (int64, error) {
+	return 0, nil
+}
+
+func (s *testStorage) PresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	return "https://storage.test/" + key, nil
+}
+
+type fakeRevoker struct {
+	revokeErr    error
+	revokedID    string
+	revokeCalled bool
+}
+
+func (f *fakeRevoker) RevokeAllSessions(ctx context.Context, userID string) error {
+	f.revokeCalled = true
+	f.revokedID = userID
+	return f.revokeErr
+}
 
 // ============ Test Helpers ============
 
-// runMigrations applies the real migrations, so tests run against the same
-// schema as production instead of a hand-maintained copy that drifts from it.
-func runMigrations(db *sql.DB) error {
-	return migrations.Run(db)
-}
-
-// newTestCrypto creates a real cryptox instance for tests.
-func newTestCrypto(t *testing.T) *cryptox.Cryptox {
-	t.Helper()
-	aesKey := make([]byte, 32)
-	hmacKey := make([]byte, 32)
-	for i := range aesKey {
-		aesKey[i] = byte(i)
-		hmacKey[i] = byte(i + 32)
-	}
-	crypto, err := cryptox.New(aesKey, hmacKey)
-	require.NoError(t, err)
-	return crypto
-}
-
-// insertTempUser inserts a test user into users and auth_cred tables.
 func insertTempUser(ctx context.Context, db *sql.DB, id uuid.UUID, email string, crypto *cryptox.Cryptox) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO users (id, email_verified, display_name, created_at, updated_at)
@@ -82,7 +97,6 @@ func insertTempUser(ctx context.Context, db *sql.DB, id uuid.UUID, email string,
 	return err
 }
 
-// countTokens counts email_change tokens for a user.
 func countTokens(ctx context.Context, db *sql.DB, userID uuid.UUID) (int, error) {
 	var count int
 	err := db.QueryRowContext(ctx, `
@@ -93,7 +107,6 @@ func countTokens(ctx context.Context, db *sql.DB, userID uuid.UUID) (int, error)
 	return count, err
 }
 
-// getTokenByID returns a token by ID.
 func getTokenByID(ctx context.Context, db *sql.DB, id string) (*Token, error) {
 	var token Token
 	var payload []byte
@@ -135,7 +148,6 @@ func getTokenByID(ctx context.Context, db *sql.DB, id string) (*Token, error) {
 	return &token, nil
 }
 
-// getPayloadFromToken returns payload from token.
 func getPayloadFromToken(token *Token) (*EmailChangePayload, error) {
 	var payload EmailChangePayload
 	if err := json.Unmarshal([]byte(token.Payload), &payload); err != nil {
@@ -144,65 +156,34 @@ func getPayloadFromToken(token *Token) (*EmailChangePayload, error) {
 	return &payload, nil
 }
 
-// ============ Test Mocks ============
+func setupTestData(ctx context.Context, t *testing.T, userID uuid.UUID, email string) func() {
+	db := getTestDB()
+	crypto := getTestCrypto()
 
-type testMailer struct{}
+	err := insertTempUser(ctx, db, userID, email, crypto)
+	require.NoError(t, err)
 
-func (m *testMailer) Send(ctx context.Context, to string, tmpl mailer.Template, data mailer.EmailData) error {
-	return nil
-}
-
-type testStorage struct{}
-
-func (s *testStorage) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
-	return nil
-}
-
-func (s *testStorage) RemoveObject(ctx context.Context, key string) error {
-	return nil
-}
-
-func (s *testStorage) ObjectSize(ctx context.Context, key string) (int64, error) {
-	return 0, nil
-}
-
-func (s *testStorage) PresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	return "https://storage.test/" + key, nil
-}
-
-type fakeRevoker struct {
-	revokeErr    error
-	revokedID    string
-	revokeCalled bool
-}
-
-func (f *fakeRevoker) RevokeAllSessions(ctx context.Context, userID string) error {
-	f.revokeCalled = true
-	f.revokedID = userID
-	return f.revokeErr
+	return func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM verify_tokens WHERE user_id = $1", userID.String())
+		_, _ = db.ExecContext(ctx, "DELETE FROM auth_cred WHERE user_id = $1", userID.String())
+		_, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID.String())
+	}
 }
 
 // ============ Integration Tests ============
 
-// TestGenerateEmailChangeToken_Success tests token generation without email.
 func TestGenerateEmailChangeToken_Success(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	db := getTestDB()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -210,12 +191,12 @@ func TestGenerateEmailChangeToken_Success(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	cleanup := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup()
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -234,25 +215,17 @@ func TestGenerateEmailChangeToken_Success(t *testing.T) {
 	assert.Equal(t, oldEmail, payload.OldEmail)
 }
 
-// TestSendEmailChangeConfirmation_Success tests sending confirmation email.
 func TestSendEmailChangeConfirmation_Success(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -260,12 +233,12 @@ func TestSendEmailChangeConfirmation_Success(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	cleanup := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup()
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -274,25 +247,18 @@ func TestSendEmailChangeConfirmation_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestEmailChangeFlow_Integration tests the complete email change flow.
 func TestEmailChangeFlow_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	db := getTestDB()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -300,12 +266,12 @@ func TestEmailChangeFlow_Integration(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	cleanup := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup()
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -336,25 +302,17 @@ func TestEmailChangeFlow_Integration(t *testing.T) {
 	assert.Equal(t, 1, verifyCount)
 }
 
-// TestConfirmEmailChange_Integration_Success tests confirm email change directly.
 func TestConfirmEmailChange_Integration_Success(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -362,12 +320,12 @@ func TestConfirmEmailChange_Integration_Success(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	cleanup := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup()
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -380,30 +338,22 @@ func TestConfirmEmailChange_Integration_Success(t *testing.T) {
 	assert.NotEmpty(t, user.EmailEncrypted)
 	assert.False(t, user.EmailVerified)
 
-	tokenAfter, err := getTokenByID(ctx, db, token.ID)
+	tokenAfter, err := getTokenByID(ctx, getTestDB(), token.ID)
 	require.NoError(t, err)
 	assert.True(t, tokenAfter.Used)
 }
 
-// TestEmailChangeFlow_Integration_EmailAlreadyTaken tests conflict scenario.
 func TestEmailChangeFlow_Integration_EmailAlreadyTaken(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -411,39 +361,33 @@ func TestEmailChangeFlow_Integration_EmailAlreadyTaken(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID1 := uuid.New()
 	userID2 := uuid.New()
 	oldEmail := "old@example.com"
 	takenEmail := "taken@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID1, oldEmail, crypto))
-	require.NoError(t, insertTempUser(ctx, db, userID2, takenEmail, crypto))
+	cleanup1 := setupTestData(ctx, t, userID1, oldEmail)
+	defer cleanup1()
 
-	_, err = service.GenerateEmailChangeToken(ctx, userID1, takenEmail)
+	cleanup2 := setupTestData(ctx, t, userID2, takenEmail)
+	defer cleanup2()
+
+	_, err := service.GenerateEmailChangeToken(ctx, userID1, takenEmail)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmailAlreadyUsed)
 }
 
-// TestEmailChangeFlow_Integration_SameEmail tests trying to change to same email.
 func TestEmailChangeFlow_Integration_SameEmail(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -451,36 +395,28 @@ func TestEmailChangeFlow_Integration_SameEmail(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, email, crypto))
+	cleanup := setupTestData(ctx, t, userID, email)
+	defer cleanup()
 
-	_, err = service.GenerateEmailChangeToken(ctx, userID, email)
+	_, err := service.GenerateEmailChangeToken(ctx, userID, email)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmailSameAsCurrent)
 }
 
-// TestConfirmEmailChange_Integration_TokenExpired tests expired token scenario.
 func TestConfirmEmailChange_Integration_TokenExpired(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: -1 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -488,12 +424,12 @@ func TestConfirmEmailChange_Integration_TokenExpired(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	cleanup := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup()
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -507,25 +443,17 @@ func TestConfirmEmailChange_Integration_TokenExpired(t *testing.T) {
 	assert.NotEmpty(t, user.EmailEncrypted)
 }
 
-// TestConfirmEmailChange_Integration_TokenAlreadyUsed tests already used token scenario.
 func TestConfirmEmailChange_Integration_TokenAlreadyUsed(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -533,12 +461,12 @@ func TestConfirmEmailChange_Integration_TokenAlreadyUsed(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	cleanup := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup()
 
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
@@ -551,25 +479,18 @@ func TestConfirmEmailChange_Integration_TokenAlreadyUsed(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTokenAlreadyUsed)
 }
 
-// TestDeleteExpiredTokens_Integration tests expired tokens cleanup.
 func TestDeleteExpiredTokens_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
+	db := getTestDB()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: -1 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -577,12 +498,12 @@ func TestDeleteExpiredTokens_Integration(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	cleanup := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup()
 
 	for i := 0; i < 3; i++ {
 		_, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
@@ -602,25 +523,17 @@ func TestDeleteExpiredTokens_Integration(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
-// TestEmailChangeFlow_Integration_InvalidEmail tests invalid email format.
 func TestEmailChangeFlow_Integration_InvalidEmail(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -628,37 +541,29 @@ func TestEmailChangeFlow_Integration_InvalidEmail(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	invalidEmail := "invalid-email"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	cleanup := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup()
 
-	_, err = service.GenerateEmailChangeToken(ctx, userID, invalidEmail)
+	_, err := service.GenerateEmailChangeToken(ctx, userID, invalidEmail)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmailInvalid)
 }
 
-// TestEmailChangeFlow_Integration_UserNotFound tests user not found scenario.
 func TestEmailChangeFlow_Integration_UserNotFound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(getTestPool())
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
+	crypto := getTestCrypto()
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -666,11 +571,10 @@ func TestEmailChangeFlow_Integration_UserNotFound(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	newEmail := "new@example.com"
 
-	_, err = service.GenerateEmailChangeToken(ctx, userID, newEmail)
+	_, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "user not found")
 }
