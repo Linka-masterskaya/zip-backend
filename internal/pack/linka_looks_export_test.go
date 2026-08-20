@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/media"
@@ -57,6 +59,15 @@ func exportFixtureRequest(t *testing.T, query string, config []byte) *httptest.R
 func TestExportLooks3ProducesLooksSet(t *testing.T) {
 	rec := exportFixtureRequest(t, "?format=looks-3", mustReadCompatFile(t, "source-config.json"))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	// Golden нужен, чтобы прогнать архив через официальный парсер
+	// Linka Looks: docs/compatibility/linka-looks/README.md, шаг 2.
+	if os.Getenv("UPDATE_LINKA_LOOKS_FIXTURE") == "1" {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(linkaLooksFixtureDir, "backend-looks3-export.linka"),
+			rec.Body.Bytes(), 0o644,
+		))
+	}
 
 	entries := readCompatArchive(t, rec.Body.Bytes())
 	require.Contains(t, entries, "config.json")

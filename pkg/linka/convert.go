@@ -12,7 +12,7 @@ import (
 // Форматов больше одного, потому что клиенты расходятся: бэкенд
 // хранит Linka Config 2.0, а Linka Looks 3.2.10 читает собственный
 // формат набора 3.0. Совпадение строк версий обманчиво — это разные
-// схемы, см. docs/compatibility/linka-looks/ADR-001-linka-looks-3.2.10.md
+// схемы, см. docs/compatibility/linka-looks/ADR-001-linka-looks-3.2.10.md.
 type Format string
 
 const (

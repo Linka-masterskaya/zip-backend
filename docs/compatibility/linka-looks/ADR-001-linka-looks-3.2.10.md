@@ -1,6 +1,6 @@
 # ADR-001: `.linka` compatibility with Linka Looks 3.2.10
 
-- **Status:** Accepted — incompatible as-is; versioned conversion is required
+- **Status:** Accepted — incompatible as-is; versioned conversion implemented and verified against the pinned client (see «Verification of the looks-3 converter»)
 - **Date:** 2026-08-13
 - **Backend snapshot:** `zip-backend` `444c4c8339ed0319820733b62764a79b4483fcc2`
 - **Linka Looks:** release/tag `v3.2.10`, app version `3.2.10`, commit `b8e65af5825a5a3389e416253393c39d4d5353bd`
@@ -80,6 +80,46 @@ Observed behavior:
 | Backend can import the Looks 3.0 save as Linka Config 2.0 | **No** — schemas are different |
 
 Conclusion: **opening succeeds but compatibility fails**. A successful open must not be used as the acceptance signal; semantic preservation is required.
+
+
+## Verification of the looks-3 converter
+
+Дата проверки: 2026-08-20. Конвертер `linka.ToLooks` и режим экспорта
+`GET /packs/{id}/export?format=looks-3` прогнаны через **тот же** официальный
+парсер, что и в спайке: клиент склонирован на теге `v3.2.10`, коммит
+`b8e65af5825a5a3389e416253393c39d4d5353bd`, блоб `ConfigFile.ts` —
+`be3443a89839a04829dd036f2cb5bf493a35e6af`, оба хеша совпали.
+
+Фикстура — та же, что доказывала несовместимость: `single_choice` с кириллицей,
+PNG и WAV плюс `matching` из двух пар. Архив собран через реальный HTTP-обработчик
+(`internal/pack/linka_looks_export_test.go`, генерация по
+`UPDATE_LINKA_LOOKS_FIXTURE=1`) и лежит в `testdata/backend-looks3-export.linka`.
+
+| Проверка | `linka-2` (было) | `looks-3` (стало) |
+|---|---|---|
+| Архив открывается | да | да |
+| Версия формата после открытия | 3.0 (навязана клиентом) | 3.0 |
+| Режимы страниц | `standard` — задания потеряны | `quiz`, `match` |
+| Идентификаторы элементов дожили | 0 | **10 из 10** |
+| Пути медиа привязаны к карточкам | 0 | **2 из 2** |
+| Кириллица дожила | 0 | **Ёжик, Кошка, Собака** |
+| Медиа после сохранения в Looks | **оба удалены** `cleanFile` | **ничего не удалено** |
+| Идентификаторы после сохранения | 0 | **10 из 10** |
+
+Захваченные результаты: `testdata/looks-v3.2.10-looks3-export-run.json`
+(официальный парсер) и `testdata/looks-v3.2.10-looks3-roundtrip.json`
+(open + save round-trip). Строка `linka-2` в таблице — это повторный прогон
+старой фикстуры на той же машине, он воспроизвёл выводы спайка без изменений.
+
+Инструменты спайка при этом уточнены: и верификатор, и harness брали
+идентификаторы только из `blocks[]`, поэтому на формате Looks показывали
+пустой список. Теперь оба читают и `blocks[].elements[]`, и `pages[].cards[]`.
+
+**Что этим не доказано.** Проверен парсер и модель клиента, а не отрисовка:
+логика `setGameLogic.ts` и поведение на экране остаются за рамками. Продуктовые
+решения по `multi_choice`, `categories`, `sequence` и пересекающимся графам пар
+по-прежнему нужны — сейчас экспорт таких наборов отвечает `409` с указанием
+блока вместо частичного результата.
 
 ## Compatibility / conversion matrix
 

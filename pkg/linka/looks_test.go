@@ -40,19 +40,26 @@ func loadSpikeConfig(t *testing.T) *linka.Config {
 	return &cfg
 }
 
-func TestToLooksConvertsSpikeFixture(t *testing.T) {
+func convertSpikeFixture(t *testing.T) *linka.LooksConfig {
+	t.Helper()
 	got, err := linka.ToLooks(loadSpikeConfig(t))
 	if err != nil {
 		t.Fatalf("ToLooks: %v", err)
 	}
 	if got.Version != linka.LooksSetVersion {
-		t.Errorf("version = %q, want %q", got.Version, linka.LooksSetVersion)
+		t.Fatalf("version = %q, want %q", got.Version, linka.LooksSetVersion)
 	}
 	if len(got.Pages) != 2 {
 		t.Fatalf("pages = %d, want 2 (one per block)", len(got.Pages))
 	}
+	return got
+}
 
-	quiz := got.Pages[0]
+// TestToLooksConvertsSingleChoice проверяет то, что прежний экспорт
+// терял: кириллицу, пути медиа и отметку правильного ответа.
+func TestToLooksConvertsSingleChoice(t *testing.T) {
+	quiz := convertSpikeFixture(t).Pages[0]
+
 	if quiz.ID != "quiz-block" {
 		t.Errorf("page id = %q, want quiz-block", quiz.ID)
 	}
@@ -62,8 +69,6 @@ func TestToLooksConvertsSpikeFixture(t *testing.T) {
 	if quiz.Question == nil {
 		t.Error("quiz page must carry a question field")
 	}
-	// Кириллица, картинка и звук обязаны пережить конвертацию:
-	// именно их терял прежний экспорт.
 	if quiz.Cards[0].Title != "Ёжик — правильный ответ" {
 		t.Errorf("cyrillic title lost: %q", quiz.Cards[0].Title)
 	}
@@ -79,8 +84,13 @@ func TestToLooksConvertsSpikeFixture(t *testing.T) {
 	if quiz.Cards[1].Answer != nil {
 		t.Error("incorrect answer must not carry the answer flag")
 	}
+}
 
-	match := got.Pages[1]
+// TestToLooksConvertsMatching проверяет раскладку пар на линейки
+// Looks: верхняя — левые элементы, нижняя — правые.
+func TestToLooksConvertsMatching(t *testing.T) {
+	match := convertSpikeFixture(t).Pages[1]
+
 	if match.Mode != linka.LooksModeMatch {
 		t.Errorf("matching mode = %q, want %q", match.Mode, linka.LooksModeMatch)
 	}
@@ -90,8 +100,6 @@ func TestToLooksConvertsSpikeFixture(t *testing.T) {
 	if len(match.Cards) != 4 {
 		t.Fatalf("match cards = %d, want 4", len(match.Cards))
 	}
-	// Верхняя линейка — левые элементы пар, нижняя — правые,
-	// связь задаётся общим matchId.
 	if match.Cards[0].Title != "Кошка" || match.Cards[2].Title != "cat" {
 		t.Errorf("lanes are out of order: %q / %q", match.Cards[0].Title, match.Cards[2].Title)
 	}

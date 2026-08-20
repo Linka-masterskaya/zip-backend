@@ -12,7 +12,7 @@ import (
 // строки версий. Клиент не падает на чужом config.json: он молча
 // нормализует его в одну пустую страницу, поэтому конвертация обязана
 // быть явной. Детали и матрица потерь:
-// docs/compatibility/linka-looks/ADR-001-linka-looks-3.2.10.md
+// docs/compatibility/linka-looks/ADR-001-linka-looks-3.2.10.md.
 const LooksSetVersion = "3.0"
 
 // Режимы страницы Linka Looks. Значения вне этого списка клиент
