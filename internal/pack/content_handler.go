@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 )
 
@@ -22,8 +23,8 @@ const (
 
 type contentService interface {
 	SaveConfig(context.Context, uuid.UUID, json.RawMessage) (*Pack, error)
-	Export(context.Context, uuid.UUID, ExportFormat) (*ExportArchive, error)
-	ExportAdaptation(context.Context, uuid.UUID, ExportFormat) (*ExportArchive, error)
+	Export(context.Context, uuid.UUID, linka.Format) (*ExportArchive, error)
+	ExportAdaptation(context.Context, uuid.UUID, linka.Format) (*ExportArchive, error)
 	Import(context.Context, string, uuid.UUID, []byte) (*Pack, error)
 	Assign(context.Context, uuid.UUID, []uuid.UUID) ([]Adaptation, error)
 	Unassign(context.Context, uuid.UUID, uuid.UUID) error
@@ -77,12 +78,23 @@ func (h *ContentHandler) SaveConfig(w http.ResponseWriter, r *http.Request) erro
 	return writeJSON(w, http.StatusOK, result)
 }
 
+// parseExportFormat читает query-параметр format. Список допустимых
+// значений держит реестр pkg/linka, поэтому здесь нет перечисления
+// форматов.
+func parseExportFormat(r *http.Request) (linka.Format, error) {
+	format, err := linka.ParseFormat(r.URL.Query().Get("format"))
+	if err != nil {
+		return "", apperr.ErrBadRequest.WithMessage(err.Error())
+	}
+	return format, nil
+}
+
 func (h *ContentHandler) Export(w http.ResponseWriter, r *http.Request) error {
 	packID, err := pathUUID(r)
 	if err != nil {
 		return err
 	}
-	format, err := ParseExportFormat(r.URL.Query().Get("format"))
+	format, err := parseExportFormat(r)
 	if err != nil {
 		return err
 	}
@@ -98,7 +110,7 @@ func (h *ContentHandler) ExportAdaptation(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return err
 	}
-	format, err := ParseExportFormat(r.URL.Query().Get("format"))
+	format, err := parseExportFormat(r)
 	if err != nil {
 		return err
 	}

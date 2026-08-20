@@ -949,7 +949,9 @@ paths:
           in: query
           required: false
           description: |
-            Формат `config.json` внутри архива.
+            Формат `config.json` внутри архива. Список форматов задаётся
+            реестром конвертеров в `pkg/linka`; при добавлении нового формата
+            нужно расширить и этот enum.
             `linka-2` — родной Linka Config 2.0 (по умолчанию).
             `looks-3` — формат набора Linka Looks 3.0; конвертация обязательна,
             потому что Linka Looks 3.2.10 не читает Linka Config 2.0 и молча

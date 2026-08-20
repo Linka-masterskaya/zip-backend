@@ -334,3 +334,25 @@ func positiveOr(value, fallback int) int {
 	}
 	return value
 }
+
+// looks3Converter — стратегия экспорта в формат Linka Looks 3.0.
+type looks3Converter struct{}
+
+func (looks3Converter) Format() Format { return FormatLooks3 }
+
+func (looks3Converter) Description() string {
+	return "формат набора Linka Looks 3.0 (pages[].cards[]); " +
+		"multi_choice, categories и sequence не поддерживаются"
+}
+
+func (looks3Converter) Convert(cfg *Config) (any, error) {
+	looks, err := ToLooks(cfg)
+	if err != nil {
+		// Возвращаем nil явно: типизированный nil-указатель в any
+		// перестал бы быть nil для вызывающего кода.
+		return nil, err
+	}
+	return looks, nil
+}
+
+func init() { Register(looks3Converter{}) }

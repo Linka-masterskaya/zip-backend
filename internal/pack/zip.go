@@ -90,7 +90,7 @@ func buildArchive(
 	config json.RawMessage,
 	files []*media.File,
 	storageClient archiveStorage,
-	format ExportFormat,
+	format linka.Format,
 	pictureLoaders ...PictureLoader,
 ) (*archiveStream, error) {
 	var pictureLoader PictureLoader
@@ -108,7 +108,7 @@ func buildArchiveWithLimit(
 	files []*media.File,
 	storageClient archiveStorage,
 	pictureLoader PictureLoader,
-	format ExportFormat,
+	format linka.Format,
 	maxSize int64,
 ) (*archiveStream, error) {
 	if maxSize <= 0 {
@@ -196,11 +196,14 @@ func cleanupTemporaryArchive(temporary *os.File) {
 }
 
 // exportPayload выбирает, что попадёт в config.json архива.
-func exportPayload(config *linka.Config, format ExportFormat) (any, error) {
-	if format == ExportFormatLooks3 {
-		return linka.ToLooks(config)
+// Формат — данные, а не ветка в коде: конвертеры регистрируются в
+// pkg/linka, поэтому новый формат не требует правок экспорта.
+func exportPayload(config *linka.Config, format linka.Format) (any, error) {
+	converter, err := linka.ConverterFor(format)
+	if err != nil {
+		return nil, err
 	}
-	return config, nil
+	return converter.Convert(config)
 }
 
 func prepareArchiveConfig(

@@ -56,7 +56,7 @@ func TestBuildAndParseArchiveRoundTrip(t *testing.T) {
 	archive, err := buildArchive(
 		context.Background(), config, []*media.File{file},
 		fakeArchiveStorage{objects: map[string][]byte{"object": {1, 2, 3}}},
-		ExportFormatLinka2,
+		linka.FormatLinka2,
 	)
 	require.NoError(t, err)
 	path := archive.path
@@ -78,7 +78,7 @@ func TestBuildAndParseArchiveRoundTrip(t *testing.T) {
 func TestBuildArchiveRejectsMissingMediaMetadata(t *testing.T) {
 	mediaID := uuid.New()
 	config := archiveConfigWithMediaID(mediaID)
-	_, err := buildArchive(context.Background(), config, nil, fakeArchiveStorage{}, ExportFormatLinka2)
+	_, err := buildArchive(context.Background(), config, nil, fakeArchiveStorage{}, linka.FormatLinka2)
 	require.ErrorIs(t, err, ErrMissingMediaReference)
 }
 
@@ -92,7 +92,7 @@ func TestBuildArchiveRejectsMissingStorageObject(t *testing.T) {
 	_, err := buildArchive(
 		context.Background(), archiveConfigWithMediaID(mediaID), []*media.File{file},
 		fakeArchiveStorage{objects: map[string][]byte{}},
-		ExportFormatLinka2,
+		linka.FormatLinka2,
 	)
 	require.ErrorIs(t, err, ErrMissingMediaReference)
 	entries, readErr := os.ReadDir(temporaryDir)
@@ -110,7 +110,7 @@ func TestBuildArchiveEnforcesFinalZIPLimit(t *testing.T) {
 	}`)
 
 	_, err := buildArchiveWithLimit(
-		context.Background(), config, nil, nil, nil, ExportFormatLinka2, 64,
+		context.Background(), config, nil, nil, nil, linka.FormatLinka2, 64,
 	)
 
 	require.ErrorIs(t, err, ErrArchiveTooLarge)
@@ -164,7 +164,7 @@ func TestBuildArchiveResolvesPicturesBankReferenceWithoutLocalStorage(t *testing
 	}`)
 	archive, err := buildArchive(
 		context.Background(), config, nil, fakeArchiveStorage{},
-		ExportFormatLinka2,
+		linka.FormatLinka2,
 		func(_ context.Context, id uuid.UUID) ([]byte, string, error) {
 			assert.Equal(t, pictureID, id)
 			return []byte{1, 2, 3}, "image/png", nil
@@ -190,7 +190,7 @@ func TestBuildArchiveRejectsMissingPicturesBankReference(t *testing.T) {
 			"id":"e","kind":"image","source_picture_id":"` + pictureID.String() + `"
 		}]}]
 	}`)
-	_, err := buildArchive(context.Background(), config, nil, fakeArchiveStorage{}, ExportFormatLinka2)
+	_, err := buildArchive(context.Background(), config, nil, fakeArchiveStorage{}, linka.FormatLinka2)
 	require.ErrorIs(t, err, ErrMissingMediaReference)
 }
 

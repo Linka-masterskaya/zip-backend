@@ -231,42 +231,10 @@ func (s *ContentService) UpdateAdaptationConfig(
 	return result, contentError(err)
 }
 
-// ExportFormat выбирает формат config.json внутри .linka.
-//
-// Linka Looks 3.2.10 не читает Linka Config 2.0: он молча
-// нормализует чужой config в одну пустую страницу, поэтому
-// конвертация обязана запрашиваться явно.
-// См. docs/compatibility/linka-looks/ADR-001-linka-looks-3.2.10.md
-type ExportFormat string
-
-const (
-	// ExportFormatLinka2 — родной формат бэкенда, значение по умолчанию.
-	ExportFormatLinka2 ExportFormat = "linka-2"
-	// ExportFormatLooks3 — формат набора Linka Looks 3.0.
-	ExportFormatLooks3 ExportFormat = "looks-3"
-)
-
-// ParseExportFormat разбирает значение query-параметра format.
-// Пустая строка означает формат по умолчанию.
-func ParseExportFormat(raw string) (ExportFormat, error) {
-	switch ExportFormat(raw) {
-	case "":
-		return ExportFormatLinka2, nil
-	case ExportFormatLinka2:
-		return ExportFormatLinka2, nil
-	case ExportFormatLooks3:
-		return ExportFormatLooks3, nil
-	default:
-		return "", apperr.ErrBadRequest.WithMessage(
-			`format must be "linka-2" or "looks-3"`,
-		)
-	}
-}
-
 func (s *ContentService) Export(
 	ctx context.Context,
 	packID uuid.UUID,
-	format ExportFormat,
+	format linka.Format,
 ) (*ExportArchive, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
@@ -282,7 +250,7 @@ func (s *ContentService) Export(
 func (s *ContentService) ExportAdaptation(
 	ctx context.Context,
 	adaptationID uuid.UUID,
-	format ExportFormat,
+	format linka.Format,
 ) (*ExportArchive, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
@@ -300,7 +268,7 @@ func (s *ContentService) exportConfig(
 	config json.RawMessage,
 	title string,
 	files []*media.File,
-	format ExportFormat,
+	format linka.Format,
 ) (*ExportArchive, error) {
 	if _, err := validateAndMediaIDs(ctx, config, false); err != nil {
 		return nil, err

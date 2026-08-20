@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
+	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -206,7 +207,7 @@ func (f *fakeContentVersionService) SaveConfig(
 }
 
 func (f *fakeContentVersionService) Export(
-	ctx context.Context, packID uuid.UUID, _ ExportFormat,
+	ctx context.Context, packID uuid.UUID, _ linka.Format,
 ) (*ExportArchive, error) {
 	if f.exportFn != nil {
 		return f.exportFn(ctx, packID)
@@ -215,7 +216,7 @@ func (f *fakeContentVersionService) Export(
 }
 
 func (f *fakeContentVersionService) ExportAdaptation(
-	ctx context.Context, adaptationID uuid.UUID, _ ExportFormat,
+	ctx context.Context, adaptationID uuid.UUID, _ linka.Format,
 ) (*ExportArchive, error) {
 	if f.exportAdaptationFn != nil {
 		return f.exportAdaptationFn(ctx, adaptationID)
