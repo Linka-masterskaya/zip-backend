@@ -237,3 +237,46 @@ func NewPostgresCtx(ctx context.Context) (*pgxpool.Pool, func(), error) {
 
 	return dbPool, cleanup, nil
 }
+
+// NewRedisNoT starts a temporary Redis container without *testing.T.
+// Used in TestMain where *testing.T is not available.
+func NewRedisNoT() (*redis.Client, func(), error) {
+	ctx := context.Background()
+	redisContainer, err := rediscontainer.Run(ctx, "redis:7.0.11-alpine")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to start Redis container: %w", err)
+	}
+
+	uri, err := redisContainer.Endpoint(ctx, "")
+	if err != nil {
+		if err := redisContainer.Terminate(ctx); err != nil {
+			slog.Error("failed to terminate Redis container", "err", err)
+		}
+		return nil, nil, fmt.Errorf("failed to get Redis endpoint: %w", err)
+	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr: uri,
+		DB:   0,
+	})
+
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		if err := rdb.Close(); err != nil {
+			slog.Error("close redis client", "err", err)
+		}
+		if err := redisContainer.Terminate(ctx); err != nil {
+			slog.Error("failed to terminate Redis container", "err", err)
+		}
+		return nil, nil, fmt.Errorf("failed to ping Redis: %w", err)
+	}
+
+	cleanup := func() {
+		if err := rdb.Close(); err != nil {
+			slog.Error("close redis client", "err", err)
+		}
+		if err := redisContainer.Terminate(ctx); err != nil {
+			slog.Error("failed to terminate Redis container", "err", err)
+		}
+	}
+	return rdb, cleanup, nil
+}
