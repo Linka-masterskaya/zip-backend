@@ -1,0 +1,249 @@
+package worker
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/internal/tts"
+)
+
+type fakeSynthesizer struct {
+	synthesizeFn func(ctx context.Context, text, voice string) ([]byte, error)
+}
+
+func (f *fakeSynthesizer) Synthesize(ctx context.Context, text, voice string) ([]byte, error) {
+	return f.synthesizeFn(ctx, text, voice)
+}
+
+type fakeUploader struct {
+	putObjectFn func(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
+	called      bool
+}
+
+func (f *fakeUploader) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
+	f.called = true
+	if f.putObjectFn != nil {
+		return f.putObjectFn(ctx, key, reader, size, contentType)
+	}
+	return nil
+}
+
+type fakeAudioBank struct {
+	completeJobFn  func(ctx context.Context, jobID uuid.UUID, key, digest string, size int64) error
+	putToBankFn    func(ctx context.Context, entry *tts.BankEntry) error
+	completeCalled bool
+	bankCalled     bool
+	updateStatusFn func(context.Context, uuid.UUID, string) error
+}
+
+func (f *fakeAudioBank) CompleteJob(ctx context.Context, jobID uuid.UUID, key, digest string, size int64) error {
+	f.completeCalled = true
+	if f.completeJobFn != nil {
+		return f.completeJobFn(ctx, jobID, key, digest, size)
+	}
+	return nil
+}
+
+func (f *fakeAudioBank) PutToBank(ctx context.Context, entry *tts.BankEntry) error {
+	f.bankCalled = true
+	if f.putToBankFn != nil {
+		return f.putToBankFn(ctx, entry)
+	}
+	return nil
+}
+
+func (f *fakeAudioBank) UpdateStatusTTS(ctx context.Context, jobID uuid.UUID, status string) error {
+	if f.updateStatusFn != nil {
+		return f.updateStatusFn(ctx, jobID, status)
+	}
+	return nil
+}
+
+func testJob() broker.TTSJob {
+	return broker.TTSJob{
+		JobId: uuid.New().String(),
+		Text:  "привет",
+		Voice: "alena",
+	}
+}
+
+func TestHandleOK(t *testing.T) {
+	audio := []byte("fake-mp3")
+	job := testJob()
+
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, text, voice string) ([]byte, error) {
+			assert.Equal(t, job.Text, text)
+			assert.Equal(t, job.Voice, voice)
+			return audio, nil
+		},
+	}
+	stor := &fakeUploader{}
+	repo := &fakeAudioBank{}
+
+	w := NewTTS(synth, stor, repo)
+	err := w.Handle(context.Background(), job, false)
+
+	require.NoError(t, err)
+	assert.True(t, stor.called)
+	assert.True(t, repo.completeCalled)
+	assert.True(t, repo.bankCalled)
+}
+
+func TestHandleOKVerifiesKeyAndDigest(t *testing.T) {
+	audio := []byte("fake-mp3")
+	job := testJob()
+
+	expectedHash := sha256.Sum256(audio)
+	expectedDigest := hex.EncodeToString(expectedHash[:])
+
+	data, _ := json.Marshal([2]string{job.Voice, job.Text})
+	keyHash := sha256.Sum256(data)
+	expectedKey := "tts/" + hex.EncodeToString(keyHash[:])
+
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return audio, nil
+		},
+	}
+	stor := &fakeUploader{
+		putObjectFn: func(_ context.Context, key string, _ io.Reader, size int64, ct string) error {
+			assert.Equal(t, expectedKey, key)
+			assert.Equal(t, int64(len(audio)), size)
+			assert.Equal(t, "audio/mpeg", ct)
+			return nil
+		},
+	}
+	repo := &fakeAudioBank{
+		completeJobFn: func(_ context.Context, _ uuid.UUID, key, digest string, size int64) error {
+			assert.Equal(t, expectedKey, key)
+			assert.Equal(t, expectedDigest, digest)
+			assert.Equal(t, int64(len(audio)), size)
+			return nil
+		},
+		putToBankFn: func(_ context.Context, entry *tts.BankEntry) error {
+			assert.Equal(t, job.Text, entry.Text)
+			assert.Equal(t, job.Voice, entry.Voice)
+			assert.Equal(t, expectedKey, entry.MinioKey)
+			assert.Equal(t, expectedDigest, entry.SHA256)
+			return nil
+		},
+	}
+
+	w := NewTTS(synth, stor, repo)
+	err := w.Handle(context.Background(), job, false)
+	require.NoError(t, err)
+}
+
+func TestHandleSynthesizeError(t *testing.T) {
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+	stor := &fakeUploader{}
+	repo := &fakeAudioBank{}
+
+	w := NewTTS(synth, stor, repo)
+	err := w.Handle(context.Background(), testJob(), false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection refused")
+	assert.False(t, stor.called)
+	assert.False(t, repo.completeCalled)
+}
+
+func TestHandlePutObjectError(t *testing.T) {
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{
+		putObjectFn: func(_ context.Context, _ string, _ io.Reader, _ int64, _ string) error {
+			return fmt.Errorf("storage unavailable")
+		},
+	}
+	repo := &fakeAudioBank{}
+
+	w := NewTTS(synth, stor, repo)
+	err := w.Handle(context.Background(), testJob(), false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "PutObject")
+	assert.False(t, repo.completeCalled)
+}
+
+func TestHandleCompleteJobError(t *testing.T) {
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	repo := &fakeAudioBank{
+		completeJobFn: func(_ context.Context, _ uuid.UUID, _, _ string, _ int64) error {
+			return fmt.Errorf("db connection lost")
+		},
+	}
+
+	w := NewTTS(synth, stor, repo)
+	err := w.Handle(context.Background(), testJob(), false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db connection lost")
+	assert.False(t, repo.bankCalled)
+}
+
+func TestHandleInvalidJobID(t *testing.T) {
+	var synthCalled bool
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			synthCalled = true
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	repo := &fakeAudioBank{}
+
+	job := testJob()
+	job.JobId = "not-a-uuid"
+
+	w := NewTTS(synth, stor, repo)
+	err := w.Handle(context.Background(), job, false)
+
+	require.NoError(t, err, "bad job id должен ACK'аться без ошибки")
+	assert.False(t, synthCalled, "не должен синтезировать при bad job id")
+	assert.False(t, repo.completeCalled)
+}
+func TestHandlePutToBankError(t *testing.T) {
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	repo := &fakeAudioBank{
+		putToBankFn: func(_ context.Context, _ *tts.BankEntry) error {
+			return fmt.Errorf("duplicate entry")
+		},
+	}
+
+	w := NewTTS(synth, stor, repo)
+	err := w.Handle(context.Background(), testJob(), false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate entry")
+	assert.True(t, stor.called)
+	assert.True(t, repo.completeCalled)
+}

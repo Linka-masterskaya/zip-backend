@@ -12,6 +12,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const emailSentKeyPrefix = "email:sent:"
+
 var (
 	// ErrNotFound is returned when a requested Redis record does not exist.
 	ErrNotFound = errors.New("redis: key not found")
@@ -34,6 +36,11 @@ type Config struct {
 // Client wraps a Redis connection and provides rate limiting and refresh token storage.
 type Client struct {
 	rdb *redis.Client
+}
+
+// NewClientFromRedis creates 'Client' from 'redis.Client'.
+func NewClientFromRedis(rdb *redis.Client) *Client {
+	return &Client{rdb: rdb}
 }
 
 // NewClient connects to Redis and verifies the connection with a ping.
@@ -391,4 +398,63 @@ func (c *Client) Close() error {
 		return c.rdb.Close()
 	}
 	return nil
+}
+
+// emailSentKey returns the Redis key for today's email counter.
+func emailSentKey() string {
+	today := time.Now().Format("2006-01-02")
+	return emailSentKeyPrefix + today
+}
+
+// secondsUntilMidnight returns the number of seconds until the next midnight.
+func secondsUntilMidnight() int64 {
+	now := time.Now()
+	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+	return int64(tomorrow.Sub(now).Seconds())
+}
+
+// IncrEmailSentToday atomically increments today's email counter and sets TTL until midnight.
+func (c *Client) IncrEmailSentToday(ctx context.Context) (int64, error) {
+	key := emailSentKey()
+	ttl := time.Duration(secondsUntilMidnight()) * time.Second
+	if ttl <= 0 {
+		ttl = time.Second
+	}
+
+	count, err := c.IncrCounter(ctx, key, ttl)
+	if err != nil {
+		return 0, fmt.Errorf("redis.IncrEmailSentToday: %w", err)
+	}
+	return count, nil
+}
+
+// GetEmailSentToday returns today's email counter value, or 0 if no key exists.
+func (c *Client) GetEmailSentToday(ctx context.Context) (int64, error) {
+	key := emailSentKey()
+	val, err := c.rdb.Get(ctx, key).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("redis.GetEmailSentToday: %w", err)
+	}
+	return val, nil
+}
+
+// ResetEmailSentToday deletes today's email counter key.
+func (c *Client) ResetEmailSentToday(ctx context.Context) error {
+	key := emailSentKey()
+	if err := c.rdb.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("redis.ResetEmailSentToday: %w", err)
+	}
+	return nil
+}
+
+// GetTTL returns the TTL of a key for testing purposes.
+func (c *Client) GetTTL(ctx context.Context, key string) (time.Duration, error) {
+	ttl, err := c.rdb.TTL(ctx, key).Result()
+	if err != nil {
+		return 0, fmt.Errorf("redis.GetTTL: %w", err)
+	}
+	return ttl, nil
 }

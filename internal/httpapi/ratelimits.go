@@ -22,6 +22,7 @@ type RateLimits struct {
 	VerifyResend        Middleware
 	ProfileEmailChange  Middleware
 	ProfileEmailConfirm Middleware
+	TTS                 Middleware
 }
 
 // NewRateLimits builds all API rate limiters from configuration.
@@ -54,5 +55,6 @@ func NewRateLimits(c *cache.Client, cfg *config.Config) RateLimits {
 		VerifyResend:        limit("verify-resend", int64(cfg.Auth.VerifyResendRateLimit)),
 		ProfileEmailChange:  limit("profile-email-change", int64(cfg.Profile.EmailChangeRateLimit)),
 		ProfileEmailConfirm: limit("profile-email-confirm", int64(cfg.Profile.EmailConfirmRateLimit)),
+		TTS:                 limit("tts_api", int64(cfg.TTS.RateLimit)),
 	}
 }

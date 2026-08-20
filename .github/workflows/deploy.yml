@@ -136,11 +136,13 @@ jobs:
           CI_SMTP_TLS: ${{ vars.SMTP_TLS }}
           CI_SMTP_TIMEOUT: "10s"
           CI_SMTP_REQUIRE_FROM_MATCH: "true"
+          CI_SMTP_DAILY_LIMIT_ALERT: "300"
           CI_AUTH_RESET_PASSWORD_TOKEN_TTL: "1h"
           CI_AUTH_BCRYPT_COST: "12"
           CI_AUTH_REFRESH_RATE_LIMIT: "10"
           CI_GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           CI_GRAFANA_ROOT_URL: ${{ vars.GRAFANA_ROOT_URL }}
+          CI_TTSAPI_SERVICE_URL: ${{ vars.TTSAPI_SERVICE_URL }}
         run: |
           bash scripts/render-deploy-env.sh .env.example .env CI_
           bash scripts/validate-deploy-env.sh .env

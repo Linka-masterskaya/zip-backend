@@ -17,7 +17,7 @@ type folderService interface {
 	Rename(context.Context, uuid.UUID, string) (*Folder, error)
 	Move(context.Context, uuid.UUID, *uuid.UUID) (*Folder, error)
 	Delete(context.Context, uuid.UUID) error
-	Contents(context.Context, uuid.UUID, ContentsInput) (*ContentsPage, error)
+	Contents(context.Context, ContentsInput) (*ContentsPage, error)
 }
 
 type Handler struct {
@@ -57,13 +57,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) error {
-	var parentID *uuid.UUID
-	if raw := r.URL.Query().Get("parent_id"); raw != "" {
-		parsed, err := uuid.Parse(raw)
-		if err != nil {
-			return apperr.ErrBadRequest.WithMessage("parent_id must be a UUID")
-		}
-		parentID = &parsed
+	parentID, err := optionalQueryID(r, "parent_id")
+	if err != nil {
+		return err
 	}
 	limit, offset, err := pagination(r)
 	if err != nil {
@@ -80,16 +76,18 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) Contents(w http.ResponseWriter, r *http.Request) error {
-	id, err := pathID(r)
-	if err != nil {
-		return err
-	}
 	limit, offset, err := pagination(r)
 	if err != nil {
 		return err
 	}
-	result, err := h.service.Contents(r.Context(), id, ContentsInput{
-		Limit: limit, Offset: offset,
+	parentID, err := optionalQueryID(r, "parent_id")
+	if err != nil {
+		return err
+	}
+	result, err := h.service.Contents(r.Context(), ContentsInput{
+		Section:  r.PathValue("section"),
+		ParentID: parentID,
+		Limit:    limit, Offset: offset,
 		Sort: r.URL.Query().Get("sort"), Order: r.URL.Query().Get("order"),
 	})
 	if err != nil {
@@ -161,6 +159,20 @@ func queryInt(r *http.Request, name string) (int, error) {
 		return 0, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
 	}
 	return value, nil
+}
+
+// optionalQueryID parses an optional UUID query parameter. A missing or empty
+// value yields nil, which callers read as "not scoped".
+func optionalQueryID(r *http.Request, name string) (*uuid.UUID, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, apperr.ErrBadRequest.WithMessage(name + " must be a UUID")
+	}
+	return &parsed, nil
 }
 
 func pathID(r *http.Request) (uuid.UUID, error) {
