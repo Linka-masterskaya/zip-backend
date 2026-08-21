@@ -41,6 +41,23 @@ func TestRepositoryPutFavoriteAllowsPublishedPack(t *testing.T) {
 	require.NoError(t, repo.PutFavorite(t.Context(), viewerID, created.ID))
 }
 
+func TestRepositoryPutFavoriteRejectsPublishedPackFromForeignOrg(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, ownerFolderID := seedPackOwner(t, pool, "favorite publish foreign org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	_, viewerID, _ := seedPackOwner(t, pool, "favorite viewer foreign org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+	created, err := repo.Create(t.Context(), ownerID, CreateInput{Title: "Pack", FolderID: ownerFolderID, Config: config})
+	require.NoError(t, err)
+	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, false)
+	require.NoError(t, err)
+
+	err = repo.PutFavorite(t.Context(), viewerID, created.ID)
+
+	assert.ErrorIs(t, err, ErrPackNotFound)
+}
+
 func TestRepositoryPutFavoriteRejectsInaccessiblePack(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
