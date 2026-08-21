@@ -138,6 +138,68 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    LooksConfig:
+      type: object
+      description: |
+        Структура `config.json` внутри архива при `format=looks-3` — формат набора
+        Linka Looks 3.0. Отдаётся не как тело ответа, а внутри ZIP; описана здесь,
+        чтобы фронт мог собирать и разбирать такие наборы.
+        Проверено на клиенте v3.2.10: идентификаторы, пути медиа и кириллица
+        переживают открытие и обратное сохранение.
+      required: [version, columns, rows, pages]
+      properties:
+        version: { type: string, enum: ['3.0'] }
+        columns: { type: integer, minimum: 1, description: Ширина сетки по умолчанию }
+        rows: { type: integer, minimum: 1, description: Высота сетки по умолчанию }
+        description: { type: string, description: Название набора; в Looks нет отдельного поля title }
+        pages:
+          type: array
+          description: Одна страница на каждый блок исходного набора, порядок сохраняется
+          items: { $ref: '#/components/schemas/LooksPage' }
+
+    LooksPage:
+      type: object
+      required: [id, mode, columns, rows, cards]
+      properties:
+        id: { type: string, description: Идентификатор исходного блока }
+        mode:
+          type: string
+          enum: [standard, quiz, match]
+          description: |
+            `standard` — из блока `grid`; `quiz` — из `single_choice`;
+            `match` — из `matching`. Типы `multi_choice`, `categories` и
+            `sequence` в Looks не выражаются: экспорт таких наборов вернёт `409`.
+        columns: { type: integer, minimum: 1 }
+        rows:
+          type: integer
+          minimum: 1
+          description: Подбирается так, чтобы поместились все карточки — Looks обрезает страницу до rows × columns.
+        topColumns: { type: integer, minimum: 1, description: Только для `match` — размер верхней линейки }
+        bottomColumns: { type: integer, minimum: 1, description: Только для `match` — размер нижней линейки }
+        question:
+          type: string
+          description: Только для `quiz`. В Linka Config 2.0 источника нет, поэтому пустая строка.
+        cards:
+          type: array
+          items: { $ref: '#/components/schemas/LooksCard' }
+
+    LooksCard:
+      type: object
+      required: [id, cardType]
+      properties:
+        id: { type: string, description: Идентификатор исходного элемента }
+        cardType:
+          type: integer
+          enum: [0, 2]
+          description: '`0` — наполненная карточка, `2` — пустая заготовка, которой добивается сетка'
+        title: { type: string, description: Текст карточки }
+        imagePath:
+          type: string
+          description: Путь к картинке внутри архива, например `media/<uuid>.png`.
+        audioPath: { type: string, description: Путь к звуку внутри архива }
+        answer: { type: boolean, description: Только для `quiz` и только у правильных ответов }
+        matchId: { type: string, description: Только для `match`; карточки одной пары делят значение }
+
     Pack:
       type: object
       required: [id, org_id, owner_id, folder_id, title, status, goals, notes, config, created_at, updated_at]
@@ -303,6 +365,18 @@ components:
         age:            { type: integer, minimum: 0, maximum: 100, nullable: true }
         status:         { type: string, enum: [active, paused, archived, one_time] }
         last_lesson_at: { type: string, format: date, nullable: true, description: Дата последнего занятия }
+        avatar_media_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Ссылка на файл из банка медиа; `null` — аватара нет.
+        avatar_url:
+          type: string
+          nullable: true
+          description: |
+            Presigned-ссылка на аватар, выданная на это чтение и живущая 15 минут.
+            Хранить её нельзя — при следующем чтении приходит новая. Если подпись
+            не удалась, поле придёт `null`, а `avatar_media_id` останется.
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
 
@@ -945,6 +1019,23 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: format
+          in: query
+          required: false
+          description: |
+            Формат `config.json` внутри архива. Список форматов задаётся
+            реестром конвертеров в `pkg/linka`; при добавлении нового формата
+            нужно расширить и этот enum.
+            `linka-2` — родной Linka Config 2.0 (по умолчанию).
+            `looks-3` — формат набора Linka Looks 3.0; конвертация обязательна,
+            потому что Linka Looks 3.2.10 не читает Linka Config 2.0 и молча
+            превращает его в пустую страницу
+            (см. docs/compatibility/linka-looks/ADR-001-linka-looks-3.2.10.md).
+            Структура `config.json` для этого формата — схема `LooksConfig`.
+          schema:
+            type: string
+            enum: [linka-2, looks-3]
+            default: linka-2
       responses:
         '200':
           description: Потоковый архив до 50 MiB
@@ -960,7 +1051,7 @@ paths:
               schema: { type: string, format: binary }
         '400': { description: Сохранённый config не проходит валидацию Linka 2.0 }
         '404': { description: Набор не найден }
-        '409': { description: В config есть ссылка на отсутствующий media-файл }
+        '409': { description: В config есть ссылка на отсутствующий media-файл либо набор не выражается в запрошенном формате }
         '413': { description: Архив превышает 50 MiB }
 
   /packs/{id}/adaptations:
@@ -1034,6 +1125,17 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: format
+          in: query
+          required: false
+          description: |
+            Формат `config.json` внутри архива.
+            `linka-2` — родной Linka Config 2.0 (по умолчанию).
+            `looks-3` — формат набора Linka Looks 3.0.
+          schema:
+            type: string
+            enum: [linka-2, looks-3]
+            default: linka-2
       responses:
         '200':
           description: Потоковый архив адаптации до 50 MiB
@@ -1230,6 +1332,14 @@ paths:
                 name:   { type: string }
                 age:    { type: integer, minimum: 0, maximum: 100, nullable: true }
                 status: { type: string, enum: [active, paused, archived, one_time], default: active }
+                avatar_media_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: |
+                    Идентификатор файла, ранее загруженного через `POST /media`.
+                    Файл должен принадлежать организации текущего пользователя,
+                    иначе `400`.
       responses:
         '201': { description: Создан, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -1269,6 +1379,15 @@ paths:
                 name:   { type: string }
                 age:    { type: integer, minimum: 0, maximum: 100 }
                 status: { type: string, enum: [active, paused, archived, one_time] }
+                last_lesson_at: { type: string, format: date, description: Дата последнего занятия }
+                avatar_media_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: |
+                    Идентификатор файла из `POST /media`. Явный `null` снимает
+                    аватар; отсутствие поля оставляет текущий. Файл чужой
+                    организации или несуществующий — `400`.
       responses:
         '200': { description: Обновлён, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/mail"
 	"strings"
 	"time"
@@ -18,6 +19,12 @@ type repository interface {
 	List(context.Context, uuid.UUID, ListInput) ([]storedStudent, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, storedUpdate) (*storedStudent, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
+	AvatarMediaAccessible(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+}
+
+// objectStorage — часть MinIO, нужная для ссылки на аватар.
+type objectStorage interface {
+	PresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error)
 }
 
 type crypto interface {
@@ -25,13 +32,17 @@ type crypto interface {
 	Decrypt([]byte) ([]byte, error)
 }
 
+// avatarURLTTL совпадает с TTL ссылок в профиле и медиа.
+const avatarURLTTL = 15 * time.Minute
+
 type Service struct {
-	repo   repository
-	crypto crypto
+	repo    repository
+	crypto  crypto
+	storage objectStorage
 }
 
-func NewService(repo repository, crypto crypto) *Service {
-	return &Service{repo: repo, crypto: crypto}
+func NewService(repo repository, crypto crypto, storage objectStorage) *Service {
+	return &Service{repo: repo, crypto: crypto, storage: storage}
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, error) {
@@ -43,6 +54,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 	if err = validate(input.Email, input.Name, input.Age, input.Status); err != nil {
 		return nil, err
 	}
+	if err = s.checkAvatarMedia(ctx, ownerID, input.AvatarMediaID); err != nil {
+		return nil, err
+	}
 	encrypted, err := s.crypto.Encrypt([]byte(input.Email))
 	if err != nil {
 		return nil, fmt.Errorf("student encrypt email: %w", err)
@@ -51,7 +65,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 	if err != nil {
 		return nil, mapStudentError(err)
 	}
-	return s.decode(stored)
+	return s.decode(ctx, stored)
 }
 
 func (s *Service) List(ctx context.Context, input ListInput) (*ListResult, error) {
@@ -83,7 +97,7 @@ func (s *Service) List(ctx context.Context, input ListInput) (*ListResult, error
 
 	result := make([]Student, 0, len(stored))
 	for index := range stored {
-		item, decodeErr := s.decode(&stored[index])
+		item, decodeErr := s.decode(ctx, &stored[index])
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
@@ -101,8 +115,14 @@ func (s *Service) Update(
 	if err != nil {
 		return nil, err
 	}
-	if input.Email == nil && input.Name == nil && input.Age == nil && input.Status == nil && input.LastLessonAt == nil {
+	if input.Email == nil && input.Name == nil && input.Age == nil &&
+		input.Status == nil && input.LastLessonAt == nil && !input.AvatarMediaID.Set {
 		return nil, apperr.ErrBadRequest
+	}
+	if input.AvatarMediaID.Set {
+		if err = s.checkAvatarMedia(ctx, ownerID, input.AvatarMediaID.Value); err != nil {
+			return nil, err
+		}
 	}
 	storedInput, err := s.prepareUpdate(input)
 	if err != nil {
@@ -113,11 +133,14 @@ func (s *Service) Update(
 	if err != nil {
 		return nil, mapStudentError(err)
 	}
-	return s.decode(stored)
+	return s.decode(ctx, stored)
 }
 
 func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
-	result := storedUpdate{Name: input.Name, Age: input.Age, Status: input.Status, LastLessonAt: input.LastLessonAt}
+	result := storedUpdate{
+		Name: input.Name, Age: input.Age, Status: input.Status, LastLessonAt: input.LastLessonAt,
+		AvatarMediaID: input.AvatarMediaID.Value, AvatarMediaIDSet: input.AvatarMediaID.Set,
+	}
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		input.Name = &value
@@ -167,7 +190,24 @@ func (s *Service) Delete(ctx context.Context, studentID uuid.UUID) error {
 	return mapStudentError(s.repo.Delete(ctx, ownerID, studentID))
 }
 
-func (s *Service) decode(stored *storedStudent) (*Student, error) {
+// checkAvatarMedia отклоняет ссылку на чужой или несуществующий файл до
+// записи в базу, чтобы клиент получил внятную ошибку, а не нарушение
+// внешнего ключа.
+func (s *Service) checkAvatarMedia(ctx context.Context, ownerID uuid.UUID, mediaID *uuid.UUID) error {
+	if mediaID == nil {
+		return nil
+	}
+	accessible, err := s.repo.AvatarMediaAccessible(ctx, ownerID, *mediaID)
+	if err != nil {
+		return err
+	}
+	if !accessible {
+		return apperr.ErrBadRequest.WithMessage("avatar_media_id is unknown or not accessible")
+	}
+	return nil
+}
+
+func (s *Service) decode(ctx context.Context, stored *storedStudent) (*Student, error) {
 	email, err := s.crypto.Decrypt(stored.EmailEncrypted)
 	if err != nil {
 		return nil, fmt.Errorf("student decrypt email: %w", err)
@@ -175,8 +215,24 @@ func (s *Service) decode(stored *storedStudent) (*Student, error) {
 	return &Student{
 		ID: stored.ID, Email: string(email), EmailVerified: stored.EmailVerified,
 		Name: stored.Name, Age: stored.Age, Status: stored.Status, LastLessonAt: stored.LastLessonAt,
+		AvatarMediaID: stored.AvatarMediaID, AvatarURL: s.avatarURL(ctx, stored),
 		CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt,
 	}, nil
+}
+
+// avatarURL выписывает presigned-ссылку на аватар. Сбой подписи не должен
+// ронять чтение картотеки: список учеников важнее картинки, поэтому
+// возвращаем nil и пишем в лог.
+func (s *Service) avatarURL(ctx context.Context, stored *storedStudent) *string {
+	if stored.AvatarKey == nil || *stored.AvatarKey == "" || s.storage == nil {
+		return nil
+	}
+	url, err := s.storage.PresignedURL(ctx, *stored.AvatarKey, avatarURLTTL)
+	if err != nil {
+		slog.WarnContext(ctx, "student avatar url", "student_id", stored.ID, "err", err)
+		return nil
+	}
+	return &url
 }
 
 func owner(ctx context.Context) (uuid.UUID, error) {

@@ -2,6 +2,8 @@
 package student
 
 import (
+	"bytes"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,9 +17,13 @@ type Student struct {
 	Age           *int       `json:"age"`
 	Status        string     `json:"status"`
 	LastLessonAt  *time.Time `json:"last_lesson_at"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	DeletedAt     *time.Time `json:"-"`
+	AvatarMediaID *uuid.UUID `json:"avatar_media_id"`
+	// AvatarURL — presigned-ссылка, выданная на это чтение. Хранить её
+	// нельзя: она живёт 15 минут, поэтому в базе лежит avatar_media_id.
+	AvatarURL *string    `json:"avatar_url"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	DeletedAt *time.Time `json:"-"`
 }
 
 type storedStudent struct {
@@ -28,16 +34,21 @@ type storedStudent struct {
 	Age            *int
 	Status         string
 	LastLessonAt   *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	DeletedAt      *time.Time
+	AvatarMediaID  *uuid.UUID
+	// AvatarKey — ключ объекта в MinIO, подтянутый join'ом к media_files.
+	// Нужен только чтобы выписать presigned-ссылку при отдаче.
+	AvatarKey *string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt *time.Time
 }
 
 type CreateInput struct {
-	Email  string `json:"email"`
-	Name   string `json:"name"`
-	Age    *int   `json:"age"`
-	Status string `json:"status"`
+	Email         string     `json:"email"`
+	Name          string     `json:"name"`
+	Age           *int       `json:"age"`
+	Status        string     `json:"status"`
+	AvatarMediaID *uuid.UUID `json:"avatar_media_id"`
 }
 
 type UpdateInput struct {
@@ -46,16 +57,43 @@ type UpdateInput struct {
 	Age          *int       `json:"age"`
 	Status       *string    `json:"status"`
 	LastLessonAt *time.Time `json:"last_lesson_at"`
+	// AvatarMediaID различает «поле не передали» и «передали null»:
+	// null снимает аватар.
+	AvatarMediaID nullableField[uuid.UUID] `json:"avatar_media_id"`
+}
+
+// nullableField отличает отсутствующее поле JSON от переданного null.
+// Обычный указатель их не различает, а для аватара разница смысловая:
+// отсутствие — «не трогать», null — «убрать».
+type nullableField[T any] struct {
+	Set   bool
+	Value *T
+}
+
+func (f *nullableField[T]) UnmarshalJSON(data []byte) error {
+	f.Set = true
+	f.Value = nil
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return nil
+	}
+	var value T
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	f.Value = &value
+	return nil
 }
 
 type storedUpdate struct {
-	EmailEncrypted []byte
-	EmailSet       bool
-	Name           *string
-	Age            *int
-	Status         *string
-	LastLessonAt   *time.Time
-	LastLessonSet  bool
+	EmailEncrypted   []byte
+	EmailSet         bool
+	Name             *string
+	Age              *int
+	Status           *string
+	LastLessonAt     *time.Time
+	LastLessonSet    bool
+	AvatarMediaID    *uuid.UUID
+	AvatarMediaIDSet bool
 }
 
 type ListInput struct {
