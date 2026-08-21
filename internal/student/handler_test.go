@@ -1,0 +1,95 @@
+package student
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+type captureService struct {
+	update UpdateInput
+	create CreateInput
+}
+
+func (c *captureService) Create(_ context.Context, input CreateInput) (*Student, error) {
+	c.create = input
+	return &Student{ID: uuid.New()}, nil
+}
+
+func (c *captureService) List(context.Context, ListInput) (*ListResult, error) {
+	return &ListResult{}, nil
+}
+
+func (c *captureService) Update(_ context.Context, _ uuid.UUID, input UpdateInput) (*Student, error) {
+	c.update = input
+	return &Student{ID: uuid.New()}, nil
+}
+
+func (c *captureService) Delete(context.Context, uuid.UUID) error { return nil }
+
+func patchStudent(t *testing.T, body string) (*captureService, *httptest.ResponseRecorder) {
+	t.Helper()
+	service := &captureService{}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPatch, "/api/v1/students/"+uuid.New().String(), strings.NewReader(body))
+	req.SetPathValue("id", uuid.New().String())
+	rec := httptest.NewRecorder()
+	require.NoError(t, NewHandler(service).Update(rec, req))
+	return service, rec
+}
+
+// TestUpdateDistinguishesMissingAvatarFromNull — договорённость с фронтом:
+// отсутствие поля не трогает аватар, явный null его снимает.
+func TestUpdateDistinguishesMissingAvatarFromNull(t *testing.T) {
+	t.Run("поле не передано", func(t *testing.T) {
+		service, _ := patchStudent(t, `{"name":"Аня"}`)
+		assert.False(t, service.update.AvatarMediaID.Set, "аватар не должен трогаться")
+	})
+
+	t.Run("передан null", func(t *testing.T) {
+		service, _ := patchStudent(t, `{"avatar_media_id":null}`)
+		assert.True(t, service.update.AvatarMediaID.Set)
+		assert.Nil(t, service.update.AvatarMediaID.Value, "null снимает аватар")
+	})
+
+	t.Run("передан идентификатор", func(t *testing.T) {
+		mediaID := uuid.New()
+		service, _ := patchStudent(t, `{"avatar_media_id":"`+mediaID.String()+`"}`)
+		require.True(t, service.update.AvatarMediaID.Set)
+		require.NotNil(t, service.update.AvatarMediaID.Value)
+		assert.Equal(t, mediaID, *service.update.AvatarMediaID.Value)
+	})
+}
+
+func TestCreateAcceptsAvatarMediaID(t *testing.T) {
+	service := &captureService{}
+	mediaID := uuid.New()
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/students",
+		strings.NewReader(`{"email":"a@b.c","name":"Аня","avatar_media_id":"`+mediaID.String()+`"}`),
+	)
+	rec := httptest.NewRecorder()
+	require.NoError(t, NewHandler(service).Create(rec, req))
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.NotNil(t, service.create.AvatarMediaID)
+	assert.Equal(t, mediaID, *service.create.AvatarMediaID)
+}
+
+func TestUpdateRejectsMalformedAvatarMediaID(t *testing.T) {
+	service := &captureService{}
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPatch, "/api/v1/students/x",
+		strings.NewReader(`{"avatar_media_id":"not-a-uuid"}`),
+	)
+	req.SetPathValue("id", uuid.New().String())
+	rec := httptest.NewRecorder()
+
+	err := NewHandler(service).Update(rec, req)
+	require.Error(t, err, "битый uuid не должен доезжать до сервиса")
+}

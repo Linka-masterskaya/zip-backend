@@ -31,14 +31,21 @@ func (r *Repository) Create(
 	input CreateInput,
 ) (*storedStudent, error) {
 	row := r.pool.QueryRow(ctx, `
-		INSERT INTO students (
-			id, defectologist_id, email_encrypted, name, age, status
+		WITH created AS (
+			INSERT INTO students (
+				id, defectologist_id, email_encrypted, name, age, status,
+				avatar_media_id
+			)
+			SELECT $1, u.id, $3, $4, $5, $6, $7
+			FROM users u
+			WHERE u.id = $2 AND u.deleted_at IS NULL
+			RETURNING `+studentColumns+`
 		)
-		SELECT $1, u.id, $3, $4, $5, $6
-		FROM users u
-		WHERE u.id = $2 AND u.deleted_at IS NULL
-		RETURNING `+studentColumns,
-		uuid.New(), ownerID, emailEncrypted, input.Name, input.Age, input.Status)
+		SELECT `+studentColumnsWithAvatar+`
+		FROM created s
+		LEFT JOIN media_files m ON m.id = s.avatar_media_id`,
+		uuid.New(), ownerID, emailEncrypted, input.Name, input.Age, input.Status,
+		input.AvatarMediaID)
 	result, err := scanStudent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -58,9 +65,10 @@ func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInpu
 		return nil, 0, fmt.Errorf("student count: %w", err)
 	}
 	query := `
-		SELECT ` + studentColumns + `
-		FROM students
-		WHERE defectologist_id = $1 AND deleted_at IS NULL
+		SELECT ` + studentColumnsWithAvatar + `
+		FROM students s
+		LEFT JOIN media_files m ON m.id = s.avatar_media_id
+		WHERE s.defectologist_id = $1 AND s.deleted_at IS NULL
 	`
 	args := []any{ownerID}
 	argIdx := 2
@@ -78,15 +86,15 @@ func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInpu
 	var orderByClause string
 	switch sortBy {
 	case "last_lesson_at":
-		orderByClause = fmt.Sprintf("last_lesson_at %s NULLS LAST, id ASC", orderDir)
+		orderByClause = fmt.Sprintf("s.last_lesson_at %s NULLS LAST, s.id ASC", orderDir)
 	case "name":
-		orderByClause = fmt.Sprintf("lower(name) %s, id ASC", orderDir)
+		orderByClause = fmt.Sprintf("lower(s.name) %s, s.id ASC", orderDir)
 	case "age":
-		orderByClause = fmt.Sprintf("age %s, id ASC", orderDir)
+		orderByClause = fmt.Sprintf("s.age %s, s.id ASC", orderDir)
 	case "status":
-		orderByClause = fmt.Sprintf("status %s, id ASC", orderDir)
+		orderByClause = fmt.Sprintf("s.status %s, s.id ASC", orderDir)
 	default:
-		orderByClause = fmt.Sprintf("lower(name) %s, id ASC", orderDir)
+		orderByClause = fmt.Sprintf("lower(s.name) %s, s.id ASC", orderDir)
 	}
 
 	query += " ORDER BY " + orderByClause
@@ -102,14 +110,11 @@ func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInpu
 
 	var result []storedStudent
 	for rows.Next() {
-		var item storedStudent
-		if err := rows.Scan(
-			&item.ID, &item.EmailEncrypted, &item.EmailVerified, &item.Name, &item.Age, &item.Status, &item.LastLessonAt,
-			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,
-		); err != nil {
+		item, err := scanStudent(rows)
+		if err != nil {
 			return nil, 0, fmt.Errorf("student list scan: %w", err)
 		}
-		result = append(result, item)
+		result = append(result, *item)
 	}
 
 	if err = rows.Err(); err != nil {
@@ -124,19 +129,26 @@ func (r *Repository) Update(
 	input storedUpdate,
 ) (*storedStudent, error) {
 	row := r.pool.QueryRow(ctx, `
-		UPDATE students
-		SET email_encrypted = CASE WHEN $3 THEN $4 ELSE email_encrypted END,
-		    email_verified = CASE WHEN $3 THEN false ELSE email_verified END,
-		    name = COALESCE($5, name),
-		    age = COALESCE($6, age),
-		    status = COALESCE($7, status),
-			last_lesson_at = CASE WHEN $8 THEN $9 ELSE last_lesson_at END,
-		    updated_at = now()
-		WHERE id = $2 AND defectologist_id = $1 AND deleted_at IS NULL
-		RETURNING `+studentColumns,
+		WITH updated AS (
+			UPDATE students
+			SET email_encrypted = CASE WHEN $3 THEN $4 ELSE email_encrypted END,
+			    email_verified = CASE WHEN $3 THEN false ELSE email_verified END,
+			    name = COALESCE($5, name),
+			    age = COALESCE($6, age),
+			    status = COALESCE($7, status),
+			    last_lesson_at = CASE WHEN $8 THEN $9 ELSE last_lesson_at END,
+			    avatar_media_id = CASE WHEN $10 THEN $11 ELSE avatar_media_id END,
+			    updated_at = now()
+			WHERE id = $2 AND defectologist_id = $1 AND deleted_at IS NULL
+			RETURNING `+studentColumns+`
+		)
+		SELECT `+studentColumnsWithAvatar+`
+		FROM updated s
+		LEFT JOIN media_files m ON m.id = s.avatar_media_id`,
 		ownerID, studentID, input.EmailSet, input.EmailEncrypted,
 		input.Name, input.Age, input.Status,
-		input.LastLessonSet, input.LastLessonAt)
+		input.LastLessonSet, input.LastLessonAt,
+		input.AvatarMediaIDSet, input.AvatarMediaID)
 	result, err := scanStudent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -179,11 +191,36 @@ func (r *Repository) Delete(ctx context.Context, ownerID, studentID uuid.UUID) e
 	return ErrNotFound
 }
 
+// AvatarMediaAccessible сообщает, существует ли медиа-файл и принадлежит ли он
+// той же организации, что и владелец картотеки. Без проверки один
+// дефектолог мог бы поставить ученику картинку из чужой организации.
+func (r *Repository) AvatarMediaAccessible(
+	ctx context.Context,
+	ownerID, mediaID uuid.UUID,
+) (bool, error) {
+	var accessible bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM media_files m
+			JOIN users u ON u.id = $1
+			WHERE m.id = $2
+			  AND m.org_id = u.org_id
+			  AND u.org_id IS NOT NULL
+			  AND u.deleted_at IS NULL
+		)`, ownerID, mediaID).Scan(&accessible)
+	if err != nil {
+		return false, fmt.Errorf("student avatar media check: %w", err)
+	}
+	return accessible, nil
+}
+
 func scanStudent(row interface{ Scan(...any) error }) (*storedStudent, error) {
 	var result storedStudent
 	err := row.Scan(
 		&result.ID, &result.EmailEncrypted, &result.EmailVerified,
 		&result.Name, &result.Age, &result.Status, &result.LastLessonAt,
+		&result.AvatarMediaID, &result.AvatarKey,
 		&result.CreatedAt, &result.UpdatedAt, &result.DeletedAt,
 	)
 	return &result, err
@@ -191,4 +228,12 @@ func scanStudent(row interface{ Scan(...any) error }) (*storedStudent, error) {
 
 const studentColumns = `
 	id, email_encrypted, email_verified, name, age, status, last_lesson_at,
-	created_at, updated_at, deleted_at`
+	avatar_media_id, created_at, updated_at, deleted_at`
+
+// studentColumnsWithAvatar добавляет ключ объекта аватара из media_files.
+// Ключ нужен, чтобы сервис выписал presigned-ссылку; в самой таблице
+// students его нет.
+const studentColumnsWithAvatar = `
+	s.id, s.email_encrypted, s.email_verified, s.name, s.age, s.status,
+	s.last_lesson_at, s.avatar_media_id, m.minio_key,
+	s.created_at, s.updated_at, s.deleted_at`
