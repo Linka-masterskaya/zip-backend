@@ -221,11 +221,3 @@ func (h *ContentHandler) UpdateAdaptationConfig(w http.ResponseWriter, r *http.R
 	}
 	return writeJSON(w, http.StatusOK, result)
 }
-
-func versionPathValue(r *http.Request) (int, error) {
-	versionNumber, err := strconv.Atoi(r.PathValue("version"))
-	if err != nil || versionNumber < 1 {
-		return 0, apperr.ErrBadRequest.WithMessage("version must be a positive integer")
-	}
-	return versionNumber, nil
-}

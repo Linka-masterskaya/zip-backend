@@ -19,7 +19,6 @@ var (
 	ErrInvalidPackMetadata = errors.New("invalid pack metadata")
 	ErrPackPublished       = errors.New("pack is published")
 	ErrAlreadyPublished    = errors.New("pack is published in another folder")
-	ErrVersionNotFound     = errors.New("pack version not found")
 	ErrAdaptationNotFound  = errors.New("pack adaptation not found")
 )
 

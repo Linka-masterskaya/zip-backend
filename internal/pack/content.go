@@ -366,8 +366,6 @@ func contentError(err error) error {
 		return nil
 	case errors.Is(err, ErrPackNotFound):
 		return apperr.ErrNotFound
-	case errors.Is(err, ErrVersionNotFound):
-		return apperr.ErrNotFound.WithMessage("pack version not found")
 	case errors.Is(err, ErrAdaptationNotFound):
 		return apperr.ErrNotFound.WithMessage("pack adaptation not found")
 	case errors.Is(err, ErrFolderNotAllowed):
