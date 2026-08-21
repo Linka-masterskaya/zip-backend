@@ -433,7 +433,7 @@ func TestRepositoryPublicationAdminIsScopedToOrganization(t *testing.T) {
 
 	sameOrgHeadID := uuid.New()
 	_, err = pool.Exec(context.Background(),
-		`INSERT INTO users (id, org_id) VALUES ($1, $2)`, sameOrgHeadID, ownerOrgID)
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, sameOrgHeadID, ownerOrgID)
 	require.NoError(t, err)
 	published, err := repo.Publish(
 		context.Background(), sameOrgHeadID, created.ID, ownerLibraryID, true,
@@ -644,7 +644,7 @@ func seedPackOwner(t *testing.T, pool *pgxpool.Pool, orgName string) (uuid.UUID,
 	folderID := uuid.New()
 	_, err := pool.Exec(ctx, `INSERT INTO organizations (id, name) VALUES ($1, $2)`, orgID, orgName)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO users (id, org_id) VALUES ($1, $2)`, userID, orgID)
+	_, err = pool.Exec(ctx, `INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, userID, orgID)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO folders (id, org_id, owner_id, section, kind, name, depth)
@@ -689,7 +689,7 @@ func seedPackUserInOrg(
 	t.Helper()
 	userID := uuid.New()
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO users (id, org_id) VALUES ($1, $2)`, userID, orgID)
+		INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, userID, orgID)
 	require.NoError(t, err)
 	return userID, seedPackSectionFolder(t, pool, userID, section)
 }

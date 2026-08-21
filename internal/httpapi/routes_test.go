@@ -78,7 +78,7 @@ func TestRegisterFolderRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/folders",
 		"GET /api/v1/folders",
-		"GET /api/v1/folders/{id}/contents",
+		"GET /api/v1/sections/{section}/contents",
 		"PATCH /api/v1/folders/{id}",
 		"POST /api/v1/folders/{id}/move",
 		"DELETE /api/v1/folders/{id}",
@@ -145,6 +145,7 @@ func TestRegisterProfileRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"GET /api/v1/profile/me",
 		"PATCH /api/v1/profile/me",
+		"DELETE /api/v1/profile/me",
 		"PUT /api/v1/profile/me/avatar",
 		"DELETE /api/v1/profile/me/avatar",
 		"POST /api/v1/profile/me/email",

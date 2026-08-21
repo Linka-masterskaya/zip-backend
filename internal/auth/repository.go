@@ -23,6 +23,7 @@ type User struct {
 	PasswordHash  *string
 	Role          string
 	EmailVerified bool
+	Deleted       bool
 }
 
 type CreateOrganizationParams struct {
@@ -32,6 +33,7 @@ type CreateOrganizationParams struct {
 
 type CreateUserParams struct {
 	ID             uuid.UUID
+	Name           string
 	OrganizationID uuid.UUID
 }
 
@@ -102,6 +104,48 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 	return &user, nil
 }
 
+// GetUserByEmailHashForRegistration returns the owner of an email hash even
+// when the user is soft-deleted. Soft-delete intentionally keeps auth_cred so
+// the email remains reserved; registration needs to see that row to preserve
+// the anti-enumeration response instead of falling through to a unique-key
+// conflict.
+func (r *authRepo) GetUserByEmailHashForRegistration(
+	ctx context.Context,
+	emailHash []byte,
+) (*User, error) {
+	var user User
+
+	query := `
+		SELECT
+			u.id,
+			u.org_id,
+			ac.password_hash,
+			ac.role,
+			u.email_verified,
+			(u.deleted_at IS NOT NULL) AS deleted
+		FROM users u
+		JOIN auth_cred ac ON ac.user_id = u.id
+		WHERE ac.email_hash = $1
+	`
+
+	err := r.db.QueryRow(ctx, query, emailHash).Scan(
+		&user.ID,
+		&user.OrgID,
+		&user.PasswordHash,
+		&user.Role,
+		&user.EmailVerified,
+		&user.Deleted,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperr.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authRepo.GetUserByEmailHashForRegistration: %w", err)
+	}
+
+	return &user, nil
+}
+
 func (r *authRepo) GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error) {
 	var user User
 
@@ -157,6 +201,10 @@ func (r *authRepo) CreatePasswordResetToken(
 		}
 	}()
 
+	if err = lockActiveUserForTokenMutation(ctx, tx, userID); err != nil {
+		return "", err
+	}
+
 	_, err = tx.Exec(ctx, `
 		UPDATE verify_tokens
 		SET used_at = now()
@@ -209,22 +257,43 @@ func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passw
 
 	var userID uuid.UUID
 	err = tx.QueryRow(ctx, `
+		SELECT user_id
+		FROM verify_tokens
+		WHERE token_hash = $1
+		  AND purpose = $2
+		  AND used_at IS NULL
+		  AND expires_at > now()
+	`, hashPasswordResetToken(rawToken), passwordResetTokenPurpose).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", apperr.ErrInvalidResetToken
+	}
+	if err != nil {
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken find token owner: %w", err)
+	}
+
+	if err = lockActiveUserForTokenMutation(ctx, tx, userID); err != nil {
+		if errors.Is(err, apperr.ErrUserNotFound) {
+			return "", apperr.ErrInvalidResetToken
+		}
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken: %w", err)
+	}
+
+	res, err := tx.Exec(ctx, `
 		UPDATE verify_tokens
 		SET used_at = now()
 		WHERE token_hash = $1
 		  AND purpose = $2
 		  AND used_at IS NULL
 		  AND expires_at > now()
-		RETURNING user_id
-	`, hashPasswordResetToken(rawToken), passwordResetTokenPurpose).Scan(&userID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", apperr.ErrInvalidResetToken
-	}
+	`, hashPasswordResetToken(rawToken), passwordResetTokenPurpose)
 	if err != nil {
 		return "", fmt.Errorf("authRepo.ResetPasswordByToken consume token: %w", err)
 	}
+	if res.RowsAffected() == 0 {
+		return "", apperr.ErrInvalidResetToken
+	}
 
-	res, err := tx.Exec(ctx, `
+	res, err = tx.Exec(ctx, `
 		UPDATE auth_cred
 		SET password_hash = $1,
 		    updated_at = now()
@@ -235,6 +304,20 @@ func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passw
 	}
 	if res.RowsAffected() == 0 {
 		return "", apperr.ErrInternal.WithMessage("password credentials not found")
+	}
+
+	// Переход по ссылке из письма доказывает владение адресом ровно так же,
+	// как и verify-флоу. Без этого владелец захваченного адреса сбрасывает
+	// пароль, но всё равно упирается в 403 на входе.
+	if _, err = tx.Exec(ctx, `
+		UPDATE users
+		SET email_verified = true,
+		    updated_at = now()
+		WHERE id = $1
+		  AND email_verified = false
+		  AND deleted_at IS NULL
+	`, userID); err != nil {
+		return "", fmt.Errorf("authRepo.ResetPasswordByToken verify email: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -264,35 +347,73 @@ func (r *authRepo) beginTx(ctx context.Context) (pgx.Tx, error) {
 	return tx, nil
 }
 
+// lockActiveUserForTokenMutation serializes token creation/consumption with
+// profile soft-delete. Callers that perform more than one statement must pass
+// a transaction-backed DBTX so the row lock is held until commit/rollback.
+func lockActiveUserForTokenMutation(ctx context.Context, db DBTX, userID any) error {
+	var active int
+	err := db.QueryRow(ctx, `
+		SELECT 1
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR KEY SHARE
+	`, userID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apperr.ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock active user for token mutation: %w", err)
+	}
+	return nil
+}
+
 func (r *authRepo) useEmailVerifyToken(
 	ctx context.Context,
 	token []byte,
 ) (uuid.UUID, uuid.UUID, error) {
-	query := `
-		UPDATE verify_tokens
-		SET used_at = now()
-		WHERE token_hash = $1
-			AND purpose = 'email_verify'
-			AND used_at IS NULL
-			AND expires_at > now()
-		RETURNING user_id, student_id
-	`
-
 	var userIDDB, studentIDDB pgtype.UUID
-	err := r.db.QueryRow(ctx, query, token).Scan(&userIDDB, &studentIDDB)
+	err := r.db.QueryRow(ctx, `
+		SELECT user_id, student_id
+		FROM verify_tokens
+		WHERE token_hash = $1
+		  AND purpose = 'email_verify'
+		  AND used_at IS NULL
+		  AND expires_at > now()
+	`, token).Scan(&userIDDB, &studentIDDB)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid
 	}
 	if err != nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken: %w", err)
+		return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken find owner: %w", err)
 	}
 
 	var userID, studentID uuid.UUID
 	if userIDDB.Valid {
 		userID = uuid.UUID(userIDDB.Bytes)
+		if err = lockActiveUserForTokenMutation(ctx, r.db, userID); err != nil {
+			if errors.Is(err, apperr.ErrUserNotFound) {
+				return uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid
+			}
+			return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken: %w", err)
+		}
 	}
 	if studentIDDB.Valid {
 		studentID = uuid.UUID(studentIDDB.Bytes)
+	}
+
+	res, err := r.db.Exec(ctx, `
+		UPDATE verify_tokens
+		SET used_at = now()
+		WHERE token_hash = $1
+		  AND purpose = 'email_verify'
+		  AND used_at IS NULL
+		  AND expires_at > now()
+	`, token)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken consume token: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid
 	}
 
 	return userID, studentID, nil
@@ -371,12 +492,17 @@ func (r *authRepo) rotateEmailTokens(
 	expiresAt time.Time,
 ) error {
 	query := `
-		WITH invalidated AS (
+		WITH active_user AS (
+			SELECT id
+			FROM users
+			WHERE id = $1 AND deleted_at IS NULL
+			FOR KEY SHARE
+		), invalidated AS (
 			UPDATE verify_tokens
 			SET used_at = now()
-			WHERE user_id = $1
-				AND used_at IS NULL
-				AND purpose = 'email_verify'
+			WHERE user_id = (SELECT id FROM active_user)
+			  AND used_at IS NULL
+			  AND purpose = 'email_verify'
 			RETURNING 1
 		)
 		INSERT INTO verify_tokens (
@@ -386,12 +512,16 @@ func (r *authRepo) rotateEmailTokens(
 			expires_at,
 			purpose
 		)
-		VALUES ($2, $1, $3, $4, 'email_verify')
+		SELECT $2, id, $3, $4, 'email_verify'
+		FROM active_user
 	`
 
-	_, err := r.db.Exec(ctx, query, userID, tokenID, tokenHash, expiresAt)
+	res, err := r.db.Exec(ctx, query, userID, tokenID, tokenHash, expiresAt)
 	if err != nil {
 		return fmt.Errorf("authRepo.rotateEmailTokens: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return apperr.ErrUserNotFound
 	}
 
 	return nil
@@ -403,24 +533,6 @@ func isEmailHashUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) &&
 		pgErr.Code == "23505" &&
 		pgErr.ConstraintName == "auth_cred_email_hash_uniq"
-}
-
-func (r *authRepo) EmailExists(ctx context.Context, emailHash []byte) (bool, error) {
-	var exists bool
-
-	query := `
-	SELECT EXISTS(
-	SELECT *
-	FROM auth_cred
-	WHERE email_hash = $1)
-	`
-
-	err := r.db.QueryRow(ctx, query, emailHash).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-
-	return exists, nil
 }
 
 func (r *authRepo) CreateOrganization(ctx context.Context, params CreateOrganizationParams) error {
@@ -441,13 +553,15 @@ func (r *authRepo) CreateUser(ctx context.Context, params CreateUserParams) erro
 	query := `
 	INSERT INTO users(
 	id,
+	display_name,
 	org_id)
 	VALUES(
 	$1,
-	$2
+	$2,
+	$3
 	)`
 
-	_, err := r.db.Exec(ctx, query, params.ID, params.OrganizationID)
+	_, err := r.db.Exec(ctx, query, params.ID, params.Name, params.OrganizationID)
 	return err
 }
 
@@ -478,7 +592,7 @@ $5)`
 
 	if err != nil {
 		if isEmailHashUniqueViolation(err) {
-			return apperr.ErrConflict.WithMessage("email already exists")
+			return errEmailAlreadyExists
 		}
 
 		return fmt.Errorf("authRepo.CreateAuthCred: %w", err)
@@ -489,21 +603,23 @@ $5)`
 
 func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error {
 	query := `
- INSERT INTO verify_tokens (
- id,
- user_id,
- token_hash,
- expires_at,
- purpose
- )
- VALUES (
- $1,
- $2,
- $3,
- $4,
- $5)`
+	WITH active_user AS (
+		SELECT id
+		FROM users
+		WHERE id = $2 AND deleted_at IS NULL
+		FOR KEY SHARE
+	)
+	INSERT INTO verify_tokens (
+		id,
+		user_id,
+		token_hash,
+		expires_at,
+		purpose
+	)
+	SELECT $1, id, $3, $4, $5
+	FROM active_user`
 
-	_, err := r.db.Exec(
+	res, err := r.db.Exec(
 		ctx,
 		query,
 		params.ID,
@@ -512,6 +628,86 @@ func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTok
 		params.ExpiresAt,
 		params.Purpose,
 	)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return apperr.ErrUserNotFound
+	}
+	return nil
+}
 
-	return err
+// replaceUnverifiedPassword перезаписывает пароль неподтверждённой регистрации.
+// Пока адрес не подтверждён, владение им не доказала ни одна сторона, поэтому
+// повторная регистрация на тот же адрес имеет право забрать его себе.
+func (r *authRepo) replaceUnverifiedPassword(
+	ctx context.Context,
+	userID uuid.UUID,
+	passwordHash string,
+) error {
+	res, err := r.db.Exec(ctx, `
+		UPDATE auth_cred AS c
+		SET password_hash = $1,
+		    updated_at = now()
+		FROM users AS u
+		WHERE c.user_id = $2
+		  AND u.id = c.user_id
+		  AND u.email_verified = false
+		  AND u.deleted_at IS NULL
+	`, passwordHash, userID)
+	if err != nil {
+		return fmt.Errorf("authRepo.replaceUnverifiedPassword: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return apperr.ErrConflict.WithMessage("email already exists")
+	}
+	return nil
+}
+
+// DeleteStaleUnverifiedUsers удаляет регистрации, которые так и не подтвердили
+// адрес: пока он занят, настоящий владелец не может им пользоваться.
+//
+// Пользователи, успевшие что-то создать, не трогаются: packs, folders,
+// students, media_files и pack_versions ссылаются на users без каскада, и
+// фоновая задача не должна удалять данные. В проде такие строки появиться не
+// могут — неподтверждённый пользователь не проходит вход.
+func (r *authRepo) DeleteStaleUnverifiedUsers(ctx context.Context, cutoff time.Time) (int64, error) {
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: begin tx: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.ErrorContext(ctx, "tx rollback failed", logger.Err(err))
+		}
+	}()
+
+	res, err := tx.Exec(ctx, `
+		DELETE FROM users AS u
+		WHERE u.email_verified = false
+		  AND u.created_at < $1
+		  AND NOT EXISTS (SELECT 1 FROM folders     f WHERE f.owner_id = u.id)
+		  AND NOT EXISTS (SELECT 1 FROM packs       p WHERE p.owner_id = u.id)
+		  AND NOT EXISTS (SELECT 1 FROM pack_versions v WHERE v.created_by = u.id)
+		  AND NOT EXISTS (SELECT 1 FROM students    s WHERE s.defectologist_id = u.id)
+		  AND NOT EXISTS (SELECT 1 FROM media_files m WHERE m.uploader_id = u.id)
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: delete users: %w", err)
+	}
+
+	// Личная организация остаётся без владельца — убираем и её, но только если
+	// в ней действительно не осталось пользователей.
+	if _, err = tx.Exec(ctx, `
+		DELETE FROM organizations AS o
+		WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.org_id = o.id)
+	`); err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: delete orgs: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: commit: %w", err)
+	}
+
+	return res.RowsAffected(), nil
 }

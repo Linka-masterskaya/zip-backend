@@ -31,12 +31,12 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 	assert.Equal(t, "Анна", created.Name)
 	assert.Equal(t, "active", created.Status)
 
-	ownerList, err := service.List(studentContext(ownerID))
+	ownerList, err := service.List(studentContext(ownerID), ListInput{})
 	require.NoError(t, err)
-	require.Len(t, ownerList, 1)
-	foreignList, err := service.List(studentContext(foreignID))
+	require.Len(t, ownerList.Items, 1)
+	foreignList, err := service.List(studentContext(foreignID), ListInput{})
 	require.NoError(t, err)
-	assert.Empty(t, foreignList)
+	assert.Empty(t, foreignList.Items)
 
 	newName := "Анна П."
 	updated, err := service.Update(
@@ -59,9 +59,9 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, service.Delete(studentContext(ownerID), created.ID))
 
-	ownerList, err = service.List(studentContext(ownerID))
+	ownerList, err = service.List(studentContext(ownerID), ListInput{})
 	require.NoError(t, err)
-	assert.Empty(t, ownerList)
+	assert.Empty(t, ownerList.Items)
 	err = service.Delete(studentContext(foreignID), created.ID)
 	assertStudentStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
@@ -110,7 +110,7 @@ func seedStudentUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 	require.NoError(t, err)
 	_, err = pool.Exec(
 		context.Background(),
-		`INSERT INTO users (id, org_id) VALUES ($1, $2)`,
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`,
 		userID, orgID,
 	)
 	require.NoError(t, err)

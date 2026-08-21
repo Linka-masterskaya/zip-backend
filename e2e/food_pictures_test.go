@@ -87,7 +87,7 @@ func TestE2E_FoodPicturesFolderAssignedToStudent(t *testing.T) {
 	assert.Equal(t, pictureIDs(usedPictures), elementPictureIDs(configured.Blocks[0].Elements))
 	assert.NotContains(t, string(configuredPack.Config), selected[2].ID)
 
-	foodContents := e2eFolderContents(t, server, token, foodFolder.ID)
+	foodContents := e2eFolderContents(t, server, token, "my", foodFolder.ID)
 	require.Len(t, foodContents.Items, 1)
 	assert.Equal(t, folder.ContentItem{
 		Type: "pack", ID: createdPack.ID, Name: "Еда — 4 картинки",
@@ -113,7 +113,7 @@ func TestE2E_FoodPicturesFolderAssignedToStudent(t *testing.T) {
 	assert.Equal(t, createdPack.ID, assignments[0].PackID)
 	assert.JSONEq(t, string(configuredPack.Config), string(assignments[0].Config))
 
-	shelfContents := e2eFolderContents(t, server, token, studentShelf.ID)
+	shelfContents := e2eFolderContents(t, server, token, "students", studentShelf.ID)
 	require.Len(t, shelfContents.Items, 1)
 	assert.Equal(t, "pack", shelfContents.Items[0].Type)
 	assert.Equal(t, createdPack.ID, shelfContents.Items[0].ID)

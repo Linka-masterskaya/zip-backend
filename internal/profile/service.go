@@ -41,6 +41,12 @@ type RepoInterface interface {
 	RestoreAvatarIfEmpty(ctx context.Context, userID string, oldKey string, oldSize int64) (bool, error)
 	AddOrgStorageUsage(ctx context.Context, orgID string, delta int64) error
 	CurrentAvatarKey(ctx context.Context, userID string) (string, error)
+	SoftDeleteUser(ctx context.Context, userID string) (AvatarChange, error)
+	ClaimAvatarCleanupJob(ctx context.Context, objectKey string) (*AvatarCleanupJob, error)
+	SetAvatarCleanupSize(ctx context.Context, jobID int64, size int64) error
+	AdjustAvatarCleanupQuota(ctx context.Context, jobID int64, size int64) error
+	CompleteAvatarCleanup(ctx context.Context, jobID int64) error
+	RetryAvatarCleanup(ctx context.Context, jobID int64, cause error) error
 
 	FindByID(ctx context.Context, id uuid.UUID) (*User, error)
 	FindByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
@@ -58,13 +64,21 @@ type RepoInterface interface {
 	MarkTokenUsedWithTx(ctx context.Context, tx pgx.Tx, id string) error
 }
 
-// Service contains avatar and email business logic.
+// AccountSessionManager extends bulk session revocation with a deletion barrier
+// that serializes new login session creation against account soft-delete.
+type AccountSessionManager interface {
+	SessionRevoker
+	DisableUserSessions(ctx context.Context, userID string) error
+	EnableUserSessions(ctx context.Context, userID string) error
+}
+
+// Service contains profile, avatar, and email business logic.
 type Service struct {
 	repo     RepoInterface
 	storage  ObjectStorage
 	mailer   EmailSender
 	crypto   CryptoService
-	sessions SessionRevoker
+	sessions AccountSessionManager
 	emailCfg EmailConfig
 }
 
@@ -92,7 +106,7 @@ func NewService(
 	storageClient ObjectStorage,
 	mailer EmailSender,
 	crypto CryptoService,
-	sessions SessionRevoker,
+	sessions AccountSessionManager,
 	emailCfg EmailConfig,
 ) *Service {
 	return &Service{

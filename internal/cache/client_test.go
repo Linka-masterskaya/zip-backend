@@ -3,6 +3,7 @@ package cache_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -322,6 +323,90 @@ func TestCache(t *testing.T) {
 		}
 
 		require.Equal(t, 1, activeNewRecords)
+	})
+
+	t.Run("DisableUserSessions_BlocksLoginSessionAtomically", func(t *testing.T) {
+		ctx := subCtx(t)
+		flush(ctx, t, raw)
+
+		rec := cache.RefreshRecord{FID: "fam-disabled", Status: "active", UserID: "user-disabled"}
+		require.NoError(t, c.DisableUserSessions(ctx, rec.UserID))
+
+		barrierTTL, err := raw.TTL(ctx, "user_sessions_disabled:"+rec.UserID).Result()
+		require.NoError(t, err)
+		require.Greater(t, barrierTTL, time.Duration(0))
+		require.LessOrEqual(t, barrierTTL, 10*time.Minute)
+
+		_, err = c.StoreRefreshForLogin(ctx, "blocked-jti", rec, time.Minute)
+		require.ErrorIs(t, err, cache.ErrUserSessionsDisabled)
+		_, err = c.GetRefresh(ctx, "blocked-jti")
+		require.ErrorIs(t, err, cache.ErrNotFound)
+	})
+
+	t.Run("LoginSessionAndDisable_RaceAlwaysEndsRevokedOrRejected", func(t *testing.T) {
+		ctx := subCtx(t)
+		for i := 0; i < 20; i++ {
+			flush(ctx, t, raw)
+			userID := "race-user"
+			jti := "race-jti"
+			rec := cache.RefreshRecord{FID: "race-family", Status: "active", UserID: userID}
+
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			var storeVersion int64
+			var storeErr, disableErr error
+			go func() {
+				defer wg.Done()
+				<-start
+				storeVersion, storeErr = c.StoreRefreshForLogin(ctx, jti, rec, time.Minute)
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				disableErr = c.DisableUserSessions(ctx, userID)
+			}()
+			close(start)
+			wg.Wait()
+
+			require.NoError(t, disableErr)
+			if errors.Is(storeErr, cache.ErrUserSessionsDisabled) {
+				_, err := c.GetRefresh(ctx, jti)
+				require.ErrorIs(t, err, cache.ErrNotFound)
+				continue
+			}
+			require.NoError(t, storeErr)
+			stored, err := c.GetRefresh(ctx, jti)
+			require.NoError(t, err)
+			require.Equal(t, storeVersion, stored.SessionVersion)
+			revoked, err := c.IsSessionRevoked(ctx, *stored)
+			require.NoError(t, err)
+			require.True(t, revoked, "a session that wins immediately before disable must still be stale")
+		}
+	})
+
+	t.Run("EnableUserSessions_AllowsNewLoginButKeepsAdvancedVersion", func(t *testing.T) {
+		ctx := subCtx(t)
+		flush(ctx, t, raw)
+
+		const userID = "user-reenabled"
+		require.NoError(t, c.DisableUserSessions(ctx, userID))
+		versionAfterDisable, err := c.GetUserSessionVersion(ctx, userID)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), versionAfterDisable)
+
+		require.NoError(t, c.EnableUserSessions(ctx, userID))
+		version, err := c.StoreRefreshForLogin(ctx, "new-jti", cache.RefreshRecord{
+			FID:    "new-family",
+			Status: "active",
+			UserID: userID,
+		}, time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, versionAfterDisable, version)
+
+		stored, err := c.GetRefresh(ctx, "new-jti")
+		require.NoError(t, err)
+		require.Equal(t, versionAfterDisable, stored.SessionVersion)
 	})
 
 	t.Run("RotateRefresh_AfterRevokeAllSessions", func(t *testing.T) {

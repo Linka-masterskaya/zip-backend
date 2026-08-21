@@ -350,20 +350,69 @@ func (r *Repository) Delete(
 func (r *Repository) Contents(
 	ctx context.Context,
 	userID uuid.UUID,
-	folderID uuid.UUID,
 	input ContentsInput,
 ) (*ContentsPage, error) {
+	if err := r.ensureParentVisible(ctx, userID, input); err != nil {
+		return nil, err
+	}
+
+	query, args := contentsQuery(userID, input)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("folder contents: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]ContentItem, 0)
+	for rows.Next() {
+		var item ContentItem
+		if err = rows.Scan(
+			&item.Type, &item.ID, &item.Name, &item.Kind, &item.StudentID,
+			&item.Published, &item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("folder contents scan: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("folder contents rows: %w", err)
+	}
+	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset}, nil
+}
+
+// ensureParentVisible проверяет, что запрошенная папка существует и доступна.
+// Для корня раздела проверять нечего: он не строка в таблице.
+func (r *Repository) ensureParentVisible(
+	ctx context.Context,
+	userID uuid.UUID,
+	input ContentsInput,
+) error {
+	if input.ParentID == nil {
+		return nil
+	}
+
 	var section string
 	var ownerID uuid.UUID
 	err := r.pool.QueryRow(ctx, `
-		SELECT section, owner_id FROM folders WHERE id = $1`, folderID).Scan(&section, &ownerID)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && section != SectionLibrary && ownerID != userID) {
-		return nil, ErrNotFound
+		SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
+		Scan(&section, &ownerID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return fmt.Errorf("folder contents access: %w", err)
+	// Папка из другого раздела считается отсутствующей: ответ не должен
+	// подтверждать, что она существует где-то ещё.
+	case section != input.Section:
+		return ErrNotFound
+	case section != SectionLibrary && ownerID != userID:
+		return ErrNotFound
 	}
-	if err != nil {
-		return nil, fmt.Errorf("folder contents access: %w", err)
-	}
+	return nil
+}
 
+func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 	orderColumn := "name"
 	if input.Sort == "updated_at" {
 		orderColumn = "updated_at"
@@ -372,15 +421,30 @@ func (r *Repository) Contents(
 	if input.Order == "desc" {
 		direction = "DESC"
 	}
+	order := "\n\t\tORDER BY " + orderColumn + " " + direction + ", id"
+
+	if input.ParentID == nil {
+		// Корень раздела содержит только папки: packs.folder_id объявлен
+		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
+		query := `
+		SELECT 'folder'::text AS type, f.id, f.name, f.kind,
+		       f.student_id, false AS published, f.updated_at
+		FROM folders f
+		WHERE f.parent_id IS NULL
+		  AND f.section = $2
+		  AND ($2 = 'library' OR f.owner_id = $1)` + order + `
+		LIMIT $3 OFFSET $4`
+		return query, []any{userID, input.Section, input.Limit, input.Offset}
+	}
 
 	packFolderColumn := "p.folder_id"
 	packScope := "AND p.owner_id = $2"
-	if section == SectionLibrary {
+	if input.Section == SectionLibrary {
 		packFolderColumn = "p.library_folder_id"
 		packScope = "AND p.published_at IS NOT NULL"
 	}
 	studentAssignments := ""
-	if section == SectionStudents {
+	if input.Section == SectionStudents {
 		studentAssignments = `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
@@ -407,30 +471,9 @@ func (r *Repository) Contents(
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at
-		FROM items
-		ORDER BY ` + orderColumn + ` ` + direction + `, id
+		FROM items` + order + `
 		LIMIT $4 OFFSET $5`
-	rows, err := r.pool.Query(ctx, query, folderID, userID, section, input.Limit, input.Offset)
-	if err != nil {
-		return nil, fmt.Errorf("folder contents: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]ContentItem, 0)
-	for rows.Next() {
-		var item ContentItem
-		if err = rows.Scan(
-			&item.Type, &item.ID, &item.Name, &item.Kind, &item.StudentID,
-			&item.Published, &item.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("folder contents scan: %w", err)
-		}
-		items = append(items, item)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("folder contents rows: %w", err)
-	}
-	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset}, nil
+	return query, []any{*input.ParentID, userID, input.Section, input.Limit, input.Offset}
 }
 
 func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {

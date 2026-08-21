@@ -36,6 +36,7 @@ type ProfService interface {
 	UpdateDisplayName(ctx context.Context, userID uuid.UUID, displayName string) (*Response, error)
 	ReplaceAvatar(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error)
 	DeleteAvatar(ctx context.Context, userID string) error
+	DeleteProfile(ctx context.Context, userID string) error
 
 	RequestEmailChange(ctx context.Context, userID uuid.UUID, newEmail string) error
 	ConfirmEmailChange(ctx context.Context, tokenStr string) error
@@ -125,6 +126,21 @@ func decodeUpdateProfileRequest(r *http.Request) (updateProfileRequest, error) {
 		return updateProfileRequest{}, apperr.ErrBadRequest.WithMessage("display_name is required")
 	}
 	return req, nil
+}
+
+// DeleteProfile handles DELETE /profile/me.
+func (h *Handler) DeleteProfile(w http.ResponseWriter, r *http.Request) error {
+	userID, err := authctx.UserIDFromCtx(r.Context())
+	if err != nil {
+		return err
+	}
+
+	if err := h.service.DeleteProfile(r.Context(), userID.String()); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 // UploadAvatar handles PUT /profile/me/avatar.

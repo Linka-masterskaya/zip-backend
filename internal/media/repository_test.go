@@ -25,7 +25,7 @@ func TestRepositoryDeduplicatesQuotaAndProtectsUsages(t *testing.T) {
 		INSERT INTO organizations (id, name) VALUES ($1, 'media org')`, orgID)
 	require.NoError(t, err)
 	_, err = pool.Exec(t.Context(), `
-		INSERT INTO users (id, org_id) VALUES ($1, $2)`, userID, orgID)
+		INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, userID, orgID)
 	require.NoError(t, err)
 
 	repo := NewRepository(pool)
@@ -74,7 +74,7 @@ func TestRepositoryListScopesSearchesFiltersAndPaginatesByCursor(t *testing.T) {
 		orgID, otherOrgID)
 	require.NoError(t, err)
 	_, err = pool.Exec(t.Context(), `
-		INSERT INTO users (id, org_id) VALUES ($1, $2)`, userID, orgID)
+    INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, userID, orgID)
 	require.NoError(t, err)
 
 	repo := NewRepository(pool)

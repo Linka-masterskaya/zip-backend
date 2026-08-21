@@ -182,6 +182,14 @@ func (f *fakeRevoker) RevokeAllSessions(ctx context.Context, userID string) erro
 	return f.revokeErr
 }
 
+func (f *fakeRevoker) DisableUserSessions(ctx context.Context, userID string) error {
+	return f.RevokeAllSessions(ctx, userID)
+}
+
+func (f *fakeRevoker) EnableUserSessions(_ context.Context, _ string) error {
+	return nil
+}
+
 // ============ Integration Tests ============
 
 // TestGenerateEmailChangeToken_Success tests token generation without email.
@@ -423,6 +431,99 @@ func TestEmailChangeFlow_Integration_EmailAlreadyTaken(t *testing.T) {
 	_, err = service.GenerateEmailChangeToken(ctx, userID1, takenEmail)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmailAlreadyUsed)
+}
+
+func TestEmailChangeFlow_Integration_SoftDeletedEmailReserved(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	dbPool, cleanup := testutil.NewPostgres(t)
+	defer cleanup()
+
+	db, err := sql.Open("pgx", dbPool.Config().ConnString())
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, runMigrations(db))
+
+	repo := NewRepository(dbPool)
+	mailer := &testMailer{}
+	storage := &testStorage{}
+	crypto := newTestCrypto(t)
+	emailCfg := EmailConfig{
+		EmailChangeTTL: 24 * time.Hour,
+		EmailVerifyTTL: 24 * time.Hour,
+	}
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
+
+	ctx := context.Background()
+	userID := uuid.New()
+	deletedUserID := uuid.New()
+	oldEmail := "owner@example.com"
+	reservedEmail := "deleted@example.com"
+
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	require.NoError(t, insertTempUser(ctx, db, deletedUserID, reservedEmail, crypto))
+	_, err = db.ExecContext(ctx, `UPDATE users SET deleted_at = now() WHERE id = $1`, deletedUserID)
+	require.NoError(t, err)
+
+	_, err = service.GenerateEmailChangeToken(ctx, userID, reservedEmail)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEmailAlreadyUsed)
+
+	count, err := countTokens(ctx, db, userID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestConfirmEmailChange_Integration_SoftDeletedEmailBecomesReserved(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	dbPool, cleanup := testutil.NewPostgres(t)
+	defer cleanup()
+
+	db, err := sql.Open("pgx", dbPool.Config().ConnString())
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, runMigrations(db))
+
+	repo := NewRepository(dbPool)
+	mailer := &testMailer{}
+	storage := &testStorage{}
+	crypto := newTestCrypto(t)
+	emailCfg := EmailConfig{
+		EmailChangeTTL: 24 * time.Hour,
+		EmailVerifyTTL: 24 * time.Hour,
+	}
+	sessions := &fakeRevoker{}
+	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
+
+	ctx := context.Background()
+	userID := uuid.New()
+	oldEmail := "owner@example.com"
+	newEmail := "later-reserved@example.com"
+
+	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
+	require.NoError(t, err)
+
+	deletedUserID := uuid.New()
+	require.NoError(t, insertTempUser(ctx, db, deletedUserID, newEmail, crypto))
+	_, err = db.ExecContext(ctx, `UPDATE users SET deleted_at = now() WHERE id = $1`, deletedUserID)
+	require.NoError(t, err)
+
+	err = service.ConfirmEmailChange(ctx, token.Token)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEmailAlreadyUsed)
+
+	storedToken, err := getTokenByID(ctx, db, token.ID)
+	require.NoError(t, err)
+	assert.False(t, storedToken.Used)
 }
 
 // TestEmailChangeFlow_Integration_SameEmail tests trying to change to same email.
