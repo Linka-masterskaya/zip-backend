@@ -227,20 +227,8 @@ func (r *exportContentRepository) CreateVersion(
 	return nil, nil
 }
 
-func (r *exportContentRepository) ListVersions(
-	context.Context, uuid.UUID, uuid.UUID, ListInput,
-) ([]*VersionSummary, error) {
-	return nil, nil
-}
-
 func (r *exportContentRepository) GetVersion(
 	context.Context, uuid.UUID, uuid.UUID, int,
 ) (*Version, error) {
-	return nil, nil
-}
-
-func (r *exportContentRepository) RestoreVersion(
-	context.Context, uuid.UUID, uuid.UUID, int,
-) (*RestoreResult, error) {
 	return nil, nil
 }

@@ -30,10 +30,6 @@ type contentService interface {
 	ListAdaptations(context.Context, uuid.UUID) ([]Adaptation, error)
 	GetAdaptation(context.Context, uuid.UUID) (*Adaptation, error)
 	UpdateAdaptationConfig(context.Context, uuid.UUID, json.RawMessage) (*Adaptation, error)
-	CreateVersion(context.Context, uuid.UUID) (*Version, error)
-	ListVersions(context.Context, uuid.UUID, ListInput) ([]*VersionSummary, error)
-	GetVersion(context.Context, uuid.UUID, int) (*Version, error)
-	RestoreVersion(context.Context, uuid.UUID, int) (*RestoreResult, error)
 }
 
 type ContentHandler struct {
@@ -224,78 +220,4 @@ func (h *ContentHandler) UpdateAdaptationConfig(w http.ResponseWriter, r *http.R
 		return err
 	}
 	return writeJSON(w, http.StatusOK, result)
-}
-
-func (h *ContentHandler) CreateVersion(w http.ResponseWriter, r *http.Request) error {
-	packID, err := pathUUID(r)
-	if err != nil {
-		return err
-	}
-	result, err := h.service.CreateVersion(r.Context(), packID)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusCreated, result)
-}
-
-func (h *ContentHandler) ListVersions(w http.ResponseWriter, r *http.Request) error {
-	packID, err := pathUUID(r)
-	if err != nil {
-		return err
-	}
-	limit, err := optionalQueryInt(r, "limit")
-	if err != nil {
-		return err
-	}
-	offset, err := optionalQueryInt(r, "offset")
-	if err != nil {
-		return err
-	}
-	result, err := h.service.ListVersions(
-		r.Context(), packID, ListInput{Limit: limit, Offset: offset},
-	)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusOK, result)
-}
-
-func (h *ContentHandler) RestoreVersion(w http.ResponseWriter, r *http.Request) error {
-	packID, err := pathUUID(r)
-	if err != nil {
-		return err
-	}
-	versionNumber, err := versionPathValue(r)
-	if err != nil {
-		return err
-	}
-	result, err := h.service.RestoreVersion(r.Context(), packID, versionNumber)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusOK, result)
-}
-
-func (h *ContentHandler) GetVersion(w http.ResponseWriter, r *http.Request) error {
-	packID, err := pathUUID(r)
-	if err != nil {
-		return err
-	}
-	versionNumber, err := versionPathValue(r)
-	if err != nil {
-		return err
-	}
-	result, err := h.service.GetVersion(r.Context(), packID, versionNumber)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusOK, result)
-}
-
-func versionPathValue(r *http.Request) (int, error) {
-	versionNumber, err := strconv.Atoi(r.PathValue("version"))
-	if err != nil || versionNumber < 1 {
-		return 0, apperr.ErrBadRequest.WithMessage("version must be a positive integer")
-	}
-	return versionNumber, nil
 }
