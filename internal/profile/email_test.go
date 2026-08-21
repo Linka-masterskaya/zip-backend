@@ -385,24 +385,22 @@ func TestEmailChangeFlow_Integration_EmailAlreadyTaken(t *testing.T) {
 	assert.ErrorIs(t, err, ErrEmailAlreadyUsed)
 }
 
+// internal/profile/email_test.go
+// Добавить в конец файла после всех существующих тестов
+
 func TestEmailChangeFlow_Integration_SoftDeletedEmailReserved(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	db := getTestDB()
+	pool := getTestPool()
+	ctx := getTestContext()
+	crypto := getTestCrypto()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(pool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -410,21 +408,28 @@ func TestEmailChangeFlow_Integration_SoftDeletedEmailReserved(t *testing.T) {
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	deletedUserID := uuid.New()
 	oldEmail := "owner@example.com"
 	reservedEmail := "deleted@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
-	require.NoError(t, insertTempUser(ctx, db, deletedUserID, reservedEmail, crypto))
-	_, err = db.ExecContext(ctx, `UPDATE users SET deleted_at = now() WHERE id = $1`, deletedUserID)
+	// Создаем пользователей
+	cleanup1 := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup1()
+
+	cleanup2 := setupTestData(ctx, t, deletedUserID, reservedEmail)
+	defer cleanup2()
+
+	// Помечаем второго пользователя как удаленного
+	_, err := db.ExecContext(ctx, `UPDATE users SET deleted_at = now() WHERE id = $1`, deletedUserID)
 	require.NoError(t, err)
 
+	// Пытаемся сменить email на email удаленного пользователя
 	_, err = service.GenerateEmailChangeToken(ctx, userID, reservedEmail)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmailAlreadyUsed)
 
+	// Проверяем, что токен не был создан
 	count, err := countTokens(ctx, db, userID)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
@@ -435,19 +440,14 @@ func TestConfirmEmailChange_Integration_SoftDeletedEmailBecomesReserved(t *testi
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	db := getTestDB()
+	pool := getTestPool()
+	ctx := getTestContext()
+	crypto := getTestCrypto()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
+	repo := NewRepository(pool)
 	mailer := &testMailer{}
 	storage := &testStorage{}
-	crypto := newTestCrypto(t)
 	emailCfg := EmailConfig{
 		EmailChangeTTL: 24 * time.Hour,
 		EmailVerifyTTL: 24 * time.Hour,
@@ -455,24 +455,33 @@ func TestConfirmEmailChange_Integration_SoftDeletedEmailBecomesReserved(t *testi
 	sessions := &fakeRevoker{}
 	service := NewService(repo, storage, mailer, crypto, sessions, emailCfg)
 
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "owner@example.com"
 	newEmail := "later-reserved@example.com"
 
-	require.NoError(t, insertTempUser(ctx, db, userID, oldEmail, crypto))
+	// Создаем пользователя
+	cleanup1 := setupTestData(ctx, t, userID, oldEmail)
+	defer cleanup1()
+
+	// Генерируем токен для смены email
 	token, err := service.GenerateEmailChangeToken(ctx, userID, newEmail)
 	require.NoError(t, err)
 
+	// Создаем второго пользователя с этим email
 	deletedUserID := uuid.New()
-	require.NoError(t, insertTempUser(ctx, db, deletedUserID, newEmail, crypto))
+	cleanup2 := setupTestData(ctx, t, deletedUserID, newEmail)
+	defer cleanup2()
+
+	// Помечаем второго пользователя как удаленного
 	_, err = db.ExecContext(ctx, `UPDATE users SET deleted_at = now() WHERE id = $1`, deletedUserID)
 	require.NoError(t, err)
 
+	// Пытаемся подтвердить смену email (теперь email занят удаленным пользователем)
 	err = service.ConfirmEmailChange(ctx, token.Token)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmailAlreadyUsed)
 
+	// Проверяем, что токен не был использован
 	storedToken, err := getTokenByID(ctx, db, token.ID)
 	require.NoError(t, err)
 	assert.False(t, storedToken.Used)
