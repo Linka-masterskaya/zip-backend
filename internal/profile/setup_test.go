@@ -25,26 +25,37 @@ var (
 
 // TestMain - общая инициализация для всех тестов.
 func TestMain(m *testing.M) {
+	// Запускаем основную логику и получаем код выхода
+	code := run(m)
+	os.Exit(code)
+}
+
+// run содержит всю логику инициализации и запуска тестов.
+func run(m *testing.M) int {
 	ctx := context.Background()
 
 	// Инициализация базы данных
 	var err error
 	testPool, testCleanup, err = testutil.NewPostgresCtx(ctx)
 	if err != nil {
-		log.Fatalf("failed to start postgres container: %v", err)
+		log.Printf("failed to start postgres container: %v", err)
+		return 1
 	}
+	// Явно вызываем cleanup перед выходом
 	defer testCleanup()
 
 	// Открываем SQL соединение для миграций
 	testDB, err = sql.Open("pgx", testPool.Config().ConnString())
 	if err != nil {
-		log.Fatalf("failed to open sql connection: %v", err)
+		log.Printf("failed to open sql connection: %v", err)
+		return 1
 	}
 	defer testDB.Close()
 
 	// Применяем миграции
 	if err := migrations.Run(testDB); err != nil {
-		log.Fatalf("failed to run migrations: %v", err)
+		log.Printf("failed to run migrations: %v", err)
+		return 1
 	}
 
 	// Инициализируем криптографию для всех тестов
@@ -56,14 +67,12 @@ func TestMain(m *testing.M) {
 	}
 	testCrypto, err = cryptox.New(aesKey, hmacKey)
 	if err != nil {
-		log.Fatalf("failed to create crypto: %v", err)
+		log.Printf("failed to create crypto: %v", err)
+		return 1
 	}
 
 	// Запускаем тесты
-	code := m.Run()
-
-	// Чистка выполняется через defer
-	os.Exit(code)
+	return m.Run()
 }
 
 // getTestDB возвращает подключение к БД для тестов.
