@@ -44,6 +44,12 @@ jobs:
       - name: Lint OpenAPI
         run: npx --yes @redocly/cli@latest lint docs/api/openapi.yaml
 
+      - name: Generate auth/profile server stubs
+        run: bash scripts/generate-oapi.sh
+
+      - name: Check generated auth/profile server stubs are up to date
+        run: git diff --exit-code -- internal/oapiserver/server.gen.go
+
       - name: Check OpenAPI route drift
         run: go test ./internal/httpapi -run '^TestOpenAPIRouteDrift$' -count=1
 

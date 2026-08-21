@@ -7,6 +7,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -63,14 +66,25 @@ func defaultEmailConfig() EmailConfig {
 
 type testRevoker struct {
 	revokeErr    error
+	enableErr    error
 	revokedID    string
 	revokeCalled bool
+	enableCalled bool
 }
 
 func (f *testRevoker) RevokeAllSessions(ctx context.Context, userID string) error {
 	f.revokeCalled = true
 	f.revokedID = userID
 	return f.revokeErr
+}
+
+func (f *testRevoker) DisableUserSessions(ctx context.Context, userID string) error {
+	return f.RevokeAllSessions(ctx, userID)
+}
+
+func (f *testRevoker) EnableUserSessions(_ context.Context, _ string) error {
+	f.enableCalled = true
+	return f.enableErr
 }
 
 func TestUploadAvatar_PNGSignatureIgnoresExtension(t *testing.T) {
@@ -159,6 +173,182 @@ func TestDetectAvatarMIME_AllowsPNGJPEGWEBP(t *testing.T) {
 	}
 }
 
+func TestReplaceAvatar_ResizesLargePNG(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), &testRevoker{}, defaultEmailConfig())
+
+	data := validPNG(1200, 600)
+	_, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(data), int64(len(data)), "image/png")
+	require.NoError(t, err)
+
+	key := repo.avatarKeyValue()
+	store.mu.Lock()
+	stored := append([]byte(nil), store.objects[key].data...)
+	store.mu.Unlock()
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(stored))
+	require.NoError(t, err)
+	require.Equal(t, AvatarMaxDimension, cfg.Width)
+	require.Equal(t, 256, cfg.Height)
+	require.Equal(t, int64(len(stored)), repo.storageUsedValue())
+}
+
+func TestReplaceAvatar_UsesPersistedOldSizeWhenLegacyObjectIsMissing(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	repo.avatarKey = "avatars/user-1/persisted-size"
+	repo.avatarSize = sql.NullInt64{Int64: 60, Valid: true}
+	repo.storageUsed = 100
+
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), &testRevoker{}, defaultEmailConfig())
+	data := validPNG(8, 8)
+	_, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(data), int64(len(data)), "image/png")
+	require.NoError(t, err)
+
+	require.Equal(t, int64(40+len(data)), repo.storageUsedValue(),
+		"quota delta must use the persisted old avatar size even when the old MinIO object is already absent")
+}
+
+func TestDeleteProfile_SoftDeletesRemovesAvatarAndRevokesSessions(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	sessions := &testRevoker{}
+	oldKey := "avatars/user-1/old"
+	oldData := validPNG(64, 64)
+	store.seed(oldKey, oldData, "image/png")
+	repo.avatarKey = oldKey
+	repo.avatarSize = sql.NullInt64{Int64: int64(len(oldData)), Valid: true}
+	repo.storageUsed = int64(len(oldData))
+
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), sessions, defaultEmailConfig())
+	require.NoError(t, service.DeleteProfile(ctx, "user-1"))
+	require.True(t, repo.deletedValue())
+	require.Empty(t, repo.avatarKeyValue())
+	require.Zero(t, repo.storageUsedValue())
+	require.False(t, store.hasObject(oldKey))
+	require.True(t, sessions.revokeCalled)
+	require.Equal(t, "user-1", sessions.revokedID)
+}
+
+func TestDeleteProfile_BlocksLaterAvatarMutation(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), &testRevoker{}, defaultEmailConfig())
+
+	require.NoError(t, service.DeleteProfile(ctx, "user-1"))
+	data := validPNG(32, 32)
+	_, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(data), int64(len(data)), "image/png")
+	require.ErrorIs(t, err, apperr.ErrUnauthorized)
+	require.Zero(t, store.objectCount())
+}
+
+func TestDeleteProfile_SessionRevocationFailureDoesNotDeleteUser(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	sessions := &testRevoker{revokeErr: errors.New("redis unavailable")}
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), sessions, defaultEmailConfig())
+
+	err := service.DeleteProfile(ctx, "user-1")
+
+	require.Error(t, err)
+	require.False(t, repo.deletedValue())
+	require.True(t, sessions.revokeCalled)
+}
+
+func TestDeleteProfile_DatabaseFailureReenablesFutureLogins(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	repo.softDeleteErr = errors.New("database unavailable")
+	sessions := &testRevoker{}
+	service := NewService(repo, newFakeObjectStorage(), &fakeEmailSender{}, newTestCryptox(t), sessions, defaultEmailConfig())
+
+	err := service.DeleteProfile(ctx, "user-1")
+
+	require.Error(t, err)
+	require.False(t, repo.deletedValue())
+	require.True(t, sessions.revokeCalled, "deletion barrier must be installed first")
+	require.True(t, sessions.enableCalled, "future logins must be re-enabled after DB rollback")
+}
+
+func TestDeleteProfile_ObjectStorageFailureDoesNotBlockSoftDelete(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	sessions := &testRevoker{}
+	oldKey := "avatars/user-1/unavailable"
+	oldData := bytes.Repeat([]byte{1}, 123)
+	repo.avatarKey = oldKey
+	repo.avatarSize = sql.NullInt64{Int64: int64(len(oldData)), Valid: true}
+	repo.storageUsed = int64(len(oldData))
+	store.seed(oldKey, oldData, "image/png")
+	store.removeErrors[oldKey] = errors.New("object storage unavailable")
+
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), sessions, defaultEmailConfig())
+	err := service.DeleteProfile(ctx, "user-1")
+
+	require.NoError(t, err)
+	require.True(t, repo.deletedValue())
+	require.Empty(t, repo.avatarKeyValue())
+	require.True(t, sessions.revokeCalled)
+	// The object still exists, so its bytes remain counted until MinIO deletion
+	// actually succeeds. The durable job will retry without losing the size.
+	require.Equal(t, int64(len(oldData)), repo.storageUsedValue())
+	require.True(t, repo.cleanupPending())
+	require.True(t, store.hasObject(oldKey))
+}
+
+func TestDeleteProfile_MissingAvatarObjectStillReconcilesQuotaFromPersistedSize(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	sessions := &testRevoker{}
+	oldKey := "avatars/user-1/already-missing"
+	const oldSize int64 = 91
+	repo.avatarKey = oldKey
+	repo.avatarSize = sql.NullInt64{Int64: oldSize, Valid: true}
+	repo.storageUsed = oldSize
+
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), sessions, defaultEmailConfig())
+	require.NoError(t, service.DeleteProfile(ctx, "user-1"))
+
+	require.False(t, repo.cleanupPending())
+	require.Zero(t, repo.storageUsedValue(),
+		"persisted avatar size must reconcile quota even if the MinIO object disappeared before cleanup")
+}
+
+func TestDeleteProfile_AvatarCleanupRetryDoesNotDoubleChargeQuota(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	sessions := &testRevoker{}
+	oldKey := "avatars/user-1/retry"
+	oldData := bytes.Repeat([]byte{2}, 77)
+	repo.avatarKey = oldKey
+	repo.avatarSize = sql.NullInt64{Int64: int64(len(oldData)), Valid: true}
+	repo.storageUsed = int64(len(oldData))
+	store.seed(oldKey, oldData, "image/png")
+	store.removeErrors[oldKey] = errors.New("temporary minio outage")
+
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), sessions, defaultEmailConfig())
+	require.NoError(t, service.DeleteProfile(ctx, "user-1"))
+	require.Equal(t, int64(len(oldData)), repo.storageUsedValue())
+	require.True(t, repo.cleanupPending())
+	require.True(t, store.hasObject(oldKey))
+
+	delete(store.removeErrors, oldKey)
+	processed, err := service.processAvatarCleanup(ctx, oldKey)
+	require.NoError(t, err)
+	require.True(t, processed)
+	require.False(t, repo.cleanupPending())
+	require.False(t, store.hasObject(oldKey))
+	require.Zero(t, repo.storageUsedValue(), "retry must not decrement quota twice")
+}
+
 func TestReplaceAvatar_QuotaExceededSkipsPutObject(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
@@ -203,6 +393,7 @@ func TestReplaceAvatar_DeletesOldObjectUpdatesUsageAndPresignsBeforeDB(t *testin
 
 	store.seed(oldKey, oldData, "image/png")
 	repo.avatarKey = oldKey
+	repo.avatarSize = sql.NullInt64{Int64: int64(len(oldData)), Valid: true}
 	repo.storageUsed = int64(len(oldData))
 	repo.onReplace = func() {
 		if len(store.presignedKeyValues()) == 0 {
@@ -270,6 +461,7 @@ func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 
 	store.seed(oldKey, oldData, "image/png")
 	repo.avatarKey = oldKey
+	repo.avatarSize = sql.NullInt64{Int64: int64(len(oldData)), Valid: true}
 	repo.storageUsed = int64(len(oldData))
 
 	service := NewService(repo, store, emailSender, crypto, sessions, cfg)
@@ -317,8 +509,22 @@ func multipartAvatarRequest(t *testing.T, data []byte, filename string) *http.Re
 }
 
 func pngAvatarBytes(payloadSize int) []byte {
-	data := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+	data := validPNG(2, 2)
 	return append(data, bytes.Repeat([]byte{0}, payloadSize)...)
+}
+
+func validPNG(width, height int) []byte {
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.NRGBA{R: uint8(x % 255), G: uint8(y % 255), B: 180, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
 }
 
 func jpegAvatarBytes() []byte {
@@ -423,11 +629,16 @@ func (s *fakeObjectStorage) presignedKeyValues() []string {
 type fakeAvatarRepo struct {
 	mu                  sync.Mutex
 	avatarKey           string
+	avatarSize          sql.NullInt64
 	currentAfterReplace string
 	storageUsed         int64
 	storageQuota        int64
 	orgID               sql.NullString
 	onReplace           func()
+	deleted             bool
+	cleanupJob          *AvatarCleanupJob
+	cleanupLastError    error
+	softDeleteErr       error
 }
 
 func newFakeAvatarRepo() *fakeAvatarRepo {
@@ -442,9 +653,13 @@ func newFakeAvatarRepo() *fakeAvatarRepo {
 func (r *fakeAvatarRepo) AvatarState(_ context.Context, _ string) (AvatarState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.deleted {
+		return AvatarState{}, ErrUserNotFound
+	}
 	return AvatarState{
 		OrgID:      r.orgID,
 		AvatarKey:  r.avatarKey,
+		AvatarSize: r.avatarSize,
 		UsedBytes:  r.storageUsed,
 		QuotaBytes: r.storageQuota,
 		HasOrg:     r.orgID.Valid,
@@ -468,6 +683,7 @@ func (r *fakeAvatarRepo) ReplaceAvatar(
 		return AvatarChange{}, ErrAvatarChanged
 	}
 	r.avatarKey = newKey
+	r.avatarSize = sql.NullInt64{Int64: oldSize + storageDelta, Valid: true}
 	r.addStorageUsage(storageDelta)
 	return AvatarChange{OldKey: expectedOldKey, OldSize: oldSize, OrgID: r.orgID}, nil
 }
@@ -479,6 +695,7 @@ func (r *fakeAvatarRepo) ClearAvatar(_ context.Context, _ string, expectedOldKey
 		return AvatarChange{}, ErrAvatarChanged
 	}
 	r.avatarKey = ""
+	r.avatarSize = sql.NullInt64{}
 	r.addStorageUsage(-oldSize)
 	return AvatarChange{OldKey: expectedOldKey, OldSize: oldSize, OrgID: r.orgID}, nil
 }
@@ -490,8 +707,85 @@ func (r *fakeAvatarRepo) RestoreAvatarIfEmpty(_ context.Context, _ string, oldKe
 		return false, nil
 	}
 	r.avatarKey = oldKey
+	r.avatarSize = sql.NullInt64{Int64: oldSize, Valid: true}
 	r.addStorageUsage(oldSize)
 	return true, nil
+}
+
+func (r *fakeAvatarRepo) SoftDeleteUser(_ context.Context, _ string) (AvatarChange, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.softDeleteErr != nil {
+		return AvatarChange{}, r.softDeleteErr
+	}
+	if r.deleted {
+		return AvatarChange{}, ErrUserNotFound
+	}
+	change := AvatarChange{OldKey: r.avatarKey, OrgID: r.orgID}
+	if r.avatarKey != "" {
+		r.cleanupJob = &AvatarCleanupJob{
+			ID:         1,
+			ObjectKey:  r.avatarKey,
+			OrgID:      r.orgID,
+			ObjectSize: r.avatarSize,
+		}
+	}
+	r.avatarKey = ""
+	r.avatarSize = sql.NullInt64{}
+	r.deleted = true
+	return change, nil
+}
+
+func (r *fakeAvatarRepo) ClaimAvatarCleanupJob(_ context.Context, objectKey string) (*AvatarCleanupJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cleanupJob == nil {
+		return nil, nil
+	}
+	if objectKey != "" && r.cleanupJob.ObjectKey != objectKey {
+		return nil, nil
+	}
+	job := *r.cleanupJob
+	job.Attempts++
+	r.cleanupJob.Attempts = job.Attempts
+	return &job, nil
+}
+
+func (r *fakeAvatarRepo) SetAvatarCleanupSize(_ context.Context, jobID int64, size int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cleanupJob != nil && r.cleanupJob.ID == jobID {
+		r.cleanupJob.ObjectSize = sql.NullInt64{Int64: size, Valid: true}
+	}
+	return nil
+}
+
+func (r *fakeAvatarRepo) AdjustAvatarCleanupQuota(_ context.Context, jobID int64, size int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cleanupJob != nil && r.cleanupJob.ID == jobID && !r.cleanupJob.QuotaAdjusted {
+		r.addStorageUsage(-size)
+		r.cleanupJob.QuotaAdjusted = true
+	}
+	return nil
+}
+
+func (r *fakeAvatarRepo) CompleteAvatarCleanup(_ context.Context, jobID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cleanupJob != nil && r.cleanupJob.ID == jobID {
+		r.cleanupJob = nil
+	}
+	return nil
+}
+
+func (r *fakeAvatarRepo) RetryAvatarCleanup(_ context.Context, jobID int64, cause error) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cleanupJob != nil && r.cleanupJob.ID == jobID {
+		r.cleanupLastError = cause
+	}
+	return nil
 }
 
 func (r *fakeAvatarRepo) AddOrgStorageUsage(_ context.Context, _ string, delta int64) error {
@@ -504,6 +798,9 @@ func (r *fakeAvatarRepo) AddOrgStorageUsage(_ context.Context, _ string, delta i
 func (r *fakeAvatarRepo) CurrentAvatarKey(_ context.Context, _ string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.deleted {
+		return "", ErrUserNotFound
+	}
 	if r.currentAfterReplace != "" {
 		return r.currentAfterReplace, nil
 	}
@@ -572,10 +869,22 @@ func (r *fakeAvatarRepo) avatarKeyValue() string {
 	return r.avatarKey
 }
 
+func (r *fakeAvatarRepo) deletedValue() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.deleted
+}
+
 func (r *fakeAvatarRepo) storageUsedValue() int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.storageUsed
+}
+
+func (r *fakeAvatarRepo) cleanupPending() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cleanupJob != nil
 }
 
 func (r *fakeAvatarRepo) addStorageUsage(delta int64) {

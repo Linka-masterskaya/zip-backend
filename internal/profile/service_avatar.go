@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,17 +16,22 @@ import (
 
 // ReplaceAvatar uploads a new avatar, persists its key and removes the old object.
 func (s *Service) ReplaceAvatar(ctx context.Context, userID string, reader io.Reader, size int64, mimeType string) (string, error) {
+	prepared, err := prepareAvatar(reader, size, mimeType)
+	if err != nil {
+		return "", apperr.ErrBadRequest.WithMessage("avatar image is invalid")
+	}
+
 	state, oldSize, err := s.avatarStateWithObjectSize(ctx, userID)
 	if err != nil {
 		return "", err
 	}
-	storageDelta := size - oldSize
+	storageDelta := int64(len(prepared.data)) - oldSize
 	if err = validateStorageQuota(state, storageDelta); err != nil {
 		return "", err
 	}
 
 	newKey := avatarKey(userID)
-	if err = s.storage.PutObject(ctx, newKey, reader, size, mimeType); err != nil {
+	if err = s.storage.PutObject(ctx, newKey, bytes.NewReader(prepared.data), int64(len(prepared.data)), prepared.contentType); err != nil {
 		return "", fmt.Errorf("put avatar object: %w", err)
 	}
 
@@ -68,6 +74,16 @@ func (s *Service) avatarStateWithObjectSize(ctx context.Context, userID string) 
 	if err != nil {
 		return AvatarState{}, 0, profileError(err)
 	}
+	if state.AvatarKey == "" {
+		return state, 0, nil
+	}
+	if state.AvatarSize.Valid {
+		return state, state.AvatarSize.Int64, nil
+	}
+
+	// Legacy rows created before avatar_size_bytes was introduced have no
+	// persisted size. Stat MinIO once as a compatibility fallback; every new
+	// avatar mutation persists an authoritative size in PostgreSQL.
 	oldSize, err := s.objectSize(ctx, state.AvatarKey)
 	if err != nil {
 		return AvatarState{}, 0, err

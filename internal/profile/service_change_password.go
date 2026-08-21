@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// SessionRevoker revokes all of a user's active sessions.
+// SessionRevoker revokes all of a user's active access and refresh sessions.
 type SessionRevoker interface {
 	RevokeAllSessions(ctx context.Context, userID string) error
 }

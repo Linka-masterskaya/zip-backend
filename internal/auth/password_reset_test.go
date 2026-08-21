@@ -331,3 +331,34 @@ func TestAuthService_ResetPassword_ReturnsInternalErrorWhenRevokeFails(t *testin
 		t.Fatalf("revoked user id = %q, want user-id", cacheStore.revokedUserID)
 	}
 }
+
+func TestAuthService_ForgotPassword_SoftDeleteRaceIsSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	cfg := testPasswordResetConfig()
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
+		Return(&User{ID: "user-id"}, nil)
+	repo.EXPECT().
+		CreatePasswordResetToken(gomock.Any(), "user-id", cfg.ResetPasswordTokenTTL).
+		Return("", apperr.ErrUserNotFound)
+
+	mailer := &passwordResetMailerFake{}
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		mailer,
+		cfg,
+		&passwordResetCryptoFake{hash: []byte("email-hash")},
+	)
+
+	err := svc.ForgotPassword(context.Background(), "user@example.com")
+	if err != nil {
+		t.Fatalf("ForgotPassword: %v", err)
+	}
+	if mailer.calls != 0 {
+		t.Fatalf("mailer calls = %d, want 0", mailer.calls)
+	}
+}
