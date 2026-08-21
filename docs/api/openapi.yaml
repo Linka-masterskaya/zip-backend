@@ -303,6 +303,18 @@ components:
         age:            { type: integer, minimum: 0, maximum: 100, nullable: true }
         status:         { type: string, enum: [active, paused, archived, one_time] }
         last_lesson_at: { type: string, format: date, nullable: true, description: Дата последнего занятия }
+        avatar_media_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Ссылка на файл из банка медиа; `null` — аватара нет.
+        avatar_url:
+          type: string
+          nullable: true
+          description: |
+            Presigned-ссылка на аватар, выданная на это чтение и живущая 15 минут.
+            Хранить её нельзя — при следующем чтении приходит новая. Если подпись
+            не удалась, поле придёт `null`, а `avatar_media_id` останется.
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
 
@@ -1230,6 +1242,14 @@ paths:
                 name:   { type: string }
                 age:    { type: integer, minimum: 0, maximum: 100, nullable: true }
                 status: { type: string, enum: [active, paused, archived, one_time], default: active }
+                avatar_media_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: |
+                    Идентификатор файла, ранее загруженного через `POST /media`.
+                    Файл должен принадлежать организации текущего пользователя,
+                    иначе `400`.
       responses:
         '201': { description: Создан, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -1269,6 +1289,15 @@ paths:
                 name:   { type: string }
                 age:    { type: integer, minimum: 0, maximum: 100 }
                 status: { type: string, enum: [active, paused, archived, one_time] }
+                last_lesson_at: { type: string, format: date, description: Дата последнего занятия }
+                avatar_media_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: |
+                    Идентификатор файла из `POST /media`. Явный `null` снимает
+                    аватар; отсутствие поля оставляет текущий. Файл чужой
+                    организации или несуществующий — `400`.
       responses:
         '200': { description: Обновлён, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
