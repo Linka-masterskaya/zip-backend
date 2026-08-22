@@ -16,6 +16,7 @@ tags:
   - name: media
   - name: pictures
   - name: students
+  - name: settings
 
 components:
   securitySchemes:
@@ -402,6 +403,50 @@ components:
         student_id: { type: string, format: uuid, nullable: true }
         published:  { type: boolean }
         updated_at: { type: string, format: date-time }
+
+    SettingsDocument:
+      type: object
+      additionalProperties: false
+      description: |
+        AB-48 v1 user-scoped site settings, persisted across relogin and devices.
+        The seven top-level keys are the complete v1 allow-list. Voice is typed; the
+        other six values are intentionally opaque JSON until a nested frontend
+        contract is approved. The document is limited to 64 KiB by the backend.
+      properties:
+        eye_control:
+          description: Opaque JSON value in AB-48 v1.
+        card_activation:
+          description: Opaque JSON value in AB-48 v1.
+        interactivity:
+          description: Opaque JSON value in AB-48 v1.
+        voice:
+          type: string
+          minLength: 1
+          description: User-level default; must match /tts/voices when that list is available.
+        button_direction:
+          description: Opaque JSON value in AB-48 v1.
+        colors:
+          description: Opaque JSON value in AB-48 v1.
+        border_width:
+          description: Opaque JSON value in AB-48 v1.
+
+    SettingsTemplate:
+      type: object
+      required: [id, name, body, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        body: { $ref: '#/components/schemas/SettingsDocument' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateSettingsTemplateRequest:
+      type: object
+      required: [name, body]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        body: { $ref: '#/components/schemas/SettingsDocument' }
 
   responses:
     BadRequest:   { description: Невалидный ввод, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -1402,6 +1447,85 @@ paths:
         '204': { description: Soft-delete выполнен }
         '404': { description: Ученик не найден }
         '409': { $ref: '#/components/responses/Conflict' }
+
+
+  /settings:
+    get:
+      tags: [settings]
+      summary: Получить настройки текущего пользователя
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Настройки; для нового пользователя возвращается пустой объект
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsDocument' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [settings]
+      summary: Полностью заменить настройки текущего пользователя
+      description: "JSON-объект до 64 KiB; неизвестные ключи верхнего уровня отклоняются."
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsDocument' }
+      responses:
+        '200':
+          description: Сохранённые настройки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsDocument' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { description: JSON превышает лимит размера }
+
+  /settings/templates:
+    get:
+      tags: [settings]
+      summary: Шаблоны настроек текущего пользователя
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Список шаблонов
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SettingsTemplate' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [settings]
+      summary: Создать шаблон настроек
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSettingsTemplateRequest' }
+      responses:
+        '201':
+          description: Шаблон создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsTemplate' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { description: JSON превышает лимит размера }
+
+  /settings/templates/{id}:
+    delete:
+      tags: [settings]
+      summary: Удалить свой шаблон настроек
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Шаблон удалён }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Шаблон не найден или принадлежит другому пользователю }
 
   /tts:
     post:
