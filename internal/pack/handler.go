@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -14,6 +16,7 @@ import (
 
 type packService interface {
 	Create(context.Context, string, uuid.UUID) (*Pack, error)
+	Duplicate(context.Context, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID) (*Pack, error)
 	List(context.Context, ListInput) ([]*ListItem, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
@@ -62,6 +65,10 @@ type createPackRequest struct {
 	FolderID uuid.UUID `json:"folder_id"`
 }
 
+type duplicatePackRequest struct {
+	FolderID *uuid.UUID `json:"folder_id"`
+}
+
 type updatePackRequest struct {
 	Title      *string                   `json:"title"`
 	FolderID   *uuid.UUID                `json:"folder_id"`
@@ -88,6 +95,24 @@ func (h *Handler) CreatePack(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	result, err := h.service.Create(r.Context(), req.Title, req.FolderID)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusCreated, result)
+}
+
+// DuplicatePack handles POST /api/v1/packs/{id}/duplicate.
+func (h *Handler) DuplicatePack(w http.ResponseWriter, r *http.Request) error {
+	packID, err := pathUUID(r)
+	if err != nil {
+		return err
+	}
+	var req duplicatePackRequest
+	if err = decodeOptionalJSON(r, &req); err != nil ||
+		(req.FolderID != nil && *req.FolderID == uuid.Nil) {
+		return apperr.ErrBadRequest
+	}
+	result, err := h.service.Duplicate(r.Context(), packID, DuplicateInput(req))
 	if err != nil {
 		return err
 	}
@@ -269,6 +294,13 @@ func decodeJSON(r *http.Request, target any) error {
 	return decoder.Decode(target)
 }
 
+func decodeOptionalJSON(r *http.Request, target any) error {
+	err := decodeJSON(r, target)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}
 func pathUUID(r *http.Request) (uuid.UUID, error) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil || id == uuid.Nil {
