@@ -59,6 +59,7 @@ func buildModules(in *infra) (*modules, error) {
 
 	packRepo := pack.NewRepository(in.db)
 	packService := pack.NewService(packRepo, in.pub)
+	favoriteService := pack.NewFavoriteService(packRepo)
 	mediaRepo := media.NewRepository(in.db)
 	mediaService := media.NewService(mediaRepo, in.storage)
 
@@ -196,8 +197,9 @@ func buildModules(in *infra) (*modules, error) {
 
 	return &modules{
 		packs: httpapi.PackHandlers{
-			Pack:    pack.NewHandler(packService),
-			Content: pack.NewContentHandler(contentService),
+			Pack:     pack.NewHandler(packService),
+			Content:  pack.NewContentHandler(contentService),
+			Favorite: pack.NewFavoriteHandler(favoriteService),
 		},
 		media: httpapi.MediaHandlers{
 			Media: media.NewHandler(mediaService),

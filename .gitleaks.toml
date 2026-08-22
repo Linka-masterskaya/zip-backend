@@ -23,5 +23,14 @@ regexes = [
   '''^prod_grafana_password_123456789$''',
   # Pre-existing synthetic JWT test fixture. Kept only so commit-tree scans
   # of older PR commits do not fail on a non-production test value.
-  '''^10\+NIwWoxrsvQx4UyepsXSe4R2s2G\+41hft5dM4Skw0=$'''
+  '''^10\+NIwWoxrsvQx4UyepsXSe4R2s2G\+41hft5dM4Skw0=$''',
+  # Superseded dev fixtures from the AB-46 branch's early commits . 
+  # Kept only so commit-tree scans of those older PR commits do not
+  # fail on non-production test values.
+  '''^0123456789abcdef0123456789abcdef$''',
+  '''^MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=$''',
+  '''^92bd02979f8be5d4d05a81619d0d69499280093cdc1cdb1f300ac09177c53665$''',
+  '''^6dlGlnc2GSsJD1i46iimfgTPUzv9J10zbPIS9Um8vN8=$''',
+  '''^LwhuzYj/PvQFpfun4y\+XylcRdhIr8fOcGPFSyfWzlDU=$''',
+  '''^environment-secret-that-is-at-least-32-bytes$'''
 ]

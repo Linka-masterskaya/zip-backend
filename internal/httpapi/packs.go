@@ -9,8 +9,9 @@ import (
 
 // PackHandlers contains the handlers exposed by the packs API.
 type PackHandlers struct {
-	Pack    *pack.Handler
-	Content *pack.ContentHandler
+	Pack     *pack.Handler
+	Content  *pack.ContentHandler
+	Favorite *pack.FavoriteHandler
 }
 
 // RegisterPackRoutes registers pack CRUD, publication, config, import/export,
@@ -46,4 +47,7 @@ func RegisterPackRoutes(
 	mux.Handle("GET /api/v1/packs/{id}/versions", protected(handlers.Content.ListVersions))
 	mux.Handle("GET /api/v1/packs/{id}/versions/{version}", protected(handlers.Content.GetVersion))
 	mux.Handle("POST /api/v1/packs/{id}/versions/{version}/restore", protected(handlers.Content.RestoreVersion))
+	mux.Handle("PUT /api/v1/packs/{id}/favorite", protected(handlers.Favorite.PutFavorite))
+	mux.Handle("DELETE /api/v1/packs/{id}/favorite", protected(handlers.Favorite.DeleteFavorite))
+	mux.Handle("GET /api/v1/favorites/packs", protected(handlers.Favorite.ListFavorites))
 }

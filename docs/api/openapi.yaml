@@ -1315,6 +1315,51 @@ paths:
         '204': { description: Публикация снята или уже отсутствовала }
         '404': { description: Набор не найден }
 
+  /packs/{id}/favorite:
+    put:
+      tags: [packs]
+      summary: Добавить набор в избранное
+      description: Идемпотентно — повторный вызов для уже избранного набора ничего не меняет.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Набор в избранном }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Набор не найден или недоступен }
+    delete:
+      tags: [packs]
+      summary: Убрать набор из избранного
+      description: Идемпотентно — повторный вызов, как и вызов для никогда не избранного набора, всегда возвращает 204.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Набор не в избранном }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /favorites/packs:
+    get:
+      tags: [packs]
+      summary: Избранные наборы текущего пользователя
+      description: >-
+        Возвращает набранные в избранное наборы, всё ещё доступные пользователю
+        (свои или опубликованные в библиотеке организации).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Избранные наборы, отсортированные по времени добавления (сначала новые)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PackListItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /students:
     post:
       tags: [students]
