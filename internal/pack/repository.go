@@ -47,7 +47,7 @@ func (r *Repository) Create(ctx context.Context, userID uuid.UUID, input CreateI
 	return result, nil
 }
 
-// Get returns a pack owned by the authenticated user in the same organization.
+// Get returns a pack owned by the authenticated user or published within the same organization.
 func (r *Repository) Get(ctx context.Context, userID, packID uuid.UUID) (*Pack, error) {
 	result, err := scanPack(r.pool.QueryRow(ctx, getPackQuery, userID, packID))
 	if errors.Is(err, pgx.ErrNoRows) {

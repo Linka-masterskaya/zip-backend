@@ -38,10 +38,12 @@ const e2eJWTSecret = "e2e-only-secret"
 func TestE2E_P1UserJourney(t *testing.T) {
 	pool := e2eDatabase(t)
 	ownerID := e2eUser(t, pool, "owner")
-	readerID := e2eUser(t, pool, "reader")
+	readerID := e2eUserInOrg(t, pool, ownerID, "reader")
+	foreignUserID := e2eUser(t, pool, "foreign")
 	server := e2eServer(t, pool)
 	ownerToken := e2eToken(t, ownerID, "defectologist")
 	readerToken := e2eToken(t, readerID, "defectologist")
+	foreignToken := e2eToken(t, foreignUserID, "defectologist")
 
 	t.Run("authorization is enforced", func(t *testing.T) {
 		response := e2eRequest(t, server, "", http.MethodGet, "/api/v1/students", nil)
@@ -81,7 +83,7 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	)
 
 	uploaded := e2eUploadMedia(t, server, ownerToken, tinyPNG())
-	foreignMedia := e2eUploadMedia(t, server, readerToken, tinyPNG())
+	foreignMedia := e2eUploadMedia(t, server, foreignToken, tinyPNG())
 	foreignConfig := packImageConfig(foreignMedia.ID)
 	foreignResponse := e2eRequest(t, server, ownerToken, http.MethodPut,
 		"/api/v1/packs/"+createdPack.ID.String()+"/config", foreignConfig)
@@ -260,6 +262,22 @@ func TestE2E_P1UserJourney(t *testing.T) {
 			http.StatusOK,
 		)
 		assert.Equal(t, createdPack.ID, readable.ID)
+
+		inaccessible := e2eRequest(
+			t,
+			server,
+			foreignToken,
+			http.MethodGet,
+			"/api/v1/packs/"+createdPack.ID.String(),
+			nil,
+		)
+		assert.Equal(
+			t,
+			http.StatusNotFound,
+			inaccessible.StatusCode,
+			"published pack must not be accessible outside its organization",
+		)
+		e2eClose(t, inaccessible)
 
 		response := e2eRequest(
 			t,
@@ -749,6 +767,27 @@ func e2eUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 		name,
 	)
 	require.NoError(t, err)
+	return userID
+}
+
+func e2eUserInOrg(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	orgMemberID uuid.UUID,
+	name string,
+) uuid.UUID {
+	t.Helper()
+	userID := uuid.New()
+	result, err := pool.Exec(
+		context.Background(),
+		`INSERT INTO users (id, org_id, display_name)
+		 SELECT $1, org_id, $3 FROM users WHERE id = $2`,
+		userID,
+		orgMemberID,
+		name,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.RowsAffected())
 	return userID
 }
 
