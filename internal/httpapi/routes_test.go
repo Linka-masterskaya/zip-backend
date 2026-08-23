@@ -40,6 +40,7 @@ func TestRegisterPackRoutesPatterns(t *testing.T) {
 
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/packs",
+		"POST /api/v1/packs/{id}/duplicate",
 		"GET /api/v1/packs/{id}",
 		"GET /api/v1/packs",
 		"PATCH /api/v1/packs/{id}",

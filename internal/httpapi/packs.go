@@ -27,6 +27,7 @@ func RegisterPackRoutes(
 	}
 
 	mux.Handle("POST /api/v1/packs", protected(handlers.Pack.CreatePack))
+	mux.Handle("POST /api/v1/packs/{id}/duplicate", protected(handlers.Pack.DuplicatePack))
 	mux.Handle("GET /api/v1/packs/{id}", protected(handlers.Pack.GetPack))
 	mux.Handle("GET /api/v1/packs", protected(handlers.Pack.ListPacks))
 	mux.Handle("PATCH /api/v1/packs/{id}", protected(handlers.Pack.UpdatePack))

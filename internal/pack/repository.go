@@ -12,16 +12,19 @@ import (
 )
 
 var (
-	ErrPackNotFound        = errors.New("pack not found")
-	ErrFolderNotAllowed    = errors.New("folder is not accessible")
-	ErrMediaNotAllowed     = errors.New("media is not accessible")
-	ErrStudentNotAllowed   = errors.New("student is not accessible")
-	ErrInvalidPackMetadata = errors.New("invalid pack metadata")
-	ErrPackPublished       = errors.New("pack is published")
-	ErrAlreadyPublished    = errors.New("pack is published in another folder")
-	ErrVersionNotFound     = errors.New("pack version not found")
-	ErrAdaptationNotFound  = errors.New("pack adaptation not found")
+	ErrPackNotFound                 = errors.New("pack not found")
+	ErrDuplicateDestinationRequired = errors.New("destination folder is required when duplicating another user's pack")
+	ErrFolderNotAllowed             = errors.New("folder is not accessible")
+	ErrMediaNotAllowed              = errors.New("media is not accessible")
+	ErrStudentNotAllowed            = errors.New("student is not accessible")
+	ErrInvalidPackMetadata          = errors.New("invalid pack metadata")
+	ErrPackPublished                = errors.New("pack is published")
+	ErrAlreadyPublished             = errors.New("pack is published in another folder")
+	ErrVersionNotFound              = errors.New("pack version not found")
+	ErrAdaptationNotFound           = errors.New("pack adaptation not found")
 )
+
+const duplicateTitleSuffix = " (копия)"
 
 // Repository persists packs in PostgreSQL.
 type Repository struct {
@@ -45,6 +48,77 @@ func (r *Repository) Create(ctx context.Context, userID uuid.UUID, input CreateI
 		return nil, fmt.Errorf("pack repository create: %w", err)
 	}
 	return result, nil
+}
+
+// Duplicate atomically creates an independent draft pack that reuses media objects.
+func (r *Repository) Duplicate(
+	ctx context.Context,
+	userID, sourcePackID uuid.UUID,
+	input DuplicateInput,
+) (*Pack, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("pack duplicate begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	source, err := scanPack(tx.QueryRow(ctx, lockDuplicateSourceQuery, userID, sourcePackID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrPackNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pack duplicate lock source: %w", err)
+	}
+
+	targetFolderID, err := packCopyDestinationFolderID(source, userID, input)
+	if err != nil {
+		return nil, err
+	}
+	var lockedFolderID uuid.UUID
+	err = tx.QueryRow(
+		ctx, lockDuplicateFolderQuery, userID, targetFolderID, source.OrgID,
+	).Scan(&lockedFolderID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrFolderNotAllowed
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pack duplicate lock folder: %w", err)
+	}
+
+	result, err := scanPack(tx.QueryRow(
+		ctx,
+		insertDuplicatePackQuery,
+		source.OrgID,
+		userID,
+		lockedFolderID,
+		source.Title+duplicateTitleSuffix,
+		source.AgeMin,
+		source.AgeMax,
+		source.Difficulty,
+		source.Goals,
+		source.Notes,
+		source.Config,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("pack duplicate insert: %w", err)
+	}
+	if _, err = tx.Exec(ctx, copyDuplicateMediaUsagesQuery, sourcePackID, result.ID); err != nil {
+		return nil, fmt.Errorf("pack duplicate media usages: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("pack duplicate commit: %w", err)
+	}
+	return result, nil
+}
+
+func packCopyDestinationFolderID(source *Pack, userID uuid.UUID, input DuplicateInput) (uuid.UUID, error) {
+	if input.FolderID != nil {
+		return *input.FolderID, nil
+	}
+	if source.OwnerID != userID {
+		return uuid.Nil, ErrDuplicateDestinationRequired
+	}
+	return source.FolderID, nil
 }
 
 // Get returns a pack owned by the authenticated user in the same organization.

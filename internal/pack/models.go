@@ -72,6 +72,11 @@ type CreateInput struct {
 	Config   json.RawMessage
 }
 
+// DuplicateInput contains optional destination settings for a pack copy.
+type DuplicateInput struct {
+	FolderID *uuid.UUID
+}
+
 // ListItem describes one pack placement returned by the global pack list.
 type ListItem struct {
 	ID              uuid.UUID       `json:"id"`

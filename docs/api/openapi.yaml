@@ -229,6 +229,11 @@ components:
         title: { type: string }
         folder_id: { type: string, format: uuid }
 
+    DuplicatePackRequest:
+      type: object
+      properties:
+        folder_id: { type: string, format: uuid, nullable: true }
+
     UpdatePackRequest:
       type: object
       properties:
@@ -1028,6 +1033,41 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Набор не найден }
+
+  /packs/{id}/duplicate:
+    post:
+      tags: [packs]
+      summary: Создать независимую draft-копию набора
+      description: >-
+        Создаёт новую независимую draft-копию набора. Копируются config, фильтры,
+        goals, notes и ссылки media usages; MinIO-объекты и adaptations не копируются.
+        Название формируется как название исходного набора с добавлением суффикса
+        ` (копия)`. При дублировании ранее созданной копии суффикс добавляется повторно.
+        Пока скопированный media usage существует, соответствующий media-файл нельзя
+        удалить. Каждый успешный запрос создаёт новый pack с новым ID; endpoint
+        не является идемпотентным.
+        Свой набор без folder_id копируется в исходную папку. Для опубликованного
+        набора другого пользователя той же организации folder_id обязателен.
+        Целевая папка должна принадлежать пользователю и находиться в разделе
+        «Мои наборы» или «Картотека учеников». Копия всегда создаётся как draft.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DuplicatePackRequest' }
+      responses:
+        '201':
+          description: Независимая draft-копия создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pack' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Исходный набор не найден или недоступен }
 
   /packs/{id}/move:
     post:
