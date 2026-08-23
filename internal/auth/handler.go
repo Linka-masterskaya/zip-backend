@@ -47,6 +47,14 @@ type AuthHandlerInterface interface {
 		verifyResendLimit middleware.Middleware,
 		verifyEmailLimit middleware.Middleware,
 	)
+	Register(w http.ResponseWriter, r *http.Request) error
+	VerifyEmail(w http.ResponseWriter, r *http.Request) error
+	ResendEmail(w http.ResponseWriter, r *http.Request) error
+	Login(w http.ResponseWriter, r *http.Request) error
+	Refresh(w http.ResponseWriter, r *http.Request) error
+	Logout(w http.ResponseWriter, r *http.Request) error
+	ForgotPassword(w http.ResponseWriter, r *http.Request) error
+	ResetPassword(w http.ResponseWriter, r *http.Request) error
 }
 
 type authHandlers struct {

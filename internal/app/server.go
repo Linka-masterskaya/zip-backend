@@ -76,7 +76,7 @@ func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redi
 	httpapi.RegisterFolderRoutes(mux, authMW, rl.Packs, mods.folders)
 	httpapi.RegisterStudentRoutes(mux, authMW, rl.Packs, mods.students)
 	httpapi.RegisterPictureBankRoutes(mux, authMW, rl.Pictures, mods.pictures)
-	httpapi.RegisterAuthRoutes(mux, authMW, rl, redis, mods.auth)
+	httpapi.RegisterAuthRoutes(mux, authMW, rl, redis, cfg, mods.auth)
 	httpapi.RegisterProfileRoutes(mux, authMW, rl, mods.profile)
 	httpapi.RegisterTTSRoutes(mux, authMW, rl.TTS, mods.tts)
 	registerDocsRoutes(mux, cfg.App.DocsEnabled)

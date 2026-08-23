@@ -15,7 +15,6 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
 	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
 	"github.com/Linka-masterskaya/zip-backend/internal/media"
-	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/Linka-masterskaya/zip-backend/internal/pack"
 	"github.com/Linka-masterskaya/zip-backend/internal/picturebank"
 	"github.com/Linka-masterskaya/zip-backend/internal/profile"
@@ -34,7 +33,7 @@ type modules struct {
 	media          httpapi.MediaHandlers
 	folders        httpapi.FolderHandlers
 	students       httpapi.StudentHandlers
-	auth           httpapi.AuthHandlers
+	auth           auth.AuthHandlerInterface
 	profile        httpapi.ProfileHandlers
 	pictures       *picturebank.Handler
 	checker        *health.Checker
@@ -51,7 +50,7 @@ type modules struct {
 func buildModules(in *infra) (*modules, error) {
 	cfg := in.cfg
 
-	resendPolicy := middleware.RateLimitPolicy{
+	resendPolicy := auth.RateLimitPolicy{
 		Scope:  cfg.RateLimit.Resend.Scope,
 		Limit:  cfg.RateLimit.Resend.Limit,
 		Window: cfg.RateLimit.Resend.Window,
@@ -106,9 +105,9 @@ func buildModules(in *infra) (*modules, error) {
 		RateLimit:                resendPolicy,
 	}
 
+	// ИСПРАВЛЕНО: убрали лишний in.redis (было 6 аргументов, стало 5)
 	authService := auth.NewAuthService(
 		auth.NewAuthRepo(in.db),
-		in.redis,
 		in.redis,
 		in.mailer,
 		authCfg,
@@ -195,6 +194,9 @@ func buildModules(in *infra) (*modules, error) {
 		cfg.Cron.TTSCleanup.Limit,
 	)
 
+	// ИСПРАВЛЕНО: auth.NewAuthHandler вместо auth.NewHandler
+	authHandler := auth.NewAuthHandler(authService, authCfg)
+
 	return &modules{
 		packs: httpapi.PackHandlers{
 			Pack:     pack.NewHandler(packService),
@@ -214,9 +216,7 @@ func buildModules(in *infra) (*modules, error) {
 				student.NewService(studentRepo, in.crypto, in.storage),
 			),
 		},
-		auth: httpapi.AuthHandlers{
-			Auth: auth.NewHandler(authService, authCfg),
-		},
+		auth: authHandler, // ← ИСПРАВЛЕНО: используем authHandler
 		profile: httpapi.ProfileHandlers{
 			Profile:        profile.NewHandler(profileService),
 			ChangePassword: profile.NewChangePasswordHandler(changePasswordService),

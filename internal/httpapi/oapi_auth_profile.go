@@ -15,7 +15,7 @@ import (
 // The compile-time assertion below makes an OpenAPI/codegen signature change
 // fail the build until the application handlers are synchronized.
 type authProfileOAPIServer struct {
-	auth           *auth.Handler
+	auth           auth.AuthHandlerInterface
 	profile        *profile.Handler
 	changePassword *profile.ChangePasswordHandler
 }
