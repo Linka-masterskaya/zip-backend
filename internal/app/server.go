@@ -79,6 +79,7 @@ func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redi
 	httpapi.RegisterAuthRoutes(mux, authMW, rl, redis, mods.auth)
 	httpapi.RegisterProfileRoutes(mux, authMW, rl, mods.profile)
 	httpapi.RegisterTTSRoutes(mux, authMW, rl.TTS, mods.tts)
+	httpapi.RegisterSettingsRoutes(mux, authMW, mods.settings)
 	registerDocsRoutes(mux, cfg.App.DocsEnabled)
 
 	handler := middleware.Chain(

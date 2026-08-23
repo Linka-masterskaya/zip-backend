@@ -16,6 +16,7 @@ tags:
   - name: media
   - name: pictures
   - name: students
+  - name: settings
 
 components:
   securitySchemes:
@@ -228,6 +229,11 @@ components:
         title: { type: string }
         folder_id: { type: string, format: uuid }
 
+    DuplicatePackRequest:
+      type: object
+      properties:
+        folder_id: { type: string, format: uuid, nullable: true }
+
     UpdatePackRequest:
       type: object
       properties:
@@ -402,6 +408,58 @@ components:
         student_id: { type: string, format: uuid, nullable: true }
         published:  { type: boolean }
         updated_at: { type: string, format: date-time }
+
+    SettingsDocument:
+      type: object
+      additionalProperties: false
+      description: |
+        AB-48 v1 user-scoped site settings, persisted across relogin and devices.
+        The seven top-level keys are the complete v1 allow-list. Voice is typed;
+        colors and border_width have a minimal CSS-safe contract; the remaining
+        four values are opaque JSON until a nested frontend contract is approved.
+        The document is limited to 64 KiB by the backend.
+      properties:
+        eye_control:
+          description: Opaque JSON value in AB-48 v1.
+        card_activation:
+          description: Opaque JSON value in AB-48 v1.
+        interactivity:
+          description: Opaque JSON value in AB-48 v1.
+        voice:
+          type: string
+          minLength: 1
+          description: User-level default; must match /tts/voices when that list is available.
+        button_direction:
+          description: Opaque JSON value in AB-48 v1.
+        colors:
+          type: object
+          description: "CSS-safe color map; every value must be a six-digit #RRGGBB string."
+          additionalProperties:
+            type: string
+            pattern: '^#[0-9A-Fa-f]{6}$'
+        border_width:
+          type: integer
+          minimum: 0
+          maximum: 32
+          description: Border width in pixels.
+
+    SettingsTemplate:
+      type: object
+      required: [id, name, body, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        body: { $ref: '#/components/schemas/SettingsDocument' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateSettingsTemplateRequest:
+      type: object
+      required: [name, body]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        body: { $ref: '#/components/schemas/SettingsDocument' }
 
   responses:
     BadRequest:   { description: Невалидный ввод, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -976,6 +1034,41 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Набор не найден }
 
+  /packs/{id}/duplicate:
+    post:
+      tags: [packs]
+      summary: Создать независимую draft-копию набора
+      description: >-
+        Создаёт новую независимую draft-копию набора. Копируются config, фильтры,
+        goals, notes и ссылки media usages; MinIO-объекты и adaptations не копируются.
+        Название формируется как название исходного набора с добавлением суффикса
+        ` (копия)`. При дублировании ранее созданной копии суффикс добавляется повторно.
+        Пока скопированный media usage существует, соответствующий media-файл нельзя
+        удалить. Каждый успешный запрос создаёт новый pack с новым ID; endpoint
+        не является идемпотентным.
+        Свой набор без folder_id копируется в исходную папку. Для опубликованного
+        набора другого пользователя той же организации folder_id обязателен.
+        Целевая папка должна принадлежать пользователю и находиться в разделе
+        «Мои наборы» или «Картотека учеников». Копия всегда создаётся как draft.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DuplicatePackRequest' }
+      responses:
+        '201':
+          description: Независимая draft-копия создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pack' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Исходный набор не найден или недоступен }
+
   /packs/{id}/move:
     post:
       tags: [packs]
@@ -1447,6 +1540,87 @@ paths:
         '204': { description: Soft-delete выполнен }
         '404': { description: Ученик не найден }
         '409': { $ref: '#/components/responses/Conflict' }
+
+
+  /settings:
+    get:
+      tags: [settings]
+      summary: Получить настройки текущего пользователя
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Настройки; для нового пользователя возвращается пустой объект
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsDocument' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [settings]
+      summary: Полностью заменить настройки текущего пользователя
+      description: "JSON-объект до 64 KiB; неизвестные ключи верхнего уровня отклоняются. Ответ содержит JSONB-представление, фактически сохранённое в PostgreSQL."
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsDocument' }
+      responses:
+        '200':
+          description: Сохранённые настройки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsDocument' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { description: JSON превышает лимит размера }
+
+  /settings/templates:
+    get:
+      tags: [settings]
+      summary: Шаблоны настроек текущего пользователя
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Список шаблонов
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SettingsTemplate' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [settings]
+      summary: Создать шаблон настроек
+      description: "Не более 100 шаблонов на пользователя; имя уникально в пределах пользователя."
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSettingsTemplateRequest' }
+      responses:
+        '201':
+          description: Шаблон создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsTemplate' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { description: JSON превышает лимит размера }
+
+  /settings/templates/{id}:
+    delete:
+      tags: [settings]
+      summary: Удалить свой шаблон настроек
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Шаблон удалён }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Шаблон не найден или принадлежит другому пользователю }
 
   /tts:
     post:
