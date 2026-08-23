@@ -30,25 +30,20 @@ func TestCreateMediaFileIsolatesOrgs(t *testing.T) {
     INSERT INTO users (id, org_id, display_name) VALUES ($1, $3, 'User A'), ($2, $4, 'User B')`, userA, userB, orgA, orgB)
 	require.NoError(t, err)
 
-	minioKey := "tts/shared-key-abc"
-	sha := "digest"
-	size := int64(1024)
-	mimeType := "audio/mpeg"
-
-	job := &JobDetails{
-		Status:    StatusSucceeded,
-		MinioKey:  &minioKey,
-		SHA256:    &sha,
-		SizeBytes: &size,
-		MimeType:  &mimeType,
+	input := MediaFileInput{
+		MinioKey:  "tts/shared-key-abc",
+		SHA256:    "digest",
+		SizeBytes: 1024,
+		MimeType:  "audio/mpeg",
+		Name:      "test text",
 	}
 
 	repo := NewRepository(pool)
 
-	mediaA, err := repo.CreateMediaFile(ctx, orgA, userA, job)
+	mediaA, err := repo.CreateMediaFile(ctx, orgA, userA, input)
 	require.NoError(t, err)
 
-	mediaB, err := repo.CreateMediaFile(ctx, orgB, userB, job)
+	mediaB, err := repo.CreateMediaFile(ctx, orgB, userB, input)
 	require.NoError(t, err)
 
 	assert.NotEqual(t, mediaA, mediaB, "разные org должны получать разные media_files.id")
@@ -63,7 +58,7 @@ func TestCreateMediaFileIsolatesOrgs(t *testing.T) {
 	assert.Equal(t, 1, countA)
 	assert.Equal(t, 1, countB)
 
-	mediaAAgain, err := repo.CreateMediaFile(ctx, orgA, userA, job)
+	mediaAAgain, err := repo.CreateMediaFile(ctx, orgA, userA, input)
 	require.NoError(t, err)
 	assert.Equal(t, mediaA, mediaAAgain, "повторный CreateMediaFile для той же org должен вернуть ту же строку")
 }

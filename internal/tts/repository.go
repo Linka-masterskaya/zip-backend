@@ -22,15 +22,14 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-func (r *Repository) CreateSucceededJob(ctx context.Context, entry *BankEntry) (uuid.UUID, error) {
+func (r *Repository) CreateSucceededJob(ctx context.Context, orgID uuid.UUID, entry *BankEntry, mediaID uuid.UUID) (uuid.UUID, error) {
 	var jobID uuid.UUID
 	err := r.pool.QueryRow(ctx,
 		createSucceededJob,
+		orgID,
 		entry.Text,
 		entry.Voice,
-		entry.MinioKey,
-		entry.SHA256,
-		entry.SizeBytes).Scan(&jobID)
+		mediaID).Scan(&jobID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("tts.CreateSucceededJob: %w", err)
 	}
@@ -38,16 +37,11 @@ func (r *Repository) CreateSucceededJob(ctx context.Context, entry *BankEntry) (
 	return jobID, nil
 }
 
-func (r *Repository) CompleteJob(ctx context.Context, jobID uuid.UUID, minioKey, sha256 string, sizeBytes int64) error {
-	_, err := r.pool.Exec(ctx, completeJob,
-		jobID,
-		minioKey,
-		sha256,
-		sizeBytes)
+func (r *Repository) CompleteJob(ctx context.Context, jobID, mediaID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx, completeJob, jobID, mediaID)
 	if err != nil {
 		return fmt.Errorf("tts.CompleteJob: %w", err)
 	}
-
 	return nil
 }
 
@@ -63,7 +57,7 @@ func (r *Repository) UpdateStatusTTS(ctx context.Context, jobID uuid.UUID, statu
 	return nil
 }
 
-func (r *Repository) CreateOrGetInflightJob(ctx context.Context, text, voice string) (uuid.UUID, bool, error) {
+func (r *Repository) CreateOrGetInflightJob(ctx context.Context, orgID uuid.UUID, text, voice string) (uuid.UUID, bool, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return uuid.Nil, false, fmt.Errorf("tts.CreateOrGetInflightJob begin tx: %w", err)
@@ -75,12 +69,12 @@ func (r *Repository) CreateOrGetInflightJob(ctx context.Context, text, voice str
 	var returnedID uuid.UUID
 	var isNew bool
 
-	err = tx.QueryRow(ctx, insertJobQuery, text, voice).Scan(&returnedID)
+	err = tx.QueryRow(ctx, insertJobQuery, orgID, text, voice).Scan(&returnedID)
 	switch {
 	case err == nil:
 		isNew = true
 	case errors.Is(err, pgx.ErrNoRows):
-		if err = tx.QueryRow(ctx, findInflightJobQuery, text, voice).Scan(&returnedID); err != nil {
+		if err = tx.QueryRow(ctx, findInflightJobQuery, orgID, text, voice).Scan(&returnedID); err != nil {
 			return uuid.Nil, false, fmt.Errorf("tts.CreateOrGetInflightJob find job: %w", err)
 		}
 	default:
@@ -145,10 +139,7 @@ func (r *Repository) GetJob(ctx context.Context, jobID uuid.UUID) (*JobDetails, 
 	var jobDetails JobDetails
 	err := r.pool.QueryRow(ctx, getJob, jobID).Scan(
 		&jobDetails.Status,
-		&jobDetails.MinioKey,
-		&jobDetails.SHA256,
-		&jobDetails.SizeBytes,
-		&jobDetails.Text,
+		&jobDetails.MediaID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -160,7 +151,7 @@ func (r *Repository) GetJob(ctx context.Context, jobID uuid.UUID) (*JobDetails, 
 	return &jobDetails, nil
 }
 
-func (r *Repository) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUID, job *JobDetails) (uuid.UUID, error) {
+func (r *Repository) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUID, input MediaFileInput) (uuid.UUID, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
@@ -178,7 +169,7 @@ func (r *Repository) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUI
 	}
 
 	var mediaID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT id FROM media_files WHERE minio_key = $1 AND org_id = $2`, job.MinioKey, orgID).Scan(&mediaID)
+	err = tx.QueryRow(ctx, `SELECT id FROM media_files WHERE minio_key = $1 AND org_id = $2`, input.MinioKey, orgID).Scan(&mediaID)
 	if err == nil {
 		return mediaID, nil
 	}
@@ -187,7 +178,7 @@ func (r *Repository) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUI
 	}
 
 	var quota bool
-	err = tx.QueryRow(ctx, updateOrgQuota, orgID, job.SizeBytes).Scan(&quota)
+	err = tx.QueryRow(ctx, updateOrgQuota, orgID, input.SizeBytes).Scan(&quota)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, ErrQuotaExceeded
 	}
@@ -195,10 +186,10 @@ func (r *Repository) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUI
 		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
 	}
 
-	mediaType, _, _ := strings.Cut(*job.MimeType, "/")
+	mediaType, _, _ := strings.Cut(input.MimeType, "/")
 	err = tx.QueryRow(ctx, insertMediaFromTTS,
-		orgID, userID, job.SHA256, job.MimeType, job.SizeBytes, job.MinioKey,
-		job.Text, mediaType,
+		orgID, userID, input.SHA256, input.MimeType, input.SizeBytes, input.MinioKey,
+		input.Name, mediaType,
 	).Scan(&mediaID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)

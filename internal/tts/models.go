@@ -2,6 +2,8 @@ package tts
 
 import (
 	"errors"
+
+	"github.com/google/uuid"
 )
 
 var ErrQuotaExceeded = errors.New("storage quota exceeded")
@@ -36,12 +38,8 @@ type TTSJobResponse struct {
 }
 
 type JobDetails struct {
-	Status    string
-	MinioKey  *string
-	SHA256    *string
-	SizeBytes *int64
-	MimeType  *string
-	Text      string
+	Status  string
+	MediaID *uuid.UUID
 }
 
 type ServiceConfig struct {
@@ -62,4 +60,11 @@ type VoiceResponse struct {
 
 type VoicesResponse struct {
 	Voices []VoiceResponse `json:"voices"`
+}
+type MediaFileInput struct {
+	MinioKey  string
+	SHA256    string
+	SizeBytes int64
+	MimeType  string
+	Name      string
 }

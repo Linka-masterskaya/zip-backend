@@ -1,13 +1,13 @@
 package tts
 
 const createSucceededJob = `
-INSERT INTO tts_jobs(text, voice, status, minio_key, sha256, size_bytes)
-VALUES($1, $2, 'succeeded', $3, $4, $5)
+INSERT INTO tts_jobs(org_id, text, voice, status, media_id)
+VALUES($1, $2, $3, 'succeeded', $4)
 RETURNING id`
 
 const completeJob = `
 UPDATE tts_jobs
-SET status='succeeded', minio_key=$2, sha256=$3, size_bytes=$4, updated_at=NOW()
+SET status='succeeded', media_id=$2, updated_at=NOW()
 WHERE id = $1`
 
 const updateStatusTTS = `
@@ -16,14 +16,14 @@ SET status=$2, updated_at=NOW()
 WHERE id = $1`
 
 const insertJobQuery = `
-INSERT INTO tts_jobs (text, voice, status)
-VALUES ($1, $2, 'pending')
-ON CONFLICT (text, voice) WHERE status IN ('pending', 'in_progress') DO NOTHING
+INSERT INTO tts_jobs (org_id, text, voice, status)
+VALUES ($1, $2, $3, 'pending')
+ON CONFLICT (org_id, text, voice) WHERE status IN ('pending', 'in_progress') DO NOTHING
 RETURNING id`
 
 const findInflightJobQuery = `
 SELECT id FROM tts_jobs
-WHERE text = $1 AND voice = $2 AND status IN ('pending', 'in_progress')`
+WHERE org_id = $1 AND text = $2 AND voice = $3 AND status IN ('pending', 'in_progress')`
 
 const getFromBankQuery = `
 UPDATE audio_bank
@@ -38,7 +38,7 @@ VALUES($1, $2, $3, $4, $5)
 ON CONFLICT (text, voice) DO NOTHING`
 
 const getJob = `
-SELECT status, minio_key, sha256, size_bytes, text
+SELECT status, media_id
 FROM tts_jobs
 WHERE id=$1`
 

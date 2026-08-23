@@ -27,25 +27,42 @@ type uploader interface {
 }
 
 type audioBank interface {
-	CompleteJob(context.Context, uuid.UUID, string, string, int64) error
+	CompleteJob(context.Context, uuid.UUID, uuid.UUID) error
 	PutToBank(context.Context, *tts.BankEntry) error
-	UpdateStatusTTS(ctx context.Context, jobID uuid.UUID, status string) error
+	UpdateStatusTTS(context.Context, uuid.UUID, string) error
+	CreateMediaFile(context.Context, uuid.UUID, uuid.UUID, tts.MediaFileInput) (uuid.UUID, error)
 }
 
 type TTS struct {
-	client  synthesizer
-	storage uploader
-	repo    audioBank
+	client   synthesizer
+	storage  uploader
+	repo     audioBank
+	mimeType string
 }
 
-func NewTTS(ttsapi synthesizer, storage uploader, repo audioBank) *TTS {
-	return &TTS{client: ttsapi, storage: storage, repo: repo}
+func NewTTS(ttsapi synthesizer, storage uploader, repo audioBank, mimeType string) *TTS {
+	return &TTS{
+		client:   ttsapi,
+		storage:  storage,
+		repo:     repo,
+		mimeType: mimeType,
+	}
 }
 
 func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool) error {
 	jobID, err := uuid.Parse(job.JobId)
 	if err != nil {
 		slog.ErrorContext(ctx, "worker.Handle: bad job id in message", "job_id", job.JobId, "err", err)
+		return nil
+	}
+	orgID, err := uuid.Parse(job.OrgID)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: bad org id", "org_id", job.OrgID, "err", err)
+		return nil
+	}
+	userID, err := uuid.Parse(job.UserID)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: bad user id", "user_id", job.UserID, "err", err)
 		return nil
 	}
 
@@ -71,12 +88,23 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 	}
 	keyHash := sha256.Sum256(data)
 	key := "tts/" + hex.EncodeToString(keyHash[:])
-	err = w.storage.PutObject(ctx, key, bytes.NewReader(audio), audioSize, "audio/mpeg")
+	err = w.storage.PutObject(ctx, key, bytes.NewReader(audio), audioSize, w.mimeType)
 	if err != nil {
 		return w.handleRetryable(ctx, jobID, "PutObject", isLastAttempt, err)
 	}
 
-	err = w.repo.CompleteJob(ctx, jobID, key, digest, audioSize)
+	mediaID, err := w.repo.CreateMediaFile(ctx, orgID, userID, tts.MediaFileInput{
+		MinioKey:  key,
+		SHA256:    digest,
+		SizeBytes: audioSize,
+		MimeType:  w.mimeType,
+		Name:      job.Text,
+	})
+	if err != nil {
+		return w.handleRetryable(ctx, jobID, "CreateMediaFile", isLastAttempt, err)
+	}
+
+	err = w.repo.CompleteJob(ctx, jobID, mediaID)
 	if err != nil {
 		return w.handleRetryable(ctx, jobID, "CompleteJob", isLastAttempt, err)
 	}

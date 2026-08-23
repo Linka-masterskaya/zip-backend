@@ -14,13 +14,13 @@ import (
 )
 
 type repository interface {
-	CreateSucceededJob(context.Context, *BankEntry) (uuid.UUID, error)
-	CreateOrGetInflightJob(context.Context, string, string) (uuid.UUID, bool, error)
+	CreateSucceededJob(context.Context, uuid.UUID, *BankEntry, uuid.UUID) (uuid.UUID, error)
+	CreateOrGetInflightJob(context.Context, uuid.UUID, string, string) (uuid.UUID, bool, error)
 	GetFromBank(context.Context, string, string) (*BankEntry, error)
 	UpdateStatusTTS(context.Context, uuid.UUID, string) error
 	GetOrgID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetJob(context.Context, uuid.UUID) (*JobDetails, error)
-	CreateMediaFile(context.Context, uuid.UUID, uuid.UUID, *JobDetails) (uuid.UUID, error)
+	CreateMediaFile(context.Context, uuid.UUID, uuid.UUID, MediaFileInput) (uuid.UUID, error)
 	GetVoices(context.Context) ([]Voice, error)
 	UpsertVoices(context.Context, []Voice) error
 }
@@ -61,9 +61,29 @@ func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (stri
 		return "", apperr.ErrBadRequest.WithMessage("text too long")
 	}
 
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return "", fmt.Errorf("tts.CreateAudio: %w", err)
+	}
+	orgID, err := s.repo.GetOrgID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+
 	entry, err := s.repo.GetFromBank(ctx, ttsData.Text, ttsData.Voice)
 	if err == nil {
-		jobID, err := s.repo.CreateSucceededJob(ctx, entry)
+		mediaID, err := s.repo.CreateMediaFile(ctx, orgID, userID, MediaFileInput{
+			MinioKey:  entry.MinioKey,
+			SHA256:    entry.SHA256,
+			SizeBytes: entry.SizeBytes,
+			MimeType:  s.mimetype,
+			Name:      entry.Text,
+		})
+		if err != nil {
+			return "", ttsError(err)
+		}
+
+		jobID, err := s.repo.CreateSucceededJob(ctx, orgID, entry, mediaID)
 		if err != nil {
 			return "", err
 		}
@@ -77,15 +97,17 @@ func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (stri
 		return "", apperr.ErrBadRequest.WithMessage("unknown voice")
 	}
 
-	jobId, isJobNew, err := s.repo.CreateOrGetInflightJob(ctx, ttsData.Text, ttsData.Voice)
+	jobId, isJobNew, err := s.repo.CreateOrGetInflightJob(ctx, orgID, ttsData.Text, ttsData.Voice)
 	if err != nil {
 		return "", err
 	}
 	if isJobNew {
 		err := s.pub.PublishTTSJob(ctx, broker.TTSJob{
-			JobId: jobId.String(),
-			Text:  ttsData.Text,
-			Voice: ttsData.Voice,
+			JobId:  jobId.String(),
+			OrgID:  orgID.String(),
+			UserID: userID.String(),
+			Text:   ttsData.Text,
+			Voice:  ttsData.Voice,
 		})
 		if err != nil {
 			s.failJob(context.WithoutCancel(ctx), jobId)
@@ -106,27 +128,11 @@ func (s *Service) GetJob(ctx context.Context, jobID uuid.UUID) (string, string, 
 		return jobDetails.Status, "", nil
 	}
 
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return "", "", fmt.Errorf("tts.GetJob: %w", err)
+	if jobDetails.MediaID == nil {
+		return "", "", fmt.Errorf("tts.GetJob: succeeded job has no media_id")
 	}
 
-	orgID, err := s.repo.GetOrgID(ctx, userID)
-	if err != nil {
-		return "", "", fmt.Errorf("tts.GetJob: %w", err)
-	}
-
-	if jobDetails.MinioKey == nil || jobDetails.SHA256 == nil || jobDetails.SizeBytes == nil {
-		return "", "", fmt.Errorf("tts.GetJob: succeeded job has missing fields")
-	}
-
-	jobDetails.MimeType = &s.mimetype
-	mediaID, err := s.repo.CreateMediaFile(ctx, orgID, userID, jobDetails)
-	if err != nil {
-		return "", "", ttsError(err)
-	}
-
-	return jobDetails.Status, mediaID.String(), nil
+	return jobDetails.Status, jobDetails.MediaID.String(), nil
 }
 
 func (s *Service) GetVoices(ctx context.Context) ([]Voice, error) {

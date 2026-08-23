@@ -173,6 +173,7 @@ func buildModules(in *infra) (*modules, error) {
 		ttsClient,
 		in.storage,
 		ttsRepo,
+		cfg.TTS.MimeType,
 	)
 
 	ttsConsumer := broker.NewConsumer(
