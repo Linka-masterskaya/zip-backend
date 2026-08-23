@@ -142,17 +142,22 @@ func (r *fakeLocalRepository) Search(context.Context, string) ([]localPictureMet
 	return r.pictures, r.searchErr
 }
 
-func (r *fakeLocalRepository) Get(context.Context, uuid.UUID) (*localPictureMetadata, error) {
+func (r *fakeLocalRepository) Get(_ context.Context, id uuid.UUID) (*localPictureMetadata, error) {
 	if r.getErr != nil {
 		return nil, r.getErr
 	}
 	if r.get != nil {
+		if r.get.ID != id {
+			return nil, ErrPictureNotFound
+		}
 		return r.get, nil
 	}
-	if len(r.pictures) == 0 {
-		return nil, ErrPictureNotFound
+	for i := range r.pictures {
+		if r.pictures[i].ID == id {
+			return &r.pictures[i], nil
+		}
 	}
-	return &r.pictures[0], nil
+	return nil, ErrPictureNotFound
 }
 
 type fakeLocalStorage struct {

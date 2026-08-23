@@ -133,6 +133,7 @@ func readSeedFile(filePath string, maxBytes int64) ([]byte, error) {
 	if maxBytes <= 0 {
 		return nil, errors.New("pictures_bank.max_image_bytes must be positive")
 	}
+	//nolint:gosec // This operator-only CLI intentionally accepts an arbitrary local input file path.
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("open picture file: %w", err)
