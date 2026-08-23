@@ -364,8 +364,9 @@ func TestRepositoryMapsMetadataConstraintViolation(t *testing.T) {
 func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
-	_, ownerID, folderID := seedPackOwner(t, pool, "owner org")
-	_, readerID, _ := seedPackOwner(t, pool, "reader org")
+	ownerOrgID, ownerID, folderID := seedPackOwner(t, pool, "owner org")
+	readerID, _ := seedPackUserInOrg(t, pool, ownerOrgID, "my")
+	_, foreignReaderID, _ := seedPackOwner(t, pool, "foreign reader org")
 	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
 	otherLibraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
@@ -373,6 +374,8 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 		Title: "Published", FolderID: folderID, Config: config,
 	})
 	require.NoError(t, err)
+	_, err = repo.Get(context.Background(), readerID, created.ID)
+	assert.ErrorIs(t, err, ErrPackNotFound)
 
 	published, err := repo.Publish(
 		context.Background(), ownerID, created.ID, libraryFolderID, false,
@@ -397,6 +400,13 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	readable, err := repo.Get(context.Background(), readerID, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, created.ID, readable.ID)
+	_, err = repo.Get(context.Background(), foreignReaderID, created.ID)
+	assert.ErrorIs(
+		t,
+		err,
+		ErrPackNotFound,
+		"published pack must not be accessible outside its organization",
+	)
 
 	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
 	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))

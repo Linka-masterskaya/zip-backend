@@ -56,10 +56,8 @@ const getPackQuery = `
 	FROM packs p
 	JOIN users u ON u.id = $1
 	WHERE p.id = $2
-	  AND (
-		(p.owner_id = u.id AND p.org_id = u.org_id)
-		OR p.published_at IS NOT NULL
-	  )
+	  AND p.org_id = u.org_id
+	  AND (p.owner_id = u.id OR p.published_at IS NOT NULL)
 	  AND u.deleted_at IS NULL`
 
 const getPackForPublicationQuery = `
