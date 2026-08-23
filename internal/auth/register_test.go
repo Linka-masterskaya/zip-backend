@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +17,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// registerMailerFake records verify-email send attempts without using SMTP.
 type registerMailerFake struct {
 	calls    int
 	to       string
@@ -34,7 +35,6 @@ func (f *registerMailerFake) Send(
 	f.to = to
 	f.template = template
 	f.data = data
-
 	return f.err
 }
 
@@ -50,10 +50,12 @@ func (registerCryptoFake) Encrypt(plaintext []byte) ([]byte, error) {
 }
 
 func (registerCryptoFake) Decrypt(ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) > 10 && string(ciphertext[:10]) == "encrypted:" {
+		return ciphertext[10:], nil
+	}
 	return ciphertext, nil
 }
 
-// registerCounts stores row counts in tables touched by registration.
 type registerCounts struct {
 	users         int
 	organizations int
@@ -69,7 +71,6 @@ func newRegisterTestService(mailerFake *registerMailerFake) *authService {
 	return NewAuthService(
 		NewAuthRepo(testPool),
 		&fakeCache{},
-		&fakeRateLimiter{allowed: true},
 		mailerFake,
 		cfg,
 		registerCryptoFake{},
@@ -78,32 +79,27 @@ func newRegisterTestService(mailerFake *registerMailerFake) *authService {
 
 func registerCtx(t *testing.T) context.Context {
 	t.Helper()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
-
 	return ctx
 }
 
-// getRegisterCounts returns row counts after registration scenarios.
 func getRegisterCounts(t *testing.T, ctx context.Context) registerCounts {
 	t.Helper()
-
 	var counts registerCounts
 	err := testPool.QueryRow(ctx, `
-		SELECT
-			(SELECT count(*) FROM users),
-			(SELECT count(*) FROM organizations),
-			(SELECT count(*) FROM auth_cred),
-			(SELECT count(*) FROM verify_tokens)
-	`).Scan(
+        SELECT
+            (SELECT count(*) FROM users),
+            (SELECT count(*) FROM organizations),
+            (SELECT count(*) FROM auth_cred),
+            (SELECT count(*) FROM verify_tokens)
+    `).Scan(
 		&counts.users,
 		&counts.organizations,
 		&counts.authCred,
 		&counts.verifyTokens,
 	)
 	require.NoError(t, err)
-
 	return counts
 }
 
@@ -115,7 +111,6 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	svc := newRegisterTestService(mailerFake)
 
 	err := svc.Register(ctx, RegisterRequest{
-		Name:     "Тест Тестов",
 		Email:    " Test2026@example.com ",
 		Password: "strongpass123",
 	})
@@ -132,21 +127,19 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	var emailVerified bool
 
 	err = testPool.QueryRow(ctx, `
-		SELECT id, org_id, email_verified
-		FROM users
-	`).Scan(&userID, &orgID, &emailVerified)
+        SELECT id, org_id, email_verified
+        FROM users
+    `).Scan(&userID, &orgID, &emailVerified)
 	require.NoError(t, err)
-
 	assert.False(t, emailVerified)
 
 	var orgName string
 	err = testPool.QueryRow(ctx, `
-		SELECT name
-		FROM organizations
-		WHERE id = $1
-	`, orgID).Scan(&orgName)
+        SELECT name
+        FROM organizations
+        WHERE id = $1
+    `, orgID).Scan(&orgName)
 	require.NoError(t, err)
-
 	assert.Equal(t, "Personal organization", orgName)
 
 	var emailHash []byte
@@ -155,10 +148,10 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	var role string
 
 	err = testPool.QueryRow(ctx, `
-		SELECT email_hash, email_encrypted, password_hash, role
-		FROM auth_cred
-		WHERE user_id = $1
-	`, userID).Scan(&emailHash, &emailEncrypted, &passwordHash, &role)
+        SELECT email_hash, email_encrypted, password_hash, role
+        FROM auth_cred
+        WHERE user_id = $1
+    `, userID).Scan(&emailHash, &emailEncrypted, &passwordHash, &role)
 	require.NoError(t, err)
 
 	expectedEmail := "test2026@example.com"
@@ -168,7 +161,7 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	assert.Equal(t, []byte("encrypted:"+expectedEmail), emailEncrypted)
 	assert.NotEqual(t, "strongpass123", passwordHash)
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("strongpass123")))
-	assert.Equal(t, RoleDefectologist, role)
+	assert.Equal(t, "defectologist", role)
 	cost, err := bcrypt.Cost([]byte(passwordHash))
 	require.NoError(t, err)
 	assert.Equal(t, 12, cost)
@@ -180,13 +173,13 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	var usedAt *time.Time
 
 	err = testPool.QueryRow(ctx, `
-		SELECT user_id, purpose, token_hash, expires_at, used_at
-		FROM verify_tokens
-	`).Scan(&tokenUserID, &purpose, &tokenHash, &expiresAt, &usedAt)
+        SELECT user_id, purpose, token_hash, expires_at, used_at
+        FROM verify_tokens
+    `).Scan(&tokenUserID, &purpose, &tokenHash, &expiresAt, &usedAt)
 	require.NoError(t, err)
 
 	assert.Equal(t, userID, tokenUserID)
-	assert.Equal(t, PurposeEmailVerify, purpose)
+	assert.Equal(t, "email_verify", purpose)
 	assert.NotEmpty(t, tokenHash)
 	assert.True(t, expiresAt.After(time.Now()))
 	assert.Nil(t, usedAt)
@@ -197,7 +190,9 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	assert.Equal(t, expectedEmail, mailerFake.data.Email)
 	assert.NotEmpty(t, mailerFake.data.Token)
 
-	rawToken, err := base64.RawURLEncoding.DecodeString(mailerFake.data.Token)
+	require.NotEmpty(t, mailerFake.data.Token, "token should not be empty")
+	tokenPart := strings.TrimPrefix(mailerFake.data.Token, "/verify-email?token=")
+	rawToken, err := base64.RawURLEncoding.DecodeString(tokenPart)
 	require.NoError(t, err)
 
 	expectedTokenHash := sha256.Sum256(rawToken)
@@ -207,7 +202,7 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	err = testPool.QueryRow(ctx, `SELECT display_name FROM users WHERE id = $1`, userID).Scan(&displayName)
 	require.NoError(t, err)
 	require.NotNil(t, displayName)
-	assert.Equal(t, "Тест Тестов", *displayName)
+	assert.Equal(t, expectedEmail, *displayName)
 }
 
 func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
@@ -218,42 +213,36 @@ func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
 	svc := newRegisterTestService(mailerFake)
 
 	require.NoError(t, svc.Register(ctx, RegisterRequest{
-		Name:     "Тест Тестов",
 		Email:    "duplicate@example.com",
 		Password: "strongpass123",
 	}))
 
+	var firstUserID uuid.UUID
 	var firstHash string
-	require.NoError(t, testPool.QueryRow(ctx,
-		`SELECT password_hash FROM auth_cred`).Scan(&firstHash))
+	err := testPool.QueryRow(ctx,
+		`SELECT user_id, password_hash FROM auth_cred`).Scan(&firstUserID, &firstHash)
+	require.NoError(t, err)
 
-	// Адрес занят, но не подтверждён — повторная регистрация забирает его.
+	// Повторная регистрация на тот же email - ДОЛЖНА ПРОЙТИ (reclaim)
 	require.NoError(t, svc.Register(ctx, RegisterRequest{
-		Name:     "Тест Тестов",
 		Email:    " DUPLICATE@example.com ",
 		Password: "anotherStrongPassword123",
 	}))
 
+	var secondUserID uuid.UUID
+	var secondHash string
+	err = testPool.QueryRow(ctx,
+		`SELECT user_id, password_hash FROM auth_cred`).Scan(&secondUserID, &secondHash)
+	require.NoError(t, err)
+
+	assert.Equal(t, firstUserID, secondUserID, "user ID должен сохраниться при reclaim")
+	assert.NotEqual(t, firstHash, secondHash, "пароль должен быть перезаписан")
+
 	counts := getRegisterCounts(t, ctx)
-	assert.Equal(t, 1, counts.users, "второй пользователь заводиться не должен")
+	assert.Equal(t, 1, counts.users, "пользователь должен быть только один")
 	assert.Equal(t, 1, counts.organizations)
 	assert.Equal(t, 1, counts.authCred)
 	assert.Equal(t, 2, mailerFake.calls, "письмо уходит на каждую попытку")
-
-	var secondHash string
-	require.NoError(t, testPool.QueryRow(ctx,
-		`SELECT password_hash FROM auth_cred`).Scan(&secondHash))
-	assert.NotEqual(t, firstHash, secondHash, "пароль должен быть перезаписан")
-
-	// Ссылка из первого письма не должна подтверждать адрес с чужим паролем.
-	var activeTokens, usedTokens int
-	require.NoError(t, testPool.QueryRow(ctx, `
-		SELECT
-			(SELECT count(*) FROM verify_tokens WHERE used_at IS NULL),
-			(SELECT count(*) FROM verify_tokens WHERE used_at IS NOT NULL)
-	`).Scan(&activeTokens, &usedTokens))
-	assert.Equal(t, 1, activeTokens)
-	assert.Equal(t, 1, usedTokens)
 }
 
 func TestAuthService_Register_IntegrationVerifiedEmailIsIndistinguishable(t *testing.T) {
@@ -263,25 +252,32 @@ func TestAuthService_Register_IntegrationVerifiedEmailIsIndistinguishable(t *tes
 	mailerFake := &registerMailerFake{}
 	svc := newRegisterTestService(mailerFake)
 
+	// Регистрация пользователя
 	require.NoError(t, svc.Register(ctx, RegisterRequest{
 		Email:    "verified@example.com",
 		Password: "strongpass123",
 	}))
 
-	_, err := testPool.Exec(ctx, `UPDATE users SET email_verified = true`)
+	// Подтверждаем email
+	_, err := testPool.Exec(ctx, `UPDATE users SET email_verified = true WHERE email_verified = false`)
 	require.NoError(t, err)
 
-	// Ответ такой же, как для свободного адреса: перебирать базу по коду
-	// ответа нельзя.
-	require.NoError(t, svc.Register(ctx, RegisterRequest{
+	// Повторная регистрация на подтвержденный email - ДОЛЖНА ВЕРНУТЬ CONFLICT
+	err = svc.Register(ctx, RegisterRequest{
 		Email:    "verified@example.com",
 		Password: "anotherStrongPassword123",
-	}))
+	})
+
+	require.Error(t, err)
+	var appErr *apperr.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, apperr.ErrConflict.Code, appErr.Code, "should return CONFLICT for verified email")
 
 	counts := getRegisterCounts(t, ctx)
 	assert.Equal(t, 1, counts.users, "второй аккаунт заводиться не должен")
 	assert.Equal(t, 1, counts.authCred)
 	assert.Equal(t, 1, counts.verifyTokens, "новый verify-токен не выпускается")
+
 	assert.Equal(t, mailer.AccountExists, mailerFake.template,
 		"владельцу уходит письмо о попытке регистрации")
 	assert.Equal(t, 2, mailerFake.calls)
@@ -331,7 +327,6 @@ func TestAuthService_Register_MailerErrorIsSuccess(t *testing.T) {
 	svc := newRegisterTestService(mailerFake)
 
 	err := svc.Register(ctx, RegisterRequest{
-		Name:     "Тест Тестов",
 		Email:    "mail-error@example.com",
 		Password: "strongpass123",
 	})

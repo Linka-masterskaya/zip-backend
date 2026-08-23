@@ -65,7 +65,7 @@ func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
 		return nil, fmt.Errorf("cryptox init: %w", err)
 	}
 
-	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.FrontendURL)
+	smtpSender, err := mailer.NewSMTPSender(cfg.SMTP, cfg.App.FrontendURL, redisClient)
 	if err != nil {
 		return nil, fmt.Errorf("smtp init: %w", err)
 	}

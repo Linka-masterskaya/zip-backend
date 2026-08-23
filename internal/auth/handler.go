@@ -375,7 +375,6 @@ func (h *authHandlers) RegisterRoutes(
 		cfg.App.TrustedProxies,
 	)
 
-	// RateLimitByUser удалён, resendPolicy больше не нужна
 	mux.Handle("POST /api/v1/auth/verify-email/resend",
 		verifyResendIPLimit(
 			middleware.ErrorMiddleware(h.ResendEmail),

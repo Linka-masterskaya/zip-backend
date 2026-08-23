@@ -33,7 +33,6 @@ func TestMain(m *testing.M) {
 		log.Fatal(err)
 	}
 
-	// apply migrations here
 	testPool = pool
 	code := m.Run()
 	cleanup()
@@ -618,4 +617,55 @@ func TestDeleteStaleUnverifiedUsersKeepsVerifiedRecentAndOwners(t *testing.T) {
 	require.NoError(t, testPool.QueryRow(ctx,
 		`SELECT count(*) FROM organizations`).Scan(&keptOrgs))
 	assert.Equal(t, 3, keptOrgs)
+}
+
+func TestCreateOAuthUserAndAuthCred(t *testing.T) {
+	truncateAll(t)
+	ctx := testCtx(t)
+
+	repo := NewAuthRepo(testPool)
+
+	userID := uuid.New()
+
+	tx, err := repo.beginTx(ctx)
+	require.NoError(t, err)
+
+	txRepo := repo.withTx(tx)
+
+	err = txRepo.CreateOAuthUser(ctx, CreateUserParams{
+		ID:             userID,
+		OrganizationID: nil,
+		Name:           "test@example.com",
+		EmailVerified:  false,
+	})
+	require.NoError(t, err)
+
+	err = txRepo.CreateAuthCred(ctx, CreateAuthCredParams{
+		UserID:         userID,
+		EmailHash:      []byte("hash"),
+		EmailEncrypted: []byte("encrypted"),
+		PasswordHash:   "password",
+		Role:           "defectologist",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, tx.Commit(ctx))
+
+	var count int
+	err = testPool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM users WHERE id = $1`,
+		userID,
+	).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	var credCount int
+	err = testPool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM auth_cred WHERE user_id = $1`,
+		userID,
+	).Scan(&credCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, credCount)
 }

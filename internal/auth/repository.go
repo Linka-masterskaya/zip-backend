@@ -374,6 +374,15 @@ func (r *authRepo) CreateAuthCred(ctx context.Context, params CreateAuthCredPara
 	return nil
 }
 
+func (r *authRepo) CreateOrganization(ctx context.Context, id uuid.UUID, name string) error {
+	query := `INSERT INTO organizations (id, name) VALUES ($1, $2)`
+	_, err := r.db.Exec(ctx, query, id, name)
+	if err != nil {
+		return fmt.Errorf("authRepo.CreateOrganization: %w", err)
+	}
+	return nil
+}
+
 func (r *authRepo) ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (uuid.UUID, error) {
 	rawToken, err := decodePasswordResetToken(token)
 	if err != nil {
@@ -469,4 +478,53 @@ func (r *authRepo) CreatePasswordResetToken(ctx context.Context, userID string, 
 	}
 
 	return token, nil
+}
+
+func (r *authRepo) DeleteStaleUnverifiedUsers(ctx context.Context, cutoff time.Time) (int64, error) {
+	// Удаляем пользователей, у которых:
+	// 1. Email не подтверждён (email_verified = false)
+	// 2. Созданы раньше cutoff
+	// 3. Нет активных verify_tokens (или все истекли/использованы)
+	query := `
+		WITH deleted_users AS (
+			DELETE FROM users
+			WHERE id IN (
+				SELECT u.id
+				FROM users u
+				LEFT JOIN verify_tokens vt ON vt.user_id = u.id 
+					AND vt.purpose = 'email_verify'
+					AND vt.used_at IS NULL
+					AND vt.expires_at > now()
+				WHERE u.email_verified = false
+					AND u.created_at < $1
+					AND u.deleted_at IS NULL
+					AND vt.id IS NULL
+			)
+			RETURNING id
+		)
+		SELECT COUNT(*) FROM deleted_users
+	`
+
+	var count int64
+	err := r.db.QueryRow(ctx, query, cutoff).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("authRepo.DeleteStaleUnverifiedUsers: %w", err)
+	}
+
+	return count, nil
+}
+
+func (r *authRepo) InvalidateAllVerifyTokens(ctx context.Context, userID uuid.UUID) error {
+	query := `
+        UPDATE verify_tokens
+        SET used_at = now()
+        WHERE user_id = $1
+            AND purpose = 'email_verify'
+            AND used_at IS NULL
+    `
+	_, err := r.db.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("authRepo.InvalidateAllVerifyTokens: %w", err)
+	}
+	return nil
 }

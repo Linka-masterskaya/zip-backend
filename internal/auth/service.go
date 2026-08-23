@@ -46,6 +46,8 @@ type authRepoIface interface {
 	CreateOAuthUser(ctx context.Context, params CreateUserParams) error
 	CreateIdentity(ctx context.Context, identity *UserIdentity) error
 	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
+	InvalidateAllVerifyTokens(ctx context.Context, userID uuid.UUID) error
+	CreateOrganization(ctx context.Context, id uuid.UUID, name string) error
 	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
 	ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (uuid.UUID, error)
 	beginTx(ctx context.Context) (pgx.Tx, error)
@@ -220,7 +222,6 @@ func (au *authService) validateRefreshToken(ctx context.Context, refreshToken st
 		return nil, nil, apperr.ErrJWTTokenInvalid
 	}
 
-	// Используем ctx вместо context.Background()
 	record, err := au.cache.GetRefresh(ctx, claims.ID)
 	if err != nil || record == nil {
 		return nil, nil, apperr.ErrJWTTokenInvalid
@@ -435,20 +436,12 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 		return fmt.Errorf("authService.resendEmail: %w", err)
 	}
 
-	verifyURL := au.cfg.FrontendURL +
-		"/verify-email?token=" +
-		base64.RawURLEncoding.EncodeToString(tokenRaw)
-
-	if err := au.mailer.Send(
-		ctx,
+	go au.sendVerificationEmail(
+		context.WithoutCancel(ctx),
+		userID,
 		string(emailDecrypted),
-		mailer.EmailVerify,
-		mailer.EmailData{
-			Token: verifyURL,
-		},
-	); err != nil {
-		return fmt.Errorf("authService.resendEmail: %w", err)
-	}
+		tokenRaw,
+	)
 
 	return nil
 }
@@ -500,9 +493,6 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
 		return fmt.Errorf("check user exists: %w", err)
 	}
-	if existingUser != nil {
-		return apperr.ErrConflict.WithMessage("email already registered")
-	}
 
 	// Begin transaction
 	tx, err := au.repo.beginTx(ctx)
@@ -517,44 +507,121 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 
 	txRepo := au.repo.withTx(tx)
 
-	// Generate user ID
-	userID, err := uuid.NewV7()
-	if err != nil {
-		return fmt.Errorf("generate user id: %w", err)
+	var userID uuid.UUID
+
+	if existingUser != nil {
+		// Если email уже подтвержден - конфликт
+		if existingUser.EmailVerified {
+			// Отправляем письмо о попытке регистрации
+			go au.sendAccountExistsEmail(ctx, email)
+			return apperr.ErrConflict.WithMessage("email already registered")
+		}
+
+		// Неподтвержденный пользователь - reclaim
+		userID, err = uuid.Parse(existingUser.ID)
+		if err != nil {
+			return fmt.Errorf("parse existing user id: %w", err)
+		}
+
+		// Проверяем, есть ли у пользователя организация
+		if existingUser.OrgID == nil {
+			orgID, err := uuid.NewV7()
+			if err != nil {
+				return fmt.Errorf("generate org id: %w", err)
+			}
+			if err := txRepo.CreateOrganization(ctx, orgID, "Personal organization"); err != nil {
+				return fmt.Errorf("create organization: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `UPDATE users SET org_id = $1 WHERE id = $2`, orgID, userID); err != nil {
+				return fmt.Errorf("update user org_id: %w", err)
+			}
+		}
+
+		// Инвалидируем старые verify токены
+		if err := txRepo.InvalidateAllVerifyTokens(ctx, userID); err != nil {
+			return fmt.Errorf("invalidate old tokens: %w", err)
+		}
+
+		// Удаляем старые auth_cred
+		if _, err := tx.Exec(ctx, `DELETE FROM auth_cred WHERE user_id = $1`, userID); err != nil {
+			return fmt.Errorf("delete old auth_cred: %w", err)
+		}
+
+		// Хешируем новый пароль
+		passwordHash, err := hashPassword(req.Password, au.cfg.BcryptCost)
+		if err != nil {
+			return fmt.Errorf("hash password: %w", err)
+		}
+
+		// Шифруем email
+		emailEncrypted, err := au.crp.Encrypt([]byte(email))
+		if err != nil {
+			return fmt.Errorf("encrypt email: %w", err)
+		}
+
+		// Создаем новые auth_cred
+		if err := txRepo.CreateAuthCred(ctx, CreateAuthCredParams{
+			UserID:         userID,
+			EmailHash:      emailHash,
+			EmailEncrypted: emailEncrypted,
+			PasswordHash:   passwordHash,
+			Role:           "defectologist",
+		}); err != nil {
+			return fmt.Errorf("create auth_cred: %w", err)
+		}
+
+		// Сбрасываем email_verified
+		if _, err := tx.Exec(ctx, `UPDATE users SET email_verified = false WHERE id = $1`, userID); err != nil {
+			return fmt.Errorf("reset email_verified: %w", err)
+		}
+
+	} else {
+		// Новый пользователь - создаем организацию
+		orgID, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("generate org id: %w", err)
+		}
+
+		if err := txRepo.CreateOrganization(ctx, orgID, "Personal organization"); err != nil {
+			return fmt.Errorf("create organization: %w", err)
+		}
+
+		userID, err = uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("generate user id: %w", err)
+		}
+
+		passwordHash, err := hashPassword(req.Password, au.cfg.BcryptCost)
+		if err != nil {
+			return fmt.Errorf("hash password: %w", err)
+		}
+
+		emailEncrypted, err := au.crp.Encrypt([]byte(email))
+		if err != nil {
+			return fmt.Errorf("encrypt email: %w", err)
+		}
+
+		if err := txRepo.CreateOAuthUser(ctx, CreateUserParams{
+			ID:             userID,
+			OrganizationID: &orgID,
+			Name:           email,
+			EmailVerified:  false,
+		}); err != nil {
+			return fmt.Errorf("create user: %w", err)
+		}
+
+		if err := txRepo.CreateAuthCred(ctx, CreateAuthCredParams{
+			UserID:         userID,
+			EmailHash:      emailHash,
+			EmailEncrypted: emailEncrypted,
+			PasswordHash:   passwordHash,
+			Role:           "defectologist",
+		}); err != nil {
+			return fmt.Errorf("create auth_cred: %w", err)
+		}
 	}
 
-	// Hash password
-	passwordHash, err := hashPassword(req.Password, au.cfg.BcryptCost)
-	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
-	}
-
-	// Encrypt email
-	emailEncrypted, err := au.crp.Encrypt([]byte(email))
-	if err != nil {
-		return fmt.Errorf("encrypt email: %w", err)
-	}
-
-	// Create user
-	if err := txRepo.CreateOAuthUser(ctx, CreateUserParams{
-		ID:             userID,
-		OrganizationID: nil,
-		Name:           email,
-		EmailVerified:  false,
-	}); err != nil {
-		return fmt.Errorf("create user: %w", err)
-	}
-
-	if err := txRepo.CreateAuthCred(ctx, CreateAuthCredParams{
-		UserID:         userID,
-		EmailHash:      emailHash,
-		EmailEncrypted: emailEncrypted,
-		PasswordHash:   passwordHash,
-		Role:           "defectologist",
-	}); err != nil {
-		return fmt.Errorf("create auth_cred: %w", err)
-	}
-
+	// Создаем новый verify token
 	tokenRaw := make([]byte, 32)
 	if _, err := rand.Read(tokenRaw); err != nil {
 		return fmt.Errorf("generate token: %w", err)
@@ -580,7 +647,6 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 		return fmt.Errorf("commit tx: %w", err)
 	}
 
-	// Send verification email asynchronously
 	go au.sendVerificationEmail(context.WithoutCancel(ctx), userID, email, tokenRaw)
 
 	return nil
@@ -602,6 +668,23 @@ func (au *authService) sendVerificationEmail(ctx context.Context, userID uuid.UU
 	}); err != nil {
 		slog.ErrorContext(ctx, "failed to send verification email",
 			"user_id", userID,
+			"error", err,
+		)
+	}
+}
+
+// sendAccountExistsEmail отправляет письмо о попытке регистрации на уже существующий email
+func (au *authService) sendAccountExistsEmail(ctx context.Context, email string) {
+	if au.mailer == nil {
+		slog.ErrorContext(ctx, "mailer is not configured")
+		return
+	}
+
+	if err := au.mailer.Send(ctx, email, mailer.AccountExists, mailer.EmailData{
+		Email: email,
+	}); err != nil {
+		slog.ErrorContext(ctx, "failed to send account exists email",
+			"email", email,
 			"error", err,
 		)
 	}
