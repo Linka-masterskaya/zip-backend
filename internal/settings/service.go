@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
@@ -16,7 +18,7 @@ import (
 
 type repository interface {
 	Get(context.Context, uuid.UUID) (json.RawMessage, error)
-	Put(context.Context, uuid.UUID, json.RawMessage) error
+	Put(context.Context, uuid.UUID, json.RawMessage) (json.RawMessage, error)
 	ListTemplates(context.Context, uuid.UUID) ([]Template, error)
 	CreateTemplate(context.Context, uuid.UUID, string, json.RawMessage) (*Template, error)
 	DeleteTemplate(context.Context, uuid.UUID, uuid.UUID) error
@@ -25,6 +27,8 @@ type repository interface {
 type voiceCatalog interface {
 	GetVoices(context.Context) ([]tts.Voice, error)
 }
+
+var hexColorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 type Service struct {
 	repo   repository
@@ -51,10 +55,7 @@ func (s *Service) Put(ctx context.Context, body json.RawMessage) (json.RawMessag
 	if err := s.validate(ctx, body); err != nil {
 		return nil, err
 	}
-	if err := s.repo.Put(ctx, userID, body); err != nil {
-		return nil, err
-	}
-	return body, nil
+	return s.repo.Put(ctx, userID, body)
 }
 
 func (s *Service) ListTemplates(ctx context.Context) ([]Template, error) {
@@ -119,6 +120,18 @@ func (s *Service) validate(ctx context.Context, body json.RawMessage) error {
 		}
 	}
 
+	if rawColors, ok := object[keyColors]; ok {
+		if err := validateColors(rawColors); err != nil {
+			return err
+		}
+	}
+
+	if rawBorderWidth, ok := object[keyBorderWidth]; ok {
+		if err := validateBorderWidth(rawBorderWidth); err != nil {
+			return err
+		}
+	}
+
 	if rawVoice, ok := object[keyVoice]; ok {
 		var voice string
 		if err := json.Unmarshal(rawVoice, &voice); err != nil || strings.TrimSpace(voice) == "" {
@@ -138,7 +151,9 @@ func (s *Service) validateVoice(ctx context.Context, voice string) error {
 	voices, err := s.voices.GetVoices(ctx)
 	if err != nil {
 		// The acceptance criterion is conditional: validate only while a voice
-		// list is available. TTS outages must not make settings unwritable.
+		// list is available. TTS outages must not make settings unwritable, but
+		// the degraded validation path must be observable.
+		slog.WarnContext(ctx, "settings voice validation skipped: catalog unavailable", "err", err)
 		return nil
 	}
 	for _, candidate := range voices {
@@ -147,4 +162,28 @@ func (s *Service) validateVoice(ctx context.Context, voice string) error {
 		}
 	}
 	return apperr.ErrBadRequest.WithMessage("unknown voice")
+}
+
+func validateColors(raw json.RawMessage) error {
+	var colors map[string]string
+	if err := json.Unmarshal(raw, &colors); err != nil || colors == nil {
+		return apperr.ErrBadRequest.WithMessage("colors must be an object of #RRGGBB strings")
+	}
+	for name, value := range colors {
+		if !hexColorPattern.MatchString(value) {
+			return apperr.ErrBadRequest.WithMessage(fmt.Sprintf("invalid color %s: expected #RRGGBB", name))
+		}
+	}
+	return nil
+}
+
+func validateBorderWidth(raw json.RawMessage) error {
+	var width *int
+	if err := json.Unmarshal(raw, &width); err != nil || width == nil {
+		return apperr.ErrBadRequest.WithMessage("border_width must be an integer")
+	}
+	if *width < 0 || *width > MaxBorderWidth {
+		return apperr.ErrBadRequest.WithMessage(fmt.Sprintf("border_width must be between 0 and %d", MaxBorderWidth))
+	}
+	return nil
 }

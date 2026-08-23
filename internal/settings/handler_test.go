@@ -74,6 +74,23 @@ func TestHandlerGetAndPut(t *testing.T) {
 	}
 }
 
+func TestHandlerPutReturnsStoredRepresentation(t *testing.T) {
+	requestBody := json.RawMessage(`{ "border_width": 2 }`)
+	storedBody := json.RawMessage(`{"border_width": 2}`)
+	h := NewHandler(&fakeSettingsService{
+		putFn: func(_ context.Context, got json.RawMessage) (json.RawMessage, error) {
+			assert.Equal(t, string(requestBody), string(got))
+			return storedBody, nil
+		},
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPut, "/api/v1/settings", bytes.NewReader(requestBody))
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, h.Put(rec, req))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, string(storedBody)+"\n", rec.Body.String())
+}
+
 func TestHandlerPutRejectsOversizedRequest(t *testing.T) {
 	h := NewHandler(&fakeSettingsService{
 		putFn: func(context.Context, json.RawMessage) (json.RawMessage, error) {

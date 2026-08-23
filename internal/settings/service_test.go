@@ -18,7 +18,7 @@ import (
 
 type fakeRepository struct {
 	getFn            func(context.Context, uuid.UUID) (json.RawMessage, error)
-	putFn            func(context.Context, uuid.UUID, json.RawMessage) error
+	putFn            func(context.Context, uuid.UUID, json.RawMessage) (json.RawMessage, error)
 	listTemplatesFn  func(context.Context, uuid.UUID) ([]Template, error)
 	createTemplateFn func(context.Context, uuid.UUID, string, json.RawMessage) (*Template, error)
 	deleteTemplateFn func(context.Context, uuid.UUID, uuid.UUID) error
@@ -31,11 +31,11 @@ func (f *fakeRepository) Get(ctx context.Context, id uuid.UUID) (json.RawMessage
 	return json.RawMessage(`{}`), nil
 }
 
-func (f *fakeRepository) Put(ctx context.Context, id uuid.UUID, body json.RawMessage) error {
+func (f *fakeRepository) Put(ctx context.Context, id uuid.UUID, body json.RawMessage) (json.RawMessage, error) {
 	if f.putFn != nil {
 		return f.putFn(ctx, id, body)
 	}
-	return nil
+	return body, nil
 }
 
 func (f *fakeRepository) ListTemplates(ctx context.Context, id uuid.UUID) ([]Template, error) {
@@ -75,21 +75,22 @@ func userContext() (context.Context, uuid.UUID) {
 	return authctx.SetUserIDToCtx(context.Background(), id), id
 }
 
-func TestServicePutValidSettingsAndVoice(t *testing.T) {
+func TestServicePutValidSettingsAndVoiceReturnsStoredJSON(t *testing.T) {
 	ctx, userID := userContext()
 	voices := &fakeVoiceCatalog{voices: []tts.Voice{{ID: "alena"}}}
+	stored := json.RawMessage(`{"border_width": 2, "colors": {"background": "#FFFFFF"}, "voice": "alena"}`)
 	var persisted json.RawMessage
-	repo := &fakeRepository{putFn: func(_ context.Context, gotID uuid.UUID, body json.RawMessage) error {
+	repo := &fakeRepository{putFn: func(_ context.Context, gotID uuid.UUID, body json.RawMessage) (json.RawMessage, error) {
 		assert.Equal(t, userID, gotID)
 		persisted = append(json.RawMessage(nil), body...)
-		return nil
+		return stored, nil
 	}}
 	svc := NewService(repo, voices)
-	body := json.RawMessage(`{"voice":"alena","colors":{"background":"#fff"},"border_width":2}`)
+	body := json.RawMessage(`{ "voice":"alena", "colors":{"background":"#FFFFFF"}, "border_width":2 }`)
 
 	got, err := svc.Put(ctx, body)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(body), string(got))
+	assert.Equal(t, string(stored), string(got), "PUT must return the representation returned by persistence")
 	assert.JSONEq(t, string(body), string(persisted))
 	assert.Equal(t, 1, voices.calls)
 }
@@ -149,7 +150,7 @@ func TestServicePutDoesNotFetchVoicesWithoutVoiceSetting(t *testing.T) {
 	catalog := &fakeVoiceCatalog{voices: []tts.Voice{{ID: "alena"}}}
 	svc := NewService(&fakeRepository{}, catalog)
 
-	_, err := svc.Put(ctx, json.RawMessage(`{"colors":{"accent":"blue"}}`))
+	_, err := svc.Put(ctx, json.RawMessage(`{"colors":{"accent":"#0000FF"}}`))
 	require.NoError(t, err)
 	assert.Zero(t, catalog.calls)
 }
@@ -157,7 +158,7 @@ func TestServicePutDoesNotFetchVoicesWithoutVoiceSetting(t *testing.T) {
 func TestServicePutRejectsDocumentOverLimit(t *testing.T) {
 	ctx, _ := userContext()
 	svc := NewService(&fakeRepository{}, nil)
-	body := json.RawMessage(`{"colors":"` + strings.Repeat("x", MaxDocumentSize) + `"}`)
+	body := json.RawMessage(`{"interactivity":"` + strings.Repeat("x", MaxDocumentSize) + `"}`)
 
 	_, err := svc.Put(ctx, body)
 	require.Error(t, err)
@@ -183,7 +184,7 @@ func TestServiceTemplateIsUserScopedAndTrimsName(t *testing.T) {
 	}
 	svc := NewService(repo, nil)
 
-	created, err := svc.CreateTemplate(ctx, "  High contrast  ", json.RawMessage(`{"colors":{"background":"black"}}`))
+	created, err := svc.CreateTemplate(ctx, "  High contrast  ", json.RawMessage(`{"colors":{"background":"#000000"}}`))
 	require.NoError(t, err)
 	assert.Equal(t, "High contrast", created.Name)
 	require.NoError(t, svc.DeleteTemplate(ctx, templateID))
@@ -206,7 +207,7 @@ func TestServiceV1ContractAcceptsAllDeclaredKeys(t *testing.T) {
 		"interactivity":["future","opaque","shape"],
 		"voice":"alena",
 		"button_direction":"forward",
-		"colors":{"background":"#fff"},
+		"colors":{"background":"#FFFFFF"},
 		"border_width":2
 	}`)
 
@@ -219,7 +220,7 @@ func TestServiceDocumentSizeBoundary(t *testing.T) {
 	ctx, _ := userContext()
 	svc := NewService(&fakeRepository{}, nil)
 
-	const prefix = `{"colors":"`
+	const prefix = `{"interactivity":"`
 	const suffix = `"}`
 	atLimit := json.RawMessage(prefix + strings.Repeat("x", MaxDocumentSize-len(prefix)-len(suffix)) + suffix)
 	require.Len(t, atLimit, MaxDocumentSize)
@@ -251,6 +252,45 @@ func TestServiceTemplateUsesSameVoiceValidation(t *testing.T) {
 	var appErr *apperr.AppError
 	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, "unknown voice", appErr.Message)
+}
+
+func TestServiceValidatesColorsAndBorderWidth(t *testing.T) {
+	ctx, _ := userContext()
+	svc := NewService(&fakeRepository{}, nil)
+
+	valid := []string{
+		`{"colors":{}}`,
+		`{"colors":{"background":"#000000","accent":"#Aa10Ff"}}`,
+		`{"border_width":0}`,
+		`{"border_width":32}`,
+	}
+	for _, body := range valid {
+		_, err := svc.Put(ctx, json.RawMessage(body))
+		require.NoError(t, err, body)
+	}
+
+	invalid := []struct {
+		body string
+		msg  string
+	}{
+		{body: `{"colors":null}`, msg: "colors must be an object of #RRGGBB strings"},
+		{body: `{"colors":"#FFFFFF"}`, msg: "colors must be an object of #RRGGBB strings"},
+		{body: `{"colors":{"background":"white"}}`, msg: "invalid color background: expected #RRGGBB"},
+		{body: `{"colors":{"background":"#FFF"}}`, msg: "invalid color background: expected #RRGGBB"},
+		{body: `{"colors":{"background":"red; background-image:url(x)"}}`, msg: "invalid color background: expected #RRGGBB"},
+		{body: `{"border_width":null}`, msg: "border_width must be an integer"},
+		{body: `{"border_width":"2"}`, msg: "border_width must be an integer"},
+		{body: `{"border_width":2.5}`, msg: "border_width must be an integer"},
+		{body: `{"border_width":-1}`, msg: "border_width must be between 0 and 32"},
+		{body: `{"border_width":33}`, msg: "border_width must be between 0 and 32"},
+	}
+	for _, tc := range invalid {
+		_, err := svc.Put(ctx, json.RawMessage(tc.body))
+		require.Error(t, err, tc.body)
+		var appErr *apperr.AppError
+		require.ErrorAs(t, err, &appErr)
+		assert.Equal(t, tc.msg, appErr.Message)
+	}
 }
 
 func TestServiceV1RejectsDeferredTopLevelKeys(t *testing.T) {
