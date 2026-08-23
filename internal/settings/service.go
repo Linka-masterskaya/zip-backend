@@ -93,31 +93,13 @@ func (s *Service) DeleteTemplate(ctx context.Context, templateID uuid.UUID) erro
 }
 
 func (s *Service) validate(ctx context.Context, body json.RawMessage) error {
-	if len(body) > MaxDocumentSize {
-		return apperr.ErrPayloadTooLarge.WithMessage("settings document too large")
-	}
-	trimmed := bytes.TrimSpace(body)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return apperr.ErrBadRequest.WithMessage("settings must be a JSON object")
+	object, err := decodeSettingsObject(body)
+	if err != nil {
+		return err
 	}
 
-	var object map[string]json.RawMessage
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	if err := dec.Decode(&object); err != nil {
-		return apperr.ErrBadRequest.WithMessage("invalid settings JSON")
-	}
-	if object == nil {
-		return apperr.ErrBadRequest.WithMessage("settings must be a JSON object")
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		return apperr.ErrBadRequest.WithMessage("invalid settings JSON")
-	}
-
-	for key := range object {
-		if _, ok := allowedTopLevelKeys[key]; !ok {
-			return apperr.ErrBadRequest.WithMessage(fmt.Sprintf("unsupported settings key: %s", key))
-		}
+	if err := validateAllowedKeys(object); err != nil {
+		return err
 	}
 
 	if rawColors, ok := object[keyColors]; ok {
@@ -132,16 +114,58 @@ func (s *Service) validate(ctx context.Context, body json.RawMessage) error {
 		}
 	}
 
-	if rawVoice, ok := object[keyVoice]; ok {
-		var voice string
-		if err := json.Unmarshal(rawVoice, &voice); err != nil || strings.TrimSpace(voice) == "" {
-			return apperr.ErrBadRequest.WithMessage("voice must be a non-empty string")
-		}
-		if err := s.validateVoice(ctx, voice); err != nil {
-			return err
+	return s.validateVoiceSetting(ctx, object)
+}
+
+func decodeSettingsObject(body json.RawMessage) (map[string]json.RawMessage, error) {
+	if len(body) > MaxDocumentSize {
+		return nil, apperr.ErrPayloadTooLarge.WithMessage("settings document too large")
+	}
+
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, apperr.ErrBadRequest.WithMessage("settings must be a JSON object")
+	}
+
+	var object map[string]json.RawMessage
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	if err := dec.Decode(&object); err != nil {
+		return nil, apperr.ErrBadRequest.WithMessage("invalid settings JSON")
+	}
+	if object == nil {
+		return nil, apperr.ErrBadRequest.WithMessage("settings must be a JSON object")
+	}
+
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, apperr.ErrBadRequest.WithMessage("invalid settings JSON")
+	}
+
+	return object, nil
+}
+
+func validateAllowedKeys(object map[string]json.RawMessage) error {
+	for key := range object {
+		if _, ok := allowedTopLevelKeys[key]; !ok {
+			return apperr.ErrBadRequest.WithMessage(fmt.Sprintf("unsupported settings key: %s", key))
 		}
 	}
+
 	return nil
+}
+
+func (s *Service) validateVoiceSetting(ctx context.Context, object map[string]json.RawMessage) error {
+	rawVoice, ok := object[keyVoice]
+	if !ok {
+		return nil
+	}
+
+	var voice string
+	if err := json.Unmarshal(rawVoice, &voice); err != nil || strings.TrimSpace(voice) == "" {
+		return apperr.ErrBadRequest.WithMessage("voice must be a non-empty string")
+	}
+
+	return s.validateVoice(ctx, voice)
 }
 
 func (s *Service) validateVoice(ctx context.Context, voice string) error {
