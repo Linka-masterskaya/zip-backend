@@ -49,6 +49,15 @@ type modules struct {
 	ttsCleaner     *cron.TTSCleaner
 }
 
+func buildPicturesSource(in *infra) (picturebank.Source, error) {
+	return picturebank.NewSource(
+		in.cfg.FeatureFlags.LocalBank,
+		in.cfg.PicturesBank,
+		in.redis,
+		picturebank.LocalDependencies{DB: in.db, Storage: in.storage},
+	)
+}
+
 // buildModules wires every domain module on top of the infrastructure.
 func buildModules(in *infra) (*modules, error) {
 	cfg := in.cfg
@@ -68,11 +77,7 @@ func buildModules(in *infra) (*modules, error) {
 	folderRepo := folder.NewRepository(in.db)
 	studentRepo := student.NewRepository(in.db)
 
-	picturesSource, err := picturebank.NewSource(
-		cfg.FeatureFlags.LocalBank,
-		cfg.PicturesBank,
-		in.redis,
-	)
+	picturesSource, err := buildPicturesSource(in)
 	if err != nil {
 		return nil, fmt.Errorf("pictures bank source: %w", err)
 	}

@@ -293,7 +293,9 @@ components:
       type: object
       required: [id, name]
       properties:
-        id:   { type: string, format: uuid }
+        id:
+          type: string
+          description: Opaque adapter-specific category identifier; clients must not parse it as a UUID.
         name: { type: string }
 
     Picture:
@@ -878,8 +880,8 @@ paths:
   /pictures/categories:
     get:
       tags: [pictures]
-      summary: Получить категории LINKa Pictures Bank через защищённый proxy
-      description: Ответ кэшируется; исходящие запросы глобально ограничены через Redis.
+      summary: Получить категории активного Pictures Bank через защищённый proxy
+      description: Источник выбирается backend feature flag; local и external adapters используют один response contract.
       security: [{ bearerAuth: [] }]
       responses:
         '200':
@@ -890,13 +892,13 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/PictureCategory' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503': { description: Pictures Bank недоступен или исчерпан исходящий бюджет }
+        '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
 
   /pictures/search:
     get:
       tags: [pictures]
-      summary: Найти изображения в LINKa Pictures Bank
-      description: Одинаковые одновременные запросы объединяются, результаты кэшируются.
+      summary: Найти изображения в активном Pictures Bank
+      description: Поиск и HTTP contract одинаковы для local и external adapters; специальные символы запроса трактуются как обычный текст.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: query, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 100 } }
@@ -910,13 +912,13 @@ paths:
                 items: { $ref: '#/components/schemas/Picture' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503': { description: Pictures Bank недоступен или исчерпан исходящий бюджет }
+        '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
 
   /pictures/{id}/content:
     get:
       tags: [pictures]
-      summary: Получить изображение Pictures Bank через ограниченный proxy
-      description: Байты кэшируются в памяти процесса на `pictures_bank.cache_ttl`; ответ содержит согласованный `Cache-Control max-age`.
+      summary: Получить изображение активного Pictures Bank через защищённый proxy
+      description: Backend отдаёт бинарные данные сам и не раскрывает прямые external или MinIO URL; ответ содержит согласованный `Cache-Control max-age`.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -930,13 +932,13 @@ paths:
             image/gif:  { schema: { type: string, format: binary } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503': { description: 'Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME' }
+        '503': { description: 'Pictures Bank недоступен либо источник вернул некорректный/слишком большой объект' }
 
   /pictures/{id}/import:
     post:
       tags: [pictures]
-      summary: Получить ссылку на изображение Pictures Bank без локального копирования
-      description: Совместимый endpoint возвращает `source_picture_id` для config. Байты не скачиваются в MinIO и не расходуют квоту организации.
+      summary: Получить ссылку на изображение активного Pictures Bank без пользовательского копирования
+      description: Совместимый endpoint возвращает `source_picture_id` для config. Системный объект не копируется в user media и не расходует квоту организации.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }

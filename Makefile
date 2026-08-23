@@ -11,6 +11,7 @@ endif
 build:
 	go build -o bin/server ./cmd/server
 	go build -o bin/migrate ./cmd/migrate
+	go build -o bin/picturebank-seed ./cmd/picturebank-seed
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 run:
@@ -28,7 +29,7 @@ test:
 	go test ./... -race -count=1
 
 test-e2e:
-	go test -tags=e2e ./e2e -run '^TestE2E_' -race -count=1 -v
+	go test -tags=e2e ./e2e ./internal/picturebank -race -count=1 -v
 
 test-cover:
 	go test ./... -race -count=1 -coverprofile=coverage.out

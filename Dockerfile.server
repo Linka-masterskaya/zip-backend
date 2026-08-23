@@ -28,7 +28,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -ldflags "-s -w" \
     -trimpath \
     -o /app/bin/rotate-crypto \
-    ./cmd/rotate-crypto
+    ./cmd/rotate-crypto && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-s -w" \
+    -trimpath \
+    -o /app/bin/picturebank-seed \
+    ./cmd/picturebank-seed
 
 # Stage 2
 FROM gcr.io/distroless/static-debian12
@@ -38,6 +43,7 @@ WORKDIR /app
 COPY --from=builder /app/bin/server .
 COPY --from=builder /app/bin/migrate .
 COPY --from=builder /app/bin/rotate-crypto .
+COPY --from=builder /app/bin/picturebank-seed .
 COPY config/config.prod.yml /app/config/config.prod.yml
 
 ENV CONFIG_PATH=config/config.prod.yml

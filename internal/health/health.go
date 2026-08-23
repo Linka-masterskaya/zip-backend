@@ -41,8 +41,8 @@ type checkResult struct {
 }
 
 // PicturesBank описывает выбранный источник картинок для отчёта в /readyz.
-// Проверка информационная: внешний банк не пингуется, чтобы готовность сервиса
-// не зависела от стороннего сервиса.
+// Проверка информационная: внешний банк не пингуется, а local mode опирается
+// на уже проверяемые PostgreSQL и MinIO зависимости.
 type PicturesBank struct {
 	Local bool
 	URL   string
@@ -158,12 +158,7 @@ func (c *Checker) checks() map[string]check {
 		},
 		"pictures_bank": {
 			detail: c.bank.detail(),
-			run: func(context.Context) error {
-				if c.bank.Local {
-					return errors.New("local pictures bank is not implemented")
-				}
-				return nil
-			},
+			run:    func(context.Context) error { return nil },
 		},
 	}
 }
