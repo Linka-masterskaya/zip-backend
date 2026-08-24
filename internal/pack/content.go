@@ -34,75 +34,6 @@ type contentRepository interface {
 	ListAdaptations(context.Context, uuid.UUID, uuid.UUID) ([]Adaptation, error)
 	GetAdaptation(context.Context, uuid.UUID, uuid.UUID) (*Adaptation, error)
 	UpdateAdaptationConfig(context.Context, uuid.UUID, uuid.UUID, json.RawMessage, []uuid.UUID) (*Adaptation, error)
-	CreateVersion(context.Context, uuid.UUID, uuid.UUID) (*Version, error)
-	ListVersions(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*VersionSummary, error)
-	GetVersion(context.Context, uuid.UUID, uuid.UUID, int) (*Version, error)
-	RestoreVersion(context.Context, uuid.UUID, uuid.UUID, int) (*RestoreResult, error)
-}
-
-func (s *ContentService) CreateVersion(ctx context.Context, packID uuid.UUID) (*Version, error) {
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result, err := s.repo.CreateVersion(ctx, userID, packID)
-	return result, contentError(err)
-}
-
-func (s *ContentService) ListVersions(
-	ctx context.Context,
-	packID uuid.UUID,
-	input ListInput,
-) ([]*VersionSummary, error) {
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	input, err = validateListInput(input)
-	if err != nil {
-		return nil, err
-	}
-	result, err := s.repo.ListVersions(ctx, userID, packID, input)
-	return result, contentError(err)
-}
-
-func (s *ContentService) GetVersion(
-	ctx context.Context,
-	packID uuid.UUID,
-	versionNumber int,
-) (*Version, error) {
-	if versionNumber < 1 {
-		return nil, apperr.ErrBadRequest.WithMessage("version must be a positive integer")
-	}
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result, err := s.repo.GetVersion(ctx, userID, packID, versionNumber)
-	return result, contentError(err)
-}
-
-func (s *ContentService) RestoreVersion(
-	ctx context.Context,
-	packID uuid.UUID,
-	versionNumber int,
-) (*RestoreResult, error) {
-	if versionNumber < 1 {
-		return nil, apperr.ErrBadRequest.WithMessage("version must be a positive integer")
-	}
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	target, err := s.repo.GetVersion(ctx, userID, packID, versionNumber)
-	if err != nil {
-		return nil, contentError(err)
-	}
-	if _, err = validateAndMediaIDs(ctx, target.Config, false); err != nil {
-		return nil, err
-	}
-	result, err := s.repo.RestoreVersion(ctx, userID, packID, versionNumber)
-	return result, contentError(err)
 }
 
 type mediaUploader interface {
@@ -441,8 +372,6 @@ func contentError(err error) error {
 		return nil
 	case errors.Is(err, ErrPackNotFound):
 		return apperr.ErrNotFound
-	case errors.Is(err, ErrVersionNotFound):
-		return apperr.ErrNotFound.WithMessage("pack version not found")
 	case errors.Is(err, ErrAdaptationNotFound):
 		return apperr.ErrNotFound.WithMessage("pack adaptation not found")
 	case errors.Is(err, ErrFolderNotAllowed):

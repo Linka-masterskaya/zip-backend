@@ -49,22 +49,6 @@ type Version struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-// VersionSummary is a lightweight history item without the potentially large config.
-type VersionSummary struct {
-	ID        uuid.UUID `json:"id"`
-	PackID    uuid.UUID `json:"pack_id"`
-	Version   int       `json:"version"`
-	CreatedBy uuid.UUID `json:"created_by"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// RestoreResult describes a restored pack and the automatic pre-restore checkpoint.
-type RestoreResult struct {
-	Pack                *Pack    `json:"pack"`
-	RestoredFromVersion int      `json:"restored_from_version"`
-	BackupVersion       *Version `json:"backup_version"`
-}
-
 // CreateInput contains fields accepted when a pack is created.
 type CreateInput struct {
 	Title    string

@@ -20,7 +20,6 @@ var (
 	ErrInvalidPackMetadata          = errors.New("invalid pack metadata")
 	ErrPackPublished                = errors.New("pack is published")
 	ErrAlreadyPublished             = errors.New("pack is published in another folder")
-	ErrVersionNotFound              = errors.New("pack version not found")
 	ErrAdaptationNotFound           = errors.New("pack adaptation not found")
 )
 
@@ -283,9 +282,6 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 		if _, err = tx.Exec(ctx, deleteAdaptationUsagesForIDsQuery, adaptationIDs); err != nil {
 			return fmt.Errorf("pack repository delete adaptation usages: %w", err)
 		}
-	}
-	if _, err = tx.Exec(ctx, deleteVersionMediaUsagesForPackQuery, packID); err != nil {
-		return fmt.Errorf("pack repository delete version usages: %w", err)
 	}
 	if _, err = tx.Exec(ctx, deletePackQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete: %w", err)

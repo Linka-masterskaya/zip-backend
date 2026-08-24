@@ -432,46 +432,6 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 	e2eClose(t, response)
 	createdPack = importedPack
 
-	versionOne := e2eJSON[pack.Version](
-		t,
-		e2eRequest(t, server, token, http.MethodPost,
-			"/api/v1/packs/"+createdPack.ID.String()+"/versions", nil),
-		http.StatusCreated,
-	)
-	assert.Equal(t, 1, versionOne.Version)
-	e2eJSON[pack.Pack](
-		t,
-		e2eRequest(t, server, token, http.MethodPut,
-			"/api/v1/packs/"+createdPack.ID.String()+"/config",
-			packMediaConfig(first.ID)),
-		http.StatusOK,
-	)
-	restore := e2eJSON[pack.RestoreResult](
-		t,
-		e2eRequest(t, server, token, http.MethodPost,
-			"/api/v1/packs/"+createdPack.ID.String()+"/versions/1/restore", nil),
-		http.StatusOK,
-	)
-	assert.Equal(t, 1, restore.RestoredFromVersion)
-	assert.Equal(t, 2, restore.BackupVersion.Version)
-	assert.Contains(t, string(restore.Pack.Config), replacement.ID.String())
-	versions := e2eJSON[[]pack.VersionSummary](
-		t,
-		e2eRequest(t, server, token, http.MethodGet,
-			"/api/v1/packs/"+createdPack.ID.String()+"/versions", nil),
-		http.StatusOK,
-	)
-	require.Len(t, versions, 2)
-	assert.Equal(t, 2, versions[0].Version)
-	assert.Equal(t, 1, versions[1].Version)
-	fetchedVersion := e2eJSON[pack.Version](
-		t,
-		e2eRequest(t, server, token, http.MethodGet,
-			"/api/v1/packs/"+createdPack.ID.String()+"/versions/1", nil),
-		http.StatusOK,
-	)
-	assert.Contains(t, string(fetchedVersion.Config), replacement.ID.String())
-
 	firstStudent := e2eCreateStudent(t, server, token, "one@example.com", "Первый ребёнок")
 	secondStudent := e2eCreateStudent(t, server, token, "two@example.com", "Второй ребёнок")
 	firstShelf := e2eCreateFolder(t, server, token, map[string]any{
