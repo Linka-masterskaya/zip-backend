@@ -46,10 +46,15 @@ type ListInput struct {
 }
 
 type ContentsInput struct {
-	Limit  int
-	Offset int
-	Sort   string
-	Order  string
+	// Section is required. ParentID is nil for the root of the section:
+	// "my", "library" and "students" are menu sections, not folders, so the
+	// root has no folder id to address it by.
+	Section  string
+	ParentID *uuid.UUID
+	Limit    int
+	Offset   int
+	Sort     string
+	Order    string
 }
 
 type ContentItem struct {

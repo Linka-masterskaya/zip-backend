@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -650,16 +651,17 @@ func TestRegister(t *testing.T) {
 	}{
 		{
 			name: "success",
-			body: `{"email":"user@example.com","password":"strongpass123"}`,
+			body: `{"name":"Тест", "email":"user@example.com","password":"strongpass123"}`,
 			mockSetup: func(m *MockauthServiceIface) {
 				m.EXPECT().
 					Register(gomock.Any(), RegisterRequest{
+						Name:     "Тест",
 						Email:    "user@example.com",
 						Password: "strongpass123",
 					}).
 					Return(nil)
 			},
-			wantStatus: http.StatusCreated,
+			wantStatus: http.StatusAccepted,
 		},
 		{
 			name:       "malformed json",
@@ -670,31 +672,49 @@ func TestRegister(t *testing.T) {
 		},
 		{
 			name:       "invalid email",
-			body:       `{"email":"bad-email","password":"strongpass123"}`,
+			body:       `{"name":"Тест", "email":"bad-email","password":"strongpass123"}`,
 			mockSetup:  func(m *MockauthServiceIface) {},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "BAD_REQUEST",
 		},
 		{
 			name:       "weak password",
-			body:       `{"email":"user@example.com","password":"short"}`,
+			body:       `{"name":"Тест", "email":"user@example.com","password":"short"}`,
 			mockSetup:  func(m *MockauthServiceIface) {},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "BAD_REQUEST",
 		},
 		{
-			name: "duplicate email",
-			body: `{"email":"user@example.com","password":"strongpass123"}`,
+			// Занятый адрес отдельного кода больше не имеет: регистрация
+			// отвечает одинаково, поэтому здесь проверяем только то, что
+			// настоящая ошибка сервиса доходит до клиента.
+			name: "service failure propagates",
+			body: `{"name":"Тест", "email":"user@example.com","password":"strongpass123"}`,
 			mockSetup: func(m *MockauthServiceIface) {
 				m.EXPECT().
 					Register(gomock.Any(), RegisterRequest{
+						Name:     "Тест",
 						Email:    "user@example.com",
 						Password: "strongpass123",
 					}).
-					Return(apperr.ErrConflict.WithMessage("email already exists"))
+					Return(apperr.ErrInternal)
 			},
-			wantStatus: http.StatusConflict,
-			wantCode:   "CONFLICT",
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL",
+		},
+		{
+			name:       "empty name",
+			body:       `{"name":"","email":"user@example.com","password":"strongpass123"}`,
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name:       "name too long",
+			body:       fmt.Sprintf(`{"name":%q,"email":"user@example.com","password":"strongpass123"}`, strings.Repeat("а", 101)),
+			mockSetup:  func(m *MockauthServiceIface) {},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
 		},
 	}
 
@@ -731,7 +751,7 @@ func TestRegister(t *testing.T) {
 				}
 			}
 
-			if tt.wantStatus == http.StatusCreated {
+			if tt.wantStatus == http.StatusAccepted {
 				if rec.Body.Len() != 0 {
 					t.Errorf("body = %q, want empty", rec.Body.String())
 				}

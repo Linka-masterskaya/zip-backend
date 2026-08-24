@@ -54,7 +54,12 @@ try {
   const entries = execFileSync("unzip", ["-Z1", fixture], { encoding: "utf8" }).trim().split(/\r?\n/).filter(Boolean);
   const opened = normalizeConfigFile(raw);
   const openedText = JSON.stringify(opened);
-  const sourceIds = (raw.blocks ?? []).flatMap((block) => (block.elements ?? []).map((element) => element.id));
+  // Идентификаторы берём из той схемы, которая пришла: Linka Config 2.0
+  // описывает blocks[].elements[], конвертированный looks-3 — pages[].cards[].
+  const sourceIds = raw.blocks
+    ? raw.blocks.flatMap((block) => (block.elements ?? []).map((element) => element.id))
+    : (raw.pages ?? []).flatMap((page) => (page.cards ?? []).map((card) => card.id));
+  const sourceShape = raw.blocks ? "linka-2 blocks[]" : (raw.pages ? "looks-3 pages[]" : "unknown");
 
   console.log(JSON.stringify({
     client: {
@@ -67,8 +72,10 @@ try {
     fixture: basename(fixture),
     opened: opened !== null,
     raw: {
-      backendVersion: raw.metadata?.version ?? null,
+      shape: sourceShape,
+      backendVersion: raw.metadata?.version ?? raw.version ?? null,
       blockTypes: (raw.blocks ?? []).map((block) => block.type),
+      pageModes: (raw.pages ?? []).map((page) => page.mode),
       elementOrder: sourceIds,
       archiveEntries: entries
     },

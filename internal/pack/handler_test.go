@@ -208,6 +208,80 @@ func TestHandlerMovePack(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestHandlerDuplicateAcceptsOptionalBody(t *testing.T) {
+	packID, folderID := uuid.New(), uuid.New()
+	tests := []struct {
+		name       string
+		body       []byte
+		wantFolder *uuid.UUID
+	}{
+		{name: "empty body"},
+		{name: "empty object", body: []byte(`{}`)},
+		{name: "null folder", body: []byte(`{"folder_id":null}`)},
+		{name: "folder", body: []byte(`{"folder_id":"` + folderID.String() + `"}`), wantFolder: &folderID},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &fakePackService{}
+			service.duplicateFn = func(
+				_ context.Context,
+				gotPackID uuid.UUID,
+				input DuplicateInput,
+			) (*Pack, error) {
+				assert.Equal(t, packID, gotPackID)
+				assert.Equal(t, test.wantFolder, input.FolderID)
+				return &Pack{ID: uuid.New(), FolderID: folderID}, nil
+			}
+			rec := performPackRequest(
+				t,
+				NewHandler(service).DuplicatePack,
+				http.MethodPost,
+				"/api/v1/packs/"+packID.String()+"/duplicate",
+				test.body,
+				packID.String(),
+			)
+			assert.Equal(t, http.StatusCreated, rec.Code)
+		})
+	}
+}
+
+func TestHandlerDuplicateRejectsInvalidRequest(t *testing.T) {
+	packID := uuid.New()
+	tests := []struct {
+		name   string
+		pathID string
+		body   []byte
+	}{
+		{name: "invalid pack id", pathID: "invalid", body: []byte(`{}`)},
+		{name: "malformed json", pathID: packID.String(), body: []byte(`{`)},
+		{name: "unknown field", pathID: packID.String(), body: []byte(`{"other":true}`)},
+		{name: "invalid folder", pathID: packID.String(), body: []byte(`{"folder_id":"invalid"}`)},
+		{name: "nil folder", pathID: packID.String(), body: []byte(`{"folder_id":"00000000-0000-0000-0000-000000000000"}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			service := &fakePackService{}
+			service.duplicateFn = func(
+				context.Context, uuid.UUID, DuplicateInput,
+			) (*Pack, error) {
+				called = true
+				return &Pack{}, nil
+			}
+			rec := performPackRequest(
+				t,
+				NewHandler(service).DuplicatePack,
+				http.MethodPost,
+				"/api/v1/packs/"+test.pathID+"/duplicate",
+				test.body,
+				test.pathID,
+			)
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.False(t, called)
+		})
+	}
+}
+
 func performPackRequest(
 	t *testing.T,
 	handler middleware.AppHandler,
@@ -230,6 +304,7 @@ type fakePackService struct {
 	updateCalled  bool
 	deletedPackID uuid.UUID
 	createFn      func(context.Context, string, uuid.UUID) (*Pack, error)
+	duplicateFn   func(context.Context, uuid.UUID, DuplicateInput) (*Pack, error)
 	getFn         func(context.Context, uuid.UUID) (*Pack, error)
 	listFn        func(context.Context, ListInput) ([]*ListItem, error)
 	updateFn      func(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
@@ -245,6 +320,16 @@ func (f *fakePackService) Create(ctx context.Context, title string, folderID uui
 	return &Pack{}, nil
 }
 
+func (f *fakePackService) Duplicate(
+	ctx context.Context,
+	packID uuid.UUID,
+	input DuplicateInput,
+) (*Pack, error) {
+	if f.duplicateFn != nil {
+		return f.duplicateFn(ctx, packID, input)
+	}
+	return &Pack{}, nil
+}
 func (f *fakePackService) Get(ctx context.Context, packID uuid.UUID) (*Pack, error) {
 	if f.getFn != nil {
 		return f.getFn(ctx, packID)

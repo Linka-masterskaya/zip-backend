@@ -17,6 +17,7 @@ const (
 	EmailVerify   Template = "email_verify"
 	PasswordReset Template = "password_reset"
 	EmailChange   Template = "email_change"
+	AccountExists Template = "account_exists"
 )
 
 // EmailData - email data.

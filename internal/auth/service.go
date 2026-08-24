@@ -25,6 +25,7 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrEmailNotVerified   = errors.New("email not verified")
+	errEmailAlreadyExists = errors.New("email already exists")
 )
 
 var dummyPasswordHash = []byte("$2a$12$UqfJl/B1CJ86pDCgYZuNXefHab2GHToXW1tWtfTc4Ee59.q1GMkcS")
@@ -45,6 +46,7 @@ func runDummyPasswordCompare(password string) {
 //go:generate go run go.uber.org/mock/mockgen -source=service.go -destination=mock_repo_test.go -package=auth
 type authRepoIface interface {
 	GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error)
+	GetUserByEmailHashForRegistration(ctx context.Context, emailHash []byte) (*User, error)
 	CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error)
 	ResetPasswordByToken(ctx context.Context, token string, passwordHash string) (string, error)
 
@@ -61,7 +63,7 @@ type authRepoIface interface {
 	) error
 
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error)
-	EmailExists(ctx context.Context, emailHash []byte) (bool, error)
+	replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, passwordHash string) error
 	CreateOrganization(ctx context.Context, params CreateOrganizationParams) error
 	CreateUser(ctx context.Context, params CreateUserParams) error
 	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
@@ -69,12 +71,12 @@ type authRepoIface interface {
 }
 
 type refreshStore interface {
-	StoreRefresh(
+	StoreRefreshForLogin(
 		ctx context.Context,
 		jti string,
 		rec cache.RefreshRecord,
 		ttl time.Duration,
-	) error
+	) (int64, error)
 
 	GetRefresh(
 		ctx context.Context,
@@ -181,11 +183,6 @@ func (au *authService) Login(ctx context.Context, email, password string) (*Logi
 		return nil, ErrEmailNotVerified
 	}
 
-	accessToken, err := au.generateAccessToken(user)
-	if err != nil {
-		return nil, fmt.Errorf("generate access token: %w", err)
-	}
-
 	jti := uuid.NewString()
 	fid := uuid.NewString()
 
@@ -200,13 +197,32 @@ func (au *authService) Login(ctx context.Context, email, password string) (*Logi
 		UserID: user.ID,
 	}
 
-	if err := au.cache.StoreRefresh(
+	// Session creation and account deletion are serialized in Redis. The
+	// returned version is the exact generation attached to this refresh record
+	// and must also be used for the access JWT.
+	sessionVersion, err := au.cache.StoreRefreshForLogin(
 		ctx,
 		jti,
 		rec,
 		au.cfg.RefreshTokenTTL,
-	); err != nil {
-		return nil, fmt.Errorf("store refresh token: %w", err)
+	)
+	if errors.Is(err, cache.ErrUserSessionsDisabled) {
+		return nil, ErrInvalidCredentials
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store login session: %w", err)
+	}
+
+	accessToken, err := au.generateAccessToken(user, sessionVersion)
+	if err != nil {
+		if revokeErr := au.cache.RevokeFamily(ctx, fid); revokeErr != nil {
+			slog.Error("revoke refresh family after access-token generation failure",
+				"user_id", user.ID,
+				"family_id", fid,
+				logger.Err(revokeErr),
+			)
+		}
+		return nil, fmt.Errorf("generate access token: %w", err)
 	}
 
 	return &LoginResult{
@@ -380,7 +396,7 @@ func (au *authService) Refresh(ctx context.Context, refreshToken string) (*Login
 		return nil, err
 	}
 
-	accessToken, err := au.generateAccessToken(user)
+	accessToken, err := au.generateAccessToken(user, rec.SessionVersion)
 	if err != nil {
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}
@@ -523,6 +539,120 @@ func (au *authService) rotateRefresh(
 	return newRefreshToken, nil
 }
 
+// reclaimUnverifiedRegistration отдаёт неподтверждённый адрес новому
+// регистранту: перезаписывает пароль, гасит прежние verify-токены и шлёт
+// свежее письмо. Прежние токены обязательно гасятся, иначе ссылка из старого
+// письма подтвердит адрес уже с чужим паролем.
+// handleTakenEmail разбирает случай, когда адрес уже кому-то принадлежит.
+// Возвращает true, если запрос обработан и заводить новый аккаунт не нужно.
+//
+// Ответ клиенту одинаков для занятого и свободного адреса: иначе регистрация
+// становится оракулом и по ней можно перебирать базу пользователей. Что
+// произошло, узнаёт владелец адреса из письма, а не атакующий из кода ответа.
+func (au *authService) handleTakenEmail(
+	ctx context.Context,
+	emailHash []byte,
+	email, password string,
+) (bool, error) {
+	existing, err := au.repo.GetUserByEmailHashForRegistration(ctx, emailHash)
+	switch {
+	case errors.Is(err, apperr.ErrUserNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("authService.Register: lookup email: %w", err)
+	}
+
+	// Soft-deleted accounts keep their auth_cred row and therefore reserve the
+	// email hash. Registration must still be indistinguishable from any other
+	// occupied email and must never try to create a second account that would
+	// collide with auth_cred_email_hash_uniq.
+	if existing.Deleted {
+		au.notifyReservedEmail(ctx, email, password)
+		return true, nil
+	}
+
+	if !existing.EmailVerified {
+		// Владение неподтверждённым адресом не доказала ни одна сторона,
+		// поэтому он достаётся тому, кто пришёл за ним сейчас.
+		return true, au.reclaimUnverifiedRegistration(ctx, existing.ID, email, password)
+	}
+
+	au.notifyReservedEmail(ctx, email, password)
+	return true, nil
+}
+
+func (au *authService) notifyReservedEmail(ctx context.Context, email, password string) {
+	runDummyPasswordCompare(password)
+	if mailErr := au.mailer.Send(ctx, email, mailer.AccountExists, mailer.EmailData{
+		Email: email,
+	}); mailErr != nil {
+		slog.Error("failed to send account exists email", "err", mailErr)
+	}
+}
+
+func (au *authService) reclaimUnverifiedRegistration(
+	ctx context.Context,
+	userIDRaw, email, password string,
+) error {
+	userID, err := uuid.Parse(userIDRaw)
+	if err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: %w", err)
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), au.cfg.BcryptCost)
+	if err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: hash password: %w", err)
+	}
+
+	tokenRaw := make([]byte, 32)
+	if _, err = rand.Read(tokenRaw); err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: %w", err)
+	}
+	tokenHash := sha256.Sum256(tokenRaw)
+
+	tokenID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: %w", err)
+	}
+
+	tx, err := au.repo.beginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: begin tx: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.ErrorContext(ctx, "tx rollback failed", logger.Err(err))
+		}
+	}()
+
+	txRepo := au.repo.withTx(tx)
+
+	// Гонка с подтверждением исключена: если адрес успели подтвердить между
+	// проверкой и этим апдейтом, строк не будет и вернётся 409.
+	if err = txRepo.replaceUnverifiedPassword(ctx, userID, string(passwordHash)); err != nil {
+		return err
+	}
+
+	if err = txRepo.rotateEmailTokens(
+		ctx, tokenID, userID, tokenHash[:], time.Now().Add(au.cfg.VerifyEmailTokenTTL),
+	); err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: rotate tokens: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("authService.reclaimUnverifiedRegistration: commit: %w", err)
+	}
+
+	verifyToken := base64.RawURLEncoding.EncodeToString(tokenRaw)
+	if err = au.mailer.Send(ctx, email, mailer.EmailVerify, mailer.EmailData{
+		Token: verifyToken, Email: email,
+	}); err != nil {
+		slog.Error("failed to send verify email", "err", err)
+	}
+
+	return nil
+}
+
 func (au *authService) createEmailVerifyToken(ctx context.Context, repo authRepoIface, userID uuid.UUID) (string, error) {
 	verifyToken := make([]byte, 32)
 
@@ -554,14 +684,12 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	emailHash := au.crp.Hash([]byte(email))
 
-	exists, err := au.repo.EmailExists(ctx, emailHash)
+	handled, err := au.handleTakenEmail(ctx, emailHash, email, req.Password)
 	if err != nil {
-		return fmt.Errorf("authService.Register: check email exists: %w", err)
+		return err
 	}
-
-	if exists {
-		runDummyPasswordCompare(req.Password)
-		return apperr.ErrConflict.WithMessage("email already exists")
+	if handled {
+		return nil
 	}
 
 	emailEncrypted, err := au.crp.Encrypt([]byte(email))
@@ -594,7 +722,8 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 		return fmt.Errorf("authService.Register: create organization: %w", err)
 	}
 
-	userParams := CreateUserParams{ID: uuid.New(), OrganizationID: orgParams.ID}
+	name := strings.TrimSpace(req.Name)
+	userParams := CreateUserParams{ID: uuid.New(), Name: name, OrganizationID: orgParams.ID}
 
 	if err := txRepo.CreateUser(ctx, userParams); err != nil {
 		return fmt.Errorf("authService.Register: create user: %w", err)
@@ -609,6 +738,13 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 	}
 
 	if err := txRepo.CreateAuthCred(ctx, credParams); err != nil {
+		// handleTakenEmail is intentionally a pre-check rather than a lock. Two
+		// concurrent registrations for the same previously-free email may both
+		// pass it; only one can win the unique index. The loser must still get the
+		// same successful external response to preserve anti-enumeration.
+		if errors.Is(err, errEmailAlreadyExists) {
+			return nil
+		}
 		return fmt.Errorf("authService.Register: create auth cred: %w", err)
 	}
 

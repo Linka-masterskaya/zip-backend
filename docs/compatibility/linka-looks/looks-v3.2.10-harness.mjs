@@ -134,7 +134,11 @@ for (const page of saved.pages ?? []) {
     ? { id: uuid(), cardType: CardType.EmptyCard, ...(card.matchLane ? { matchLane: card.matchLane } : {}) }
     : card);
 }
-const sourceElementOrder = (raw.blocks ?? []).flatMap((block) => (block.elements ?? []).map((el) => el.id));
+// Идентификаторы берём из пришедшей схемы: Linka Config 2.0 описывает
+// blocks[].elements[], конвертированный looks-3 — pages[].cards[].
+const sourceElementOrder = raw.blocks
+  ? raw.blocks.flatMap((b) => (b.elements ?? []).map((e) => e.id))
+  : (raw.pages ?? []).flatMap((p) => (p.cards ?? []).map((c) => c.id));
 const savedText = JSON.stringify(saved, null, 2);
 const cyrillicSamples = ["Ёжик", "Кошка", "Собака"];
 const report = {

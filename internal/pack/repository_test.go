@@ -364,8 +364,9 @@ func TestRepositoryMapsMetadataConstraintViolation(t *testing.T) {
 func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
-	_, ownerID, folderID := seedPackOwner(t, pool, "owner org")
-	_, readerID, _ := seedPackOwner(t, pool, "reader org")
+	ownerOrgID, ownerID, folderID := seedPackOwner(t, pool, "owner org")
+	readerID, _ := seedPackUserInOrg(t, pool, ownerOrgID, "my")
+	_, foreignReaderID, _ := seedPackOwner(t, pool, "foreign reader org")
 	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
 	otherLibraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
@@ -373,6 +374,8 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 		Title: "Published", FolderID: folderID, Config: config,
 	})
 	require.NoError(t, err)
+	_, err = repo.Get(context.Background(), readerID, created.ID)
+	assert.ErrorIs(t, err, ErrPackNotFound)
 
 	published, err := repo.Publish(
 		context.Background(), ownerID, created.ID, libraryFolderID, false,
@@ -397,6 +400,13 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	readable, err := repo.Get(context.Background(), readerID, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, created.ID, readable.ID)
+	_, err = repo.Get(context.Background(), foreignReaderID, created.ID)
+	assert.ErrorIs(
+		t,
+		err,
+		ErrPackNotFound,
+		"published pack must not be accessible outside its organization",
+	)
 
 	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
 	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
@@ -433,7 +443,7 @@ func TestRepositoryPublicationAdminIsScopedToOrganization(t *testing.T) {
 
 	sameOrgHeadID := uuid.New()
 	_, err = pool.Exec(context.Background(),
-		`INSERT INTO users (id, org_id) VALUES ($1, $2)`, sameOrgHeadID, ownerOrgID)
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, sameOrgHeadID, ownerOrgID)
 	require.NoError(t, err)
 	published, err := repo.Publish(
 		context.Background(), sameOrgHeadID, created.ID, ownerLibraryID, true,
@@ -644,7 +654,7 @@ func seedPackOwner(t *testing.T, pool *pgxpool.Pool, orgName string) (uuid.UUID,
 	folderID := uuid.New()
 	_, err := pool.Exec(ctx, `INSERT INTO organizations (id, name) VALUES ($1, $2)`, orgID, orgName)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO users (id, org_id) VALUES ($1, $2)`, userID, orgID)
+	_, err = pool.Exec(ctx, `INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, userID, orgID)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO folders (id, org_id, owner_id, section, kind, name, depth)
@@ -689,7 +699,7 @@ func seedPackUserInOrg(
 	t.Helper()
 	userID := uuid.New()
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO users (id, org_id) VALUES ($1, $2)`, userID, orgID)
+		INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, userID, orgID)
 	require.NoError(t, err)
 	return userID, seedPackSectionFolder(t, pool, userID, section)
 }

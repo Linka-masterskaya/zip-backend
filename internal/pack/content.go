@@ -162,7 +162,11 @@ func (s *ContentService) UpdateAdaptationConfig(
 	return result, contentError(err)
 }
 
-func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) (*ExportArchive, error) {
+func (s *ContentService) Export(
+	ctx context.Context,
+	packID uuid.UUID,
+	format linka.Format,
+) (*ExportArchive, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -171,12 +175,13 @@ func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) (*ExportA
 	if err != nil {
 		return nil, contentError(err)
 	}
-	return s.exportConfig(ctx, packData.Config, packData.Title, files)
+	return s.exportConfig(ctx, packData.Config, packData.Title, files, format)
 }
 
 func (s *ContentService) ExportAdaptation(
 	ctx context.Context,
 	adaptationID uuid.UUID,
+	format linka.Format,
 ) (*ExportArchive, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
@@ -186,7 +191,7 @@ func (s *ContentService) ExportAdaptation(
 	if err != nil {
 		return nil, contentError(err)
 	}
-	return s.exportConfig(ctx, data.Config, data.Title+"-adaptation", files)
+	return s.exportConfig(ctx, data.Config, data.Title+"-adaptation", files, format)
 }
 
 func (s *ContentService) exportConfig(
@@ -194,11 +199,12 @@ func (s *ContentService) exportConfig(
 	config json.RawMessage,
 	title string,
 	files []*media.File,
+	format linka.Format,
 ) (*ExportArchive, error) {
 	if _, err := validateAndMediaIDs(ctx, config, false); err != nil {
 		return nil, err
 	}
-	stream, err := buildArchive(ctx, config, files, s.storage, s.pictures)
+	stream, err := buildArchive(ctx, config, files, s.storage, format, s.pictures)
 	if err != nil {
 		return nil, contentError(err)
 	}
@@ -380,6 +386,12 @@ func contentError(err error) error {
 		return apperr.ErrPayloadTooLarge
 	case errors.Is(err, ErrMissingMediaReference):
 		return apperr.ErrConflict.WithMessage("archive media reference is missing")
+	case errors.Is(err, linka.ErrLooksUnsupportedBlock),
+		errors.Is(err, linka.ErrLooksUnrepresentableMatching),
+		errors.Is(err, linka.ErrLooksMissingMediaPath):
+		// Набор валиден, но не выражается в формате Linka Looks:
+		// это конфликт состояния набора с запрошенным форматом.
+		return apperr.ErrConflict.WithMessage(err.Error())
 	default:
 		return err
 	}

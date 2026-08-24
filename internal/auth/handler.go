@@ -74,6 +74,7 @@ type ResetPasswordRequest struct {
 
 // RegisterRequest описывает тело запроса на регистрацию по email.
 type RegisterRequest struct {
+	Name     string `json:"name"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
@@ -308,6 +309,9 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
 		return apperr.ErrBadRequest.WithError(err)
 	}
 
+	if err := ValidateName(req.Name); err != nil {
+		return err
+	}
 	if err := ValidateEmail(req.Email); err != nil {
 		return err
 	}
@@ -320,7 +324,9 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	// 202, а не 201: по коду ответа нельзя понять, завели аккаунт сейчас или
+	// адрес уже был занят. Что делать дальше, пользователь узнаёт из письма.
+	w.WriteHeader(http.StatusAccepted)
 
 	return nil
 }

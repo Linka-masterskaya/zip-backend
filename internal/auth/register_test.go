@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -116,6 +115,7 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	svc := newRegisterTestService(mailerFake)
 
 	err := svc.Register(ctx, RegisterRequest{
+		Name:     "Тест Тестов",
 		Email:    " Test2026@example.com ",
 		Password: "strongpass123",
 	})
@@ -202,37 +202,125 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 
 	expectedTokenHash := sha256.Sum256(rawToken)
 	assert.Equal(t, expectedTokenHash[:], tokenHash)
+
+	var displayName *string
+	err = testPool.QueryRow(ctx, `SELECT display_name FROM users WHERE id = $1`, userID).Scan(&displayName)
+	require.NoError(t, err)
+	require.NotNil(t, displayName)
+	assert.Equal(t, "Тест Тестов", *displayName)
 }
 
-func TestAuthService_Register_IntegrationDuplicateEmail(t *testing.T) {
+func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
 	truncateAll(t)
 	ctx := registerCtx(t)
 
 	mailerFake := &registerMailerFake{}
 	svc := newRegisterTestService(mailerFake)
 
-	err := svc.Register(ctx, RegisterRequest{
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Name:     "Тест Тестов",
 		Email:    "duplicate@example.com",
 		Password: "strongpass123",
-	})
-	require.NoError(t, err)
+	}))
 
-	err = svc.Register(ctx, RegisterRequest{
+	var firstHash string
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT password_hash FROM auth_cred`).Scan(&firstHash))
+
+	// Адрес занят, но не подтверждён — повторная регистрация забирает его.
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Name:     "Тест Тестов",
 		Email:    " DUPLICATE@example.com ",
 		Password: "anotherStrongPassword123",
-	})
-	require.Error(t, err)
-
-	var appErr *apperr.AppError
-	require.ErrorAs(t, err, &appErr)
-	assert.Equal(t, apperr.ErrConflict.Code, appErr.Code)
+	}))
 
 	counts := getRegisterCounts(t, ctx)
-	assert.Equal(t, 1, counts.users)
+	assert.Equal(t, 1, counts.users, "второй пользователь заводиться не должен")
 	assert.Equal(t, 1, counts.organizations)
 	assert.Equal(t, 1, counts.authCred)
-	assert.Equal(t, 1, counts.verifyTokens)
-	assert.Equal(t, 1, mailerFake.calls)
+	assert.Equal(t, 2, mailerFake.calls, "письмо уходит на каждую попытку")
+
+	var secondHash string
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT password_hash FROM auth_cred`).Scan(&secondHash))
+	assert.NotEqual(t, firstHash, secondHash, "пароль должен быть перезаписан")
+
+	// Ссылка из первого письма не должна подтверждать адрес с чужим паролем.
+	var activeTokens, usedTokens int
+	require.NoError(t, testPool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM verify_tokens WHERE used_at IS NULL),
+			(SELECT count(*) FROM verify_tokens WHERE used_at IS NOT NULL)
+	`).Scan(&activeTokens, &usedTokens))
+	assert.Equal(t, 1, activeTokens)
+	assert.Equal(t, 1, usedTokens)
+}
+
+func TestAuthService_Register_IntegrationVerifiedEmailIsIndistinguishable(t *testing.T) {
+	truncateAll(t)
+	ctx := registerCtx(t)
+
+	mailerFake := &registerMailerFake{}
+	svc := newRegisterTestService(mailerFake)
+
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Email:    "verified@example.com",
+		Password: "strongpass123",
+	}))
+
+	_, err := testPool.Exec(ctx, `UPDATE users SET email_verified = true`)
+	require.NoError(t, err)
+
+	// Ответ такой же, как для свободного адреса: перебирать базу по коду
+	// ответа нельзя.
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Email:    "verified@example.com",
+		Password: "anotherStrongPassword123",
+	}))
+
+	counts := getRegisterCounts(t, ctx)
+	assert.Equal(t, 1, counts.users, "второй аккаунт заводиться не должен")
+	assert.Equal(t, 1, counts.authCred)
+	assert.Equal(t, 1, counts.verifyTokens, "новый verify-токен не выпускается")
+	assert.Equal(t, mailer.AccountExists, mailerFake.template,
+		"владельцу уходит письмо о попытке регистрации")
+	assert.Equal(t, 2, mailerFake.calls)
+}
+
+func TestAuthService_Register_IntegrationSoftDeletedEmailIsIndistinguishable(t *testing.T) {
+	truncateAll(t)
+	ctx := registerCtx(t)
+
+	mailerFake := &registerMailerFake{}
+	svc := newRegisterTestService(mailerFake)
+
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Email:    "deleted@example.com",
+		Password: "strongpass123",
+	}))
+
+	_, err := testPool.Exec(ctx, `
+		UPDATE users
+		SET email_verified = true,
+			deleted_at = now()
+	`)
+	require.NoError(t, err)
+
+	// Soft-delete keeps the email reserved, but the public registration
+	// response must stay indistinguishable from a free/occupied address.
+	require.NoError(t, svc.Register(ctx, RegisterRequest{
+		Email:    " DELETED@example.com ",
+		Password: "anotherStrongPassword123",
+	}))
+
+	counts := getRegisterCounts(t, ctx)
+	assert.Equal(t, 1, counts.users, "soft-deleted email must remain reserved")
+	assert.Equal(t, 1, counts.organizations)
+	assert.Equal(t, 1, counts.authCred)
+	assert.Equal(t, 1, counts.verifyTokens, "a new verify token must not be issued")
+	assert.Equal(t, 2, mailerFake.calls)
+	assert.Equal(t, mailer.AccountExists, mailerFake.template)
+	assert.Equal(t, "deleted@example.com", mailerFake.to)
 }
 
 func TestAuthService_Register_MailerErrorIsSuccess(t *testing.T) {
@@ -243,6 +331,7 @@ func TestAuthService_Register_MailerErrorIsSuccess(t *testing.T) {
 	svc := newRegisterTestService(mailerFake)
 
 	err := svc.Register(ctx, RegisterRequest{
+		Name:     "Тест Тестов",
 		Email:    "mail-error@example.com",
 		Password: "strongpass123",
 	})

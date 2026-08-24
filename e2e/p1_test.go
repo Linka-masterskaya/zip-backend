@@ -38,10 +38,12 @@ const e2eJWTSecret = "e2e-only-secret"
 func TestE2E_P1UserJourney(t *testing.T) {
 	pool := e2eDatabase(t)
 	ownerID := e2eUser(t, pool, "owner")
-	readerID := e2eUser(t, pool, "reader")
+	readerID := e2eUserInOrg(t, pool, ownerID, "reader")
+	foreignUserID := e2eUser(t, pool, "foreign")
 	server := e2eServer(t, pool)
 	ownerToken := e2eToken(t, ownerID, "defectologist")
 	readerToken := e2eToken(t, readerID, "defectologist")
+	foreignToken := e2eToken(t, foreignUserID, "defectologist")
 
 	t.Run("authorization is enforced", func(t *testing.T) {
 		response := e2eRequest(t, server, "", http.MethodGet, "/api/v1/students", nil)
@@ -81,7 +83,7 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	)
 
 	uploaded := e2eUploadMedia(t, server, ownerToken, tinyPNG())
-	foreignMedia := e2eUploadMedia(t, server, readerToken, tinyPNG())
+	foreignMedia := e2eUploadMedia(t, server, foreignToken, tinyPNG())
 	foreignConfig := packImageConfig(foreignMedia.ID)
 	foreignResponse := e2eRequest(t, server, ownerToken, http.MethodPut,
 		"/api/v1/packs/"+createdPack.ID.String()+"/config", foreignConfig)
@@ -198,7 +200,7 @@ func TestE2E_P1UserJourney(t *testing.T) {
 			server,
 			ownerToken,
 			http.MethodGet,
-			"/api/v1/folders/"+child.ID.String()+"/contents",
+			"/api/v1/sections/my/contents?parent_id="+child.ID.String(),
 			nil,
 		),
 		http.StatusOK,
@@ -206,6 +208,29 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	require.Len(t, contents.Items, 1)
 	assert.Equal(t, "pack", contents.Items[0].Type)
 	assert.Equal(t, createdPack.ID, contents.Items[0].ID)
+
+	t.Run("section root is addressable without a folder id", func(t *testing.T) {
+		// «Мои наборы» — пункт меню, а не папка: id для корня не существует.
+		root := e2eJSON[folder.ContentsPage](
+			t,
+			e2eRequest(t, server, ownerToken, http.MethodGet,
+				"/api/v1/sections/my/contents", nil),
+			http.StatusOK,
+		)
+		names := make([]string, 0, len(root.Items))
+		for _, item := range root.Items {
+			assert.Equal(t, "folder", item.Type)
+			names = append(names, item.Name)
+		}
+		assert.Contains(t, names, "Мои материалы")
+		assert.NotContains(t, names, "Звуки", "вложенная папка не должна попадать в корень")
+		assert.NotContains(t, names, "Общая библиотека", "чужой раздел не должен попадать в корень")
+
+		unknown := e2eRequest(t, server, ownerToken, http.MethodGet,
+			"/api/v1/sections/nope/contents", nil)
+		assert.Equal(t, http.StatusBadRequest, unknown.StatusCode)
+		e2eClose(t, unknown)
+	})
 
 	published := e2eJSON[pack.Pack](
 		t,
@@ -237,6 +262,22 @@ func TestE2E_P1UserJourney(t *testing.T) {
 			http.StatusOK,
 		)
 		assert.Equal(t, createdPack.ID, readable.ID)
+
+		inaccessible := e2eRequest(
+			t,
+			server,
+			foreignToken,
+			http.MethodGet,
+			"/api/v1/packs/"+createdPack.ID.String(),
+			nil,
+		)
+		assert.Equal(
+			t,
+			http.StatusNotFound,
+			inaccessible.StatusCode,
+			"published pack must not be accessible outside its organization",
+		)
+		e2eClose(t, inaccessible)
 
 		response := e2eRequest(
 			t,
@@ -283,13 +324,13 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	)
 	assert.Equal(t, "student@example.com", createdStudent.Email)
 
-	students := e2eJSON[[]student.Student](
+	students := e2eJSON[student.ListResult](
 		t,
 		e2eRequest(t, server, ownerToken, http.MethodGet, "/api/v1/students", nil),
 		http.StatusOK,
 	)
-	require.Len(t, students, 1)
-	assert.Equal(t, createdStudent.ID, students[0].ID)
+	require.Len(t, students.Items, 1)
+	assert.Equal(t, createdStudent.ID, students.Items[0].ID)
 
 	studentFolder := e2eCreateFolder(t, server, ownerToken, map[string]any{
 		"section": "students", "kind": "student", "student_id": createdStudent.ID, "name": "Анна",
@@ -411,7 +452,7 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 	)
 	require.Len(t, assignments, 2)
 	for _, shelfID := range []uuid.UUID{firstShelf.ID, secondShelf.ID} {
-		contents := e2eFolderContents(t, server, token, shelfID)
+		contents := e2eFolderContents(t, server, token, "students", shelfID)
 		require.Len(t, contents.Items, 1)
 		assert.Equal(t, createdPack.ID, contents.Items[0].ID)
 		assert.Equal(t, "Импортированный набор", contents.Items[0].Name)
@@ -424,7 +465,7 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 			map[string]any{"library_folder_id": libraryFolder.ID}),
 		http.StatusOK,
 	)
-	libraryContents := e2eFolderContents(t, server, token, libraryFolder.ID)
+	libraryContents := e2eFolderContents(t, server, token, "library", libraryFolder.ID)
 	require.Len(t, libraryContents.Items, 1)
 	assert.Equal(t, createdPack.ID, libraryContents.Items[0].ID)
 	assert.True(t, libraryContents.Items[0].Published)
@@ -447,9 +488,9 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 	e2eClose(t, response)
 
 	for _, shelfID := range []uuid.UUID{firstShelf.ID, secondShelf.ID} {
-		assert.Empty(t, e2eFolderContents(t, server, token, shelfID).Items)
+		assert.Empty(t, e2eFolderContents(t, server, token, "students", shelfID).Items)
 	}
-	assert.Empty(t, e2eFolderContents(t, server, token, libraryFolder.ID).Items)
+	assert.Empty(t, e2eFolderContents(t, server, token, "library", libraryFolder.ID).Items)
 	for _, mediaID := range []uuid.UUID{first.ID, replacement.ID} {
 		response = e2eRequest(
 			t, server, token, http.MethodDelete, "/api/v1/media/"+mediaID.String(), nil,
@@ -526,7 +567,7 @@ func e2eServer(
 		pack.NewContentService(packRepo, objectStorage, mediaService, packService),
 	)
 	folderHandler := folder.NewHandler(folder.NewService(folder.NewRepository(pool)))
-	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto))
+	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto, objectStorage))
 
 	mux := http.NewServeMux()
 	auth := middleware.NewAuthMW([]byte(e2eJWTSecret))
@@ -689,6 +730,27 @@ func e2eUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 	return userID
 }
 
+func e2eUserInOrg(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	orgMemberID uuid.UUID,
+	name string,
+) uuid.UUID {
+	t.Helper()
+	userID := uuid.New()
+	result, err := pool.Exec(
+		context.Background(),
+		`INSERT INTO users (id, org_id, display_name)
+		 SELECT $1, org_id, $3 FROM users WHERE id = $2`,
+		userID,
+		orgMemberID,
+		name,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.RowsAffected())
+	return userID
+}
+
 func e2eToken(t *testing.T, userID uuid.UUID, role string) string {
 	t.Helper()
 	now := time.Now()
@@ -744,13 +806,14 @@ func e2eFolderContents(
 	t *testing.T,
 	server *httptest.Server,
 	token string,
+	section string,
 	folderID uuid.UUID,
 ) folder.ContentsPage {
 	t.Helper()
 	return e2eJSON[folder.ContentsPage](
 		t,
 		e2eRequest(t, server, token, http.MethodGet,
-			"/api/v1/folders/"+folderID.String()+"/contents", nil),
+			"/api/v1/sections/"+section+"/contents?parent_id="+folderID.String(), nil),
 		http.StatusOK,
 	)
 }

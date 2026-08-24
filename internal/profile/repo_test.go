@@ -3,111 +3,39 @@ package profile
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func setupDBTestUserRepo(t *testing.T, ctx context.Context) *pgxpool.Pool {
-	t.Helper()
-	req := testcontainers.ContainerRequest{
-		Image:        "postgres:15",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_USER":     "test",
-			"POSTGRES_PASSWORD": "test",
-			"POSTGRES_DB":       "testdb",
-		},
-		WaitingFor: wait.ForListeningPort("5432/tcp").
-			WithStartupTimeout(30 * time.Second),
+func TestChangePasswordRepo_Get_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
 	}
 
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	require.NoError(t, err)
+	pool := getTestPool()
+	repo := NewChangePasswordRepo(pool)
 
-	t.Cleanup(func() {
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("terminate postgres container: %v", err)
-		}
-	})
+	email := "get-success@example.com"
+	passwordHash := "hashed-password"
+	userID := insertTestUserForPassword(t, pool, email, passwordHash)
 
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.MappedPort(ctx, "5432")
-	require.NoError(t, err)
-
-	dsn := fmt.Sprintf(
-		"postgres://test:test@%s:%s/testdb?sslmode=disable",
-		host,
-		port.Port(),
-	)
-
-	pool, err := pgxpool.New(ctx, dsn)
-	require.NoError(t, err)
-	t.Cleanup(pool.Close)
-
-	require.Eventually(t, func() bool {
-		return pool.Ping(ctx) == nil
-	}, 10*time.Second, 500*time.Millisecond)
-
-	_, err = pool.Exec(ctx, `
-	CREATE TABLE users (
-		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		email TEXT UNIQUE NOT NULL
-	);
-	CREATE TABLE auth_cred (
-		user_id       UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-		password_hash TEXT,
-		updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-	);
-	`)
-	require.NoError(t, err)
-
-	return pool
-}
-
-// insertTestUser inserts a user and its auth_cred row directly via SQL and
-// returns the user id.
-func insertTestUser(t *testing.T, pool *pgxpool.Pool, email, passwordHash string) uuid.UUID {
-	t.Helper()
-	ctx := context.Background()
-
-	var id uuid.UUID
-	err := pool.QueryRow(ctx, `INSERT INTO users (email) VALUES ($1) RETURNING id`, email).Scan(&id)
-	require.NoError(t, err)
-
-	_, err = pool.Exec(ctx, `INSERT INTO auth_cred (user_id, password_hash) VALUES ($1, $2)`, id, passwordHash)
-	require.NoError(t, err)
-
-	return id
-}
-
-func TestChangePasswordRepo_Get_Success(t *testing.T) {
-	db := setupDBTestUserRepo(t, context.Background())
-	repo := NewChangePasswordRepo(db)
-
-	id := insertTestUser(t, db, "get-success@example.com", "hashed-password")
-
-	user, err := repo.Get(context.Background(), id)
+	user, err := repo.Get(context.Background(), userID)
 
 	require.NoError(t, err)
-	require.Equal(t, id, user.ID)
-	require.Equal(t, "hashed-password", user.Password)
+	require.Equal(t, userID, user.ID)
+	require.Equal(t, passwordHash, user.Password)
 }
 
 func TestChangePasswordRepo_Get_NotFound(t *testing.T) {
-	db := setupDBTestUserRepo(t, context.Background())
-	repo := NewChangePasswordRepo(db)
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	pool := getTestPool()
+	repo := NewChangePasswordRepo(pool)
 
 	user, err := repo.Get(context.Background(), uuid.Nil)
 
@@ -116,24 +44,82 @@ func TestChangePasswordRepo_Get_NotFound(t *testing.T) {
 }
 
 func TestChangePasswordRepo_Update_Success(t *testing.T) {
-	db := setupDBTestUserRepo(t, context.Background())
-	repo := NewChangePasswordRepo(db)
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 
-	id := insertTestUser(t, db, "update-success@example.com", "old-hash")
+	pool := getTestPool()
+	repo := NewChangePasswordRepo(pool)
 
-	err := repo.Update(context.Background(), id, "new-hash")
+	email := "update-success@example.com"
+	oldHash := "old-hash"
+	newHash := "new-hash"
+
+	userID := insertTestUserForPassword(t, pool, email, oldHash)
+
+	err := repo.Update(context.Background(), userID, newHash)
 	require.NoError(t, err)
 
 	var storedHash string
-	require.NoError(t, db.QueryRow(context.Background(), `SELECT password_hash FROM auth_cred WHERE user_id=$1`, id).Scan(&storedHash))
-	require.Equal(t, "new-hash", storedHash)
+	err = pool.QueryRow(context.Background(), `SELECT password_hash FROM auth_cred WHERE user_id=$1`, userID).Scan(&storedHash)
+	require.NoError(t, err)
+	require.Equal(t, newHash, storedHash)
 }
 
 func TestChangePasswordRepo_Update_UnknownID_NoRows(t *testing.T) {
-	db := setupDBTestUserRepo(t, context.Background())
-	repo := NewChangePasswordRepo(db)
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	pool := getTestPool()
+	repo := NewChangePasswordRepo(pool)
 
 	err := repo.Update(context.Background(), uuid.Nil, "new-hash")
 
 	require.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+// insertTestUserForPassword - helper для тестов смены пароля.
+func insertTestUserForPassword(t *testing.T, pool *pgxpool.Pool, email, passwordHash string) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	crypto := getTestCrypto()
+
+	userID := uuid.New()
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO users (id, email_verified, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, now(), now())
+	`, userID, true, "Test User")
+	require.NoError(t, err)
+
+	emailEncrypted, err := crypto.Encrypt([]byte(email))
+	require.NoError(t, err)
+
+	emailHash := crypto.Hash([]byte(email))
+	_, err = pool.Exec(ctx, `
+		INSERT INTO auth_cred (user_id, email_hash, email_encrypted, password_hash, role)
+		VALUES ($1, $2, $3, $4, 'defectologist')
+	`, userID, emailHash, emailEncrypted, passwordHash)
+	require.NoError(t, err)
+
+	orgID := uuid.New()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO organizations (id, name, storage_used_bytes, storage_quota_bytes)
+		VALUES ($1, 'Test Org', 0, 10737418240)
+	`, orgID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `
+		UPDATE users SET org_id = $1 WHERE id = $2
+	`, orgID, userID)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM verify_tokens WHERE user_id = $1", userID.String())
+		_, _ = pool.Exec(ctx, "DELETE FROM auth_cred WHERE user_id = $1", userID.String())
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID.String())
+	})
+
+	return userID
 }
