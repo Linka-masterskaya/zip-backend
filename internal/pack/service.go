@@ -16,6 +16,7 @@ import (
 
 type packRepository interface {
 	Create(context.Context, uuid.UUID, CreateInput) (*Pack, error)
+	Duplicate(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	GetForPublication(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
 	List(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
@@ -52,6 +53,20 @@ func (s *Service) Create(ctx context.Context, title string, folderID uuid.UUID) 
 		return nil, err
 	}
 	result, err := s.repo.Create(ctx, userID, CreateInput{Title: title, FolderID: folderID, Config: config})
+	return result, packError(err)
+}
+
+// Duplicate creates an independent draft copy of an accessible pack.
+func (s *Service) Duplicate(
+	ctx context.Context,
+	packID uuid.UUID,
+	input DuplicateInput,
+) (*Pack, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.repo.Duplicate(ctx, userID, packID, input)
 	return result, packError(err)
 }
 
@@ -271,6 +286,9 @@ func packError(err error) error {
 	}
 	if errors.Is(err, ErrFolderNotAllowed) {
 		return apperr.ErrForbidden.WithMessage("folder is not accessible")
+	}
+	if errors.Is(err, ErrDuplicateDestinationRequired) {
+		return apperr.ErrBadRequest.WithMessage("folder_id is required when duplicating a pack owned by another user")
 	}
 	if errors.Is(err, ErrInvalidPackMetadata) {
 		return apperr.ErrBadRequest.WithMessage("invalid pack metadata")

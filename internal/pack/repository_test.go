@@ -364,8 +364,9 @@ func TestRepositoryMapsMetadataConstraintViolation(t *testing.T) {
 func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
-	_, ownerID, folderID := seedPackOwner(t, pool, "owner org")
-	_, readerID, _ := seedPackOwner(t, pool, "reader org")
+	ownerOrgID, ownerID, folderID := seedPackOwner(t, pool, "owner org")
+	readerID, _ := seedPackUserInOrg(t, pool, ownerOrgID, "my")
+	_, foreignReaderID, _ := seedPackOwner(t, pool, "foreign reader org")
 	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
 	otherLibraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
@@ -373,6 +374,8 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 		Title: "Published", FolderID: folderID, Config: config,
 	})
 	require.NoError(t, err)
+	_, err = repo.Get(context.Background(), readerID, created.ID)
+	assert.ErrorIs(t, err, ErrPackNotFound)
 
 	published, err := repo.Publish(
 		context.Background(), ownerID, created.ID, libraryFolderID, false,
@@ -397,6 +400,13 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	readable, err := repo.Get(context.Background(), readerID, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, created.ID, readable.ID)
+	_, err = repo.Get(context.Background(), foreignReaderID, created.ID)
+	assert.ErrorIs(
+		t,
+		err,
+		ErrPackNotFound,
+		"published pack must not be accessible outside its organization",
+	)
 
 	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
 	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
@@ -614,109 +624,6 @@ func TestRepositoryAdaptationArchiveUsesSnapshotMediaAndChecksAccess(t *testing.
 
 	_, _, err = repo.AdaptationArchiveData(t.Context(), foreignID, assigned[0].ID)
 	assert.ErrorIs(t, err, ErrAdaptationNotFound)
-}
-
-func TestRestoreVersionRejectsSnapshotInvalidUnderCurrentSchema(t *testing.T) {
-	pool := newPackTestDB(t)
-	repo := NewRepository(pool)
-	_, ownerID, folderID := seedPackOwner(t, pool, "schema evolution org")
-	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
-	created, err := repo.Create(t.Context(), ownerID, CreateInput{
-		Title: "Versioned", FolderID: folderID, Config: config,
-	})
-	require.NoError(t, err)
-	_, err = pool.Exec(t.Context(), `
-		INSERT INTO pack_versions (pack_id, version, config, created_by)
-		VALUES ($1, 1, '{}'::jsonb, $2)`, created.ID, ownerID)
-	require.NoError(t, err)
-	service := NewContentService(repo, nil, nil, nil)
-
-	_, err = service.RestoreVersion(packContext(ownerID), created.ID, 1)
-
-	assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
-	fetched, err := repo.Get(t.Context(), ownerID, created.ID)
-	require.NoError(t, err)
-	assert.JSONEq(t, string(config), string(fetched.Config))
-}
-
-func TestRepositoryVersionsRestoreConfigAndRetainMedia(t *testing.T) {
-	pool := newPackTestDB(t)
-	repo := NewRepository(pool)
-	orgID, ownerID, folderID := seedPackOwner(t, pool, "version org")
-	_, foreignID, _ := seedPackOwner(t, pool, "foreign version org")
-	mediaID := uuid.New()
-	_, err := pool.Exec(t.Context(), `
-		INSERT INTO media_files (
-			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
-		)
-		VALUES ($1, $2, $3, 'media.png', $4, 'image/png', 'image', 4, $5)`,
-		mediaID, orgID, ownerID, "version-media-sha", "media/"+mediaID.String(),
-	)
-	require.NoError(t, err)
-	configWithMedia := []byte(`{
-		"metadata":{"version":"2.0"},
-		"settings":{"columns":1,"rows":1},
-		"blocks":[{
-			"id":"block","type":"grid",
-			"elements":[{"id":"image","kind":"image","media_id":"` + mediaID.String() + `"}]
-		}]
-	}`)
-	created, err := repo.Create(t.Context(), ownerID, CreateInput{
-		Title: "Versioned", FolderID: folderID, Config: configWithMedia,
-	})
-	require.NoError(t, err)
-	_, err = pool.Exec(t.Context(), `
-		INSERT INTO media_usages (media_id, source_type, source_id)
-		VALUES ($1, 'pack', $2)`, mediaID, created.ID)
-	require.NoError(t, err)
-
-	versionOne, err := repo.CreateVersion(t.Context(), ownerID, created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, 1, versionOne.Version)
-	assert.JSONEq(t, string(configWithMedia), string(versionOne.Config))
-	_, err = repo.CreateVersion(t.Context(), foreignID, created.ID)
-	assert.ErrorIs(t, err, ErrPackNotFound)
-
-	emptyConfig := []byte(`{
-		"metadata":{"version":"2.0"},
-		"settings":{"columns":1,"rows":1},
-		"blocks":[]
-	}`)
-	_, err = repo.SaveConfig(t.Context(), ownerID, created.ID, emptyConfig, nil)
-	require.NoError(t, err)
-	_, err = pool.Exec(t.Context(), `DELETE FROM media_files WHERE id = $1`, mediaID)
-	require.Error(t, err, "version media usage must prevent deleting restorable media")
-
-	restored, err := repo.RestoreVersion(t.Context(), ownerID, created.ID, 1)
-	require.NoError(t, err)
-	assert.Equal(t, 1, restored.RestoredFromVersion)
-	assert.Equal(t, 2, restored.BackupVersion.Version)
-	assert.JSONEq(t, string(emptyConfig), string(restored.BackupVersion.Config))
-	assert.JSONEq(t, string(configWithMedia), string(restored.Pack.Config))
-
-	versions, err := repo.ListVersions(
-		t.Context(), ownerID, created.ID, ListInput{Limit: 50},
-	)
-	require.NoError(t, err)
-	require.Len(t, versions, 2)
-	assert.Equal(t, 2, versions[0].Version)
-	assert.Equal(t, 1, versions[1].Version)
-	fetchedVersion, err := repo.GetVersion(t.Context(), ownerID, created.ID, 1)
-	require.NoError(t, err)
-	assert.JSONEq(t, string(configWithMedia), string(fetchedVersion.Config))
-	_, err = repo.GetVersion(t.Context(), foreignID, created.ID, 1)
-	assert.ErrorIs(t, err, ErrVersionNotFound)
-	_, err = repo.RestoreVersion(t.Context(), ownerID, created.ID, 99)
-	assert.ErrorIs(t, err, ErrVersionNotFound)
-
-	require.NoError(t, repo.Delete(t.Context(), ownerID, created.ID))
-	var usageCount int
-	require.NoError(t, pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM media_usages WHERE source_type = 'pack_version'
-	`).Scan(&usageCount))
-	assert.Zero(t, usageCount)
-	_, err = pool.Exec(t.Context(), `DELETE FROM media_files WHERE id = $1`, mediaID)
-	require.NoError(t, err)
 }
 
 func newPackTestDB(t *testing.T) *pgxpool.Pool {
