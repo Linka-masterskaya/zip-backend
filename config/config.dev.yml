@@ -167,19 +167,8 @@ cors:
     - "PATCH"
   allow_headers:
     - "Content-Type"
-    - "Content-Length"
-    - "Accept-Encoding"
-    - "X-CSRF-Token"
     - "Authorization"
-    - "Accept"
-    - "Origin"
-    - "Cache-Control"
-    - "X-Requested-With"
-  expose_headers:
-    - "Content-Length"
-    - "Content-Type"
-    - "Date"
-    - "X-Total-Count"
+    - "X-Request-Id"
   allow_credentials: true
   max_age: 86400
 

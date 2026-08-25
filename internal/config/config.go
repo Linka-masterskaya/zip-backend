@@ -247,7 +247,6 @@ type CORSConfig struct {
 	AllowOrigins     []string `mapstructure:"allow_origins"`
 	AllowMethods     []string `mapstructure:"allow_methods"`
 	AllowHeaders     []string `mapstructure:"allow_headers"`
-	ExposeHeaders    []string `mapstructure:"expose_headers"`
 	AllowCredentials bool     `mapstructure:"allow_credentials"`
 	MaxAge           int      `mapstructure:"max_age"`
 }
@@ -502,20 +501,8 @@ func setDefaults(v *viper.Viper) {
 	})
 	v.SetDefault("cors.allow_headers", []string{
 		"Content-Type",
-		"Content-Length",
-		"Accept-Encoding",
-		"X-CSRF-Token",
 		"Authorization",
-		"Accept",
-		"Origin",
-		"Cache-Control",
-		"X-Requested-With",
-	})
-	v.SetDefault("cors.expose_headers", []string{
-		"Content-Length",
-		"Content-Type",
-		"Date",
-		"X-Total-Count",
+		"X-Request-Id",
 	})
 	v.SetDefault("cors.allow_credentials", true)
 	v.SetDefault("cors.max_age", 86400)
@@ -578,6 +565,11 @@ func validateConfig(cfg *Config) error {
 	if cfg.TTS.MaxConcurrent <= 0 {
 		return fmt.Errorf("ttsapi.max_concurrent must be > 0")
 	}
+
+	// CORS validation
+	if err := validateCORSConfig(&cfg.CORS); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -630,5 +622,18 @@ func validateCryptoCongig(cfg *CryptoConfig) error {
 		cfg.HMACKey = hmacKey
 	}
 
+	return nil
+}
+
+func validateCORSConfig(cfg *CORSConfig) error {
+	if len(cfg.AllowOrigins) == 0 {
+		return fmt.Errorf("cors.allow_origins is required")
+	}
+	if len(cfg.AllowMethods) == 0 {
+		return fmt.Errorf("cors.allow_methods is required")
+	}
+	if len(cfg.AllowHeaders) == 0 {
+		return fmt.Errorf("cors.allow_headers is required")
+	}
 	return nil
 }

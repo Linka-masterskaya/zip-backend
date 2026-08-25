@@ -87,7 +87,7 @@ func newAPIServer(cfg *config.Config, mods *modules, rl httpapi.RateLimits, redi
 		middleware.RecoveryMiddleware,
 		middleware.RequestIDMiddleware,
 		middleware.Metrics,
-		middleware.CORSMiddleware(cfg.CORS.AllowOrigins),
+		middleware.CORSMiddleware(cfg.CORS),
 		middleware.SecurityHeaders,
 	)
 
