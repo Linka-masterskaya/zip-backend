@@ -454,7 +454,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("smtp.from_email", "")
 	v.SetDefault("smtp.tls", true)
 	v.SetDefault("smtp.timeout", "10s")
-	v.SetDefault("smtp.require_from_match", false)
+	v.SetDefault("smtp.require_from_match", true)
 	v.SetDefault("smtp.daily_limit_alert", 300)
 
 	// Crypto defaults

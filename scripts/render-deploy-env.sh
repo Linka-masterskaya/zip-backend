@@ -40,6 +40,7 @@ if not template.is_file():
 key_pattern = re.compile(r"^([A-Z][A-Z0-9_]*)=(.*)$")
 rendered: list[str] = []
 missing: list[str] = []
+empty: list[str] = []
 for raw_line in template.read_text(encoding="utf-8").splitlines():
     match = key_pattern.match(raw_line)
     if not match:
@@ -51,10 +52,19 @@ for raw_line in template.read_text(encoding="utf-8").splitlines():
         missing.append(source_key)
         rendered.append(raw_line)
         continue
+    if not os.environ[source_key]:
+        empty.append(source_key)
+        rendered.append(raw_line)
+        continue
     rendered.append(f"{key}={compose_quote(os.environ[source_key], source_key)}")
 
-if missing:
-    fail("missing variables: " + ", ".join(missing))
+if missing or empty:
+    parts = []
+    if missing:
+        parts.append("missing: " + ", ".join(missing))
+    if empty:
+        parts.append("empty: " + ", ".join(empty))
+    fail("; ".join(parts))
 
 output.parent.mkdir(parents=True, exist_ok=True)
 fd, temporary_name = tempfile.mkstemp(prefix=output.name + ".", dir=output.parent, text=True)
