@@ -52,7 +52,7 @@ for raw_line in template.read_text(encoding="utf-8").splitlines():
         missing.append(source_key)
         rendered.append(raw_line)
         continue
-    if not os.environ[source_key]:
+    if not os.environ[source_key] and match.group(2):
         empty.append(source_key)
         rendered.append(raw_line)
         continue
