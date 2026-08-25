@@ -22,6 +22,7 @@ type fakeRepo struct {
 	getOrgIDFn            func(context.Context, uuid.UUID) (uuid.UUID, error)
 	getJobFn              func(context.Context, uuid.UUID) (*JobDetails, error)
 	createMediaFileFn     func(context.Context, uuid.UUID, uuid.UUID, MediaFileInput) (uuid.UUID, error)
+	isQuotaLowFn          func(context.Context, uuid.UUID) (bool, error)
 }
 
 func (f *fakeRepo) GetFromBank(ctx context.Context, text, voice string) (*BankEntry, error) {
@@ -79,6 +80,13 @@ func (f *fakeRepo) GetVoices(_ context.Context) ([]Voice, error) {
 
 func (f *fakeRepo) UpsertVoices(_ context.Context, _ []Voice) error {
 	return nil
+}
+
+func (f *fakeRepo) IsQuotaLow(ctx context.Context, orgID uuid.UUID) (bool, error) {
+	if f.isQuotaLowFn != nil {
+		return f.isQuotaLowFn(ctx, orgID)
+	}
+	return false, nil
 }
 
 type fakePub struct {
@@ -322,4 +330,21 @@ func TestCreateAudioBankHitCreatesMedia(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, expectedJobID.String(), jobID)
 	assert.True(t, mediaCreated)
+}
+
+func TestCreateAudioQuotaExceeded(t *testing.T) {
+	repo := &fakeRepo{
+		isQuotaLowFn: func(_ context.Context, _ uuid.UUID) (bool, error) {
+			return true, nil
+		},
+	}
+
+	svc := testService(repo, &fakePub{}, &fakeClient{})
+	ctx := authctx.SetUserIDToCtx(context.Background(), uuid.New())
+	_, err := svc.CreateAudio(ctx, TTSDataRequest{Text: "привет", Voice: "alena"})
+
+	var appErr *apperr.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "PAYLOAD_TOO_LARGE", appErr.Code)
+	assert.Equal(t, "organization storage quota exceeded", appErr.Message)
 }

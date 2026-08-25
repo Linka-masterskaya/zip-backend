@@ -86,3 +86,8 @@ const selectExpiredBank = `
 	WHERE mf.id IS NULL
 	AND ab.last_used_at < $1
 	LIMIT $2`
+
+const isQuotaLow = `
+SELECT storage_quota_bytes - storage_used_bytes < 1048576
+FROM organizations
+WHERE id = $1`

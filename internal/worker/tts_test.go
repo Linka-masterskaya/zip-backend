@@ -26,14 +26,24 @@ func (f *fakeSynthesizer) Synthesize(ctx context.Context, text, voice string) ([
 }
 
 type fakeUploader struct {
-	putObjectFn func(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
-	called      bool
+	putObjectFn    func(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
+	called         bool
+	removeObjectFn func(ctx context.Context, key string) error
+	removeCalled   bool
 }
 
 func (f *fakeUploader) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
 	f.called = true
 	if f.putObjectFn != nil {
 		return f.putObjectFn(ctx, key, reader, size, contentType)
+	}
+	return nil
+}
+
+func (f *fakeUploader) RemoveObject(ctx context.Context, key string) error {
+	f.removeCalled = true
+	if f.removeObjectFn != nil {
+		return f.removeObjectFn(ctx, key)
 	}
 	return nil
 }
@@ -283,4 +293,32 @@ func TestHandleCreateMediaFileError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "quota exceeded")
 	assert.False(t, repo.completeCalled)
+}
+
+func TestHandleCreateMediaFileQuotaExceeded(t *testing.T) {
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	var failedStatus string
+	repo := &fakeAudioBank{
+		createMediaFileFn: func(_ context.Context, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
+			return uuid.Nil, tts.ErrQuotaExceeded
+		},
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			failedStatus = status
+			return nil
+		},
+	}
+
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), testJob(), false)
+
+	require.NoError(t, err, "quota exceeded — permanent, ACK без ошибки")
+	assert.True(t, stor.removeCalled, "должен удалить из MinIO")
+	assert.Equal(t, tts.StatusFailed, failedStatus)
+	assert.False(t, repo.completeCalled)
+	assert.False(t, repo.bankCalled)
 }

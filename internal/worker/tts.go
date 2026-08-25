@@ -24,6 +24,7 @@ type synthesizer interface {
 
 type uploader interface {
 	PutObject(context.Context, string, io.Reader, int64, string) error
+	RemoveObject(context.Context, string) error
 }
 
 type audioBank interface {
@@ -101,6 +102,10 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 		Name:      job.Text,
 	})
 	if err != nil {
+		if errors.Is(err, tts.ErrQuotaExceeded) {
+			w.handleQuotaExceeded(ctx, jobID, key)
+			return nil
+		}
 		return w.handleRetryable(ctx, jobID, "CreateMediaFile", isLastAttempt, err)
 	}
 
@@ -151,4 +156,15 @@ func (w *TTS) handleRetryable(ctx context.Context, jobID uuid.UUID, opName strin
 	slog.WarnContext(ctx, "worker.Handle: job marked failed after final delivery",
 		"job_id", jobID, "op", opName, "op_err", opErr)
 	return nil
+}
+
+func (w *TTS) handleQuotaExceeded(ctx context.Context, jobID uuid.UUID, key string) {
+	if err := w.storage.RemoveObject(ctx, key); err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: cleanup MinIO after quota exceeded",
+			"job_id", jobID, "key", key, "err", err)
+	}
+	if err := w.markFailedWithRetry(ctx, jobID); err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: mark failed after quota exceeded",
+			"job_id", jobID, "db_err", err)
+	}
 }

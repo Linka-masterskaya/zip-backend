@@ -135,6 +135,15 @@ func (r *Repository) GetOrgID(ctx context.Context, userID uuid.UUID) (uuid.UUID,
 	return orgID, nil
 }
 
+func (r *Repository) IsQuotaLow(ctx context.Context, orgID uuid.UUID) (bool, error) {
+	var low bool
+	err := r.pool.QueryRow(ctx, isQuotaLow, orgID).Scan(&low)
+	if err != nil {
+		return false, fmt.Errorf("tts.IsQuotaLow: %w", err)
+	}
+	return low, nil
+}
+
 func (r *Repository) GetJob(ctx context.Context, jobID uuid.UUID) (*JobDetails, error) {
 	var jobDetails JobDetails
 	err := r.pool.QueryRow(ctx, getJob, jobID).Scan(

@@ -19,6 +19,7 @@ type repository interface {
 	GetFromBank(context.Context, string, string) (*BankEntry, error)
 	UpdateStatusTTS(context.Context, uuid.UUID, string) error
 	GetOrgID(context.Context, uuid.UUID) (uuid.UUID, error)
+	IsQuotaLow(context.Context, uuid.UUID) (bool, error)
 	GetJob(context.Context, uuid.UUID) (*JobDetails, error)
 	CreateMediaFile(context.Context, uuid.UUID, uuid.UUID, MediaFileInput) (uuid.UUID, error)
 	GetVoices(context.Context) ([]Voice, error)
@@ -67,6 +68,10 @@ func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (stri
 	}
 	orgID, err := s.repo.GetOrgID(ctx, userID)
 	if err != nil {
+		return "", err
+	}
+
+	if err := s.checkQuota(ctx, orgID); err != nil {
 		return "", err
 	}
 
@@ -186,4 +191,15 @@ func (s *Service) isValidVoice(ctx context.Context, voice string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Service) checkQuota(ctx context.Context, orgID uuid.UUID) error {
+	low, err := s.repo.IsQuotaLow(ctx, orgID)
+	if err != nil {
+		return err
+	}
+	if low {
+		return apperr.ErrPayloadTooLarge.WithMessage("organization storage quota exceeded")
+	}
+	return nil
 }
