@@ -6,3 +6,8 @@ scrape_configs:
     static_configs:
       - targets: ["zip-backend:9091"]
     metrics_path: "/metrics"
+
+  - job_name: "backup-pushgateway"
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]

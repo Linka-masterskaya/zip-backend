@@ -9,6 +9,7 @@ Thumbs.db
 
 # ── Secrets / env ────────────────────────────────────────────────────────────
 .env
+.env.backup
 .env.local
 .env.*.local
 *.pem
