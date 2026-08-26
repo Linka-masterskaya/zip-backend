@@ -70,7 +70,7 @@ const getPackForPublicationQuery = `
 	  AND u.deleted_at IS NULL
 	  AND (p.owner_id = u.id OR $3)`
 
-const listPacksQuery = `
+const listPacksBaseQuery = `
 	WITH active_user AS (
 		SELECT id, org_id
 		FROM users
@@ -130,13 +130,18 @@ const listPacksQuery = `
 		  AND ($3::int IS NULL OR (age_min <= $3::int AND $3::int <= age_max))
 		  AND ($4::text = '' OR difficulty = $4::text)
 		  AND ($5::text = '' OR section = $5::text)
-	)
+	)`
+
+const listPacksQuery = listPacksBaseQuery + `
 	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
 	       published_at, title, status, age_min, age_max, difficulty,
 	       goals, notes, config, is_favorite, section, created_at, updated_at
 	FROM filtered
 	ORDER BY updated_at DESC, id, section, result_folder_id
 	LIMIT $6 OFFSET $7`
+
+const countPacksQuery = listPacksBaseQuery + `
+	SELECT count(*) FROM filtered`
 
 const lockPackForUpdateQuery = `
 	SELECT p.org_id

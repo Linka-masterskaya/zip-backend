@@ -293,6 +293,17 @@ components:
             is_favorite: { type: boolean }
             section: { type: string, enum: [library, my, students] }
 
+    PackListPage:
+      type: object
+      required: [items, limit, offset, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PackListItem' }
+        limit: { type: integer }
+        offset: { type: integer }
+        total: { type: integer, minimum: 0 }
+
     MediaFile:
       type: object
       required:
@@ -1019,7 +1030,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, limit, offset]
+                required: [items, limit, offset, total]
                 properties:
                   items:
                     {
@@ -1028,6 +1039,7 @@ paths:
                     }
                   limit: { type: integer }
                   offset: { type: integer }
+                  total: { type: integer, minimum: 0 }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Папка не найдена или недоступна }
@@ -1303,8 +1315,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/PackListItem' }
+                $ref: '#/components/schemas/PackListPage'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 

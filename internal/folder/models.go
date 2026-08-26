@@ -71,4 +71,5 @@ type ContentsPage struct {
 	Items  []ContentItem `json:"items"`
 	Limit  int           `json:"limit"`
 	Offset int           `json:"offset"`
+	Total  int           `json:"total"`
 }

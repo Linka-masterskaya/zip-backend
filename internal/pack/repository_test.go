@@ -141,6 +141,14 @@ func TestRepositoryListUsesLimitAndOffset(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created[1].ID, listed[0].ID)
+
+	total, err := repo.Count(context.Background(), userID, ListInput{Limit: 1, Offset: 1})
+	require.NoError(t, err)
+	assert.Equal(t, 3, total)
+
+	totalWithDifferentPage, err := repo.Count(context.Background(), userID, ListInput{Limit: 2, Offset: 100})
+	require.NoError(t, err)
+	assert.Equal(t, 3, totalWithDifferentPage)
 }
 
 func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {

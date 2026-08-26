@@ -52,6 +52,10 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		}, input)
 		return []*ListItem{{ID: packID}}, nil
 	}
+	repo.countFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) (int, error) {
+		assert.Equal(t, userID, gotUserID)
+		return 1, nil
+	}
 	repo.deleteFn = func(_ context.Context, gotUserID, gotPackID uuid.UUID) error {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, packID, gotPackID)
@@ -72,7 +76,9 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		Query: "  Speech  ", Age: &age, Difficulty: "easy", Section: "my",
 	})
 	require.NoError(t, err)
-	require.Len(t, listed, 1)
+	require.Len(t, listed.Items, 1)
+	assert.Equal(t, 1, listed.Total)
+	assert.Equal(t, 50, listed.Limit)
 	require.NoError(t, service.Delete(ctx, packID))
 	moved, err := service.Move(ctx, packID, folderID)
 	require.NoError(t, err)
@@ -310,6 +316,7 @@ type fakePackRepository struct {
 	getFn               func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
 	listFn              func(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
+	countFn             func(context.Context, uuid.UUID, ListInput) (int, error)
 	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
 	moveFn              func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -360,6 +367,17 @@ func (f *fakePackRepository) List(
 		return f.listFn(ctx, userID, input)
 	}
 	return []*ListItem{}, nil
+}
+
+func (f *fakePackRepository) Count(
+	ctx context.Context,
+	userID uuid.UUID,
+	input ListInput,
+) (int, error) {
+	if f.countFn != nil {
+		return f.countFn(ctx, userID, input)
+	}
+	return 0, nil
 }
 
 func (f *fakePackRepository) Update(ctx context.Context, userID, packID uuid.UUID, input UpdateInput) (*Pack, error) {
