@@ -135,7 +135,7 @@ jobs:
           CI_SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           CI_SMTP_TLS: ${{ vars.SMTP_TLS }}
           CI_SMTP_TIMEOUT: "10s"
-          CI_SMTP_REQUIRE_FROM_MATCH: "true"
+          CI_SMTP_REQUIRE_FROM_MATCH: ${{ vars.SMTP_REQUIRE_FROM_MATCH }}
           CI_SMTP_DAILY_LIMIT_ALERT: "300"
           CI_AUTH_RESET_PASSWORD_TOKEN_TTL: "1h"
           CI_AUTH_BCRYPT_COST: "12"
