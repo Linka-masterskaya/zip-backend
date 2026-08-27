@@ -8,14 +8,18 @@
 # AB-40/AB-43 в июле и с AB-51/AB-23 в августе.
 #
 # Проверка сравнивает миграции, добавленные пулл-реквестом, с максимальной
-# версией на базовой ветке.
+# версией на текущем BASE_SHA. Это важно: merge-base может быть старее
+# актуальной base-ветки и ошибочно считать уже смерженную в main миграцию
+# новой миграцией pull request.
 set -euo pipefail
 
 BASE_SHA="${BASE_SHA:-origin/main}"
 HEAD_SHA="${HEAD_SHA:-HEAD}"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 
-merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+# Даем понятную ошибку, если workflow не получил нужную историю.
+git cat-file -e "${BASE_SHA}^{commit}"
+git cat-file -e "${HEAD_SHA}^{commit}"
 
 version_of() {
   # 20260819190000_create_x.sql -> 20260819190000
@@ -30,7 +34,7 @@ while IFS= read -r path; do
   if [ "$version" -gt "$max_base_version" ]; then
     max_base_version="$version"
   fi
-done < <(git ls-tree -r --name-only "$merge_base" -- "$MIGRATIONS_DIR" | grep '\.sql$' || true)
+done < <(git ls-tree -r --name-only "$BASE_SHA" -- "$MIGRATIONS_DIR" | grep '\.sql$' || true)
 
 if [ "$max_base_version" -eq 0 ]; then
   echo "На базовой ветке миграций нет — проверять нечего."
@@ -52,7 +56,7 @@ while IFS= read -r path; do
     echo "        Переименуйте файл, дав timestamp больше $max_base_version."
     failed=1
   fi
-done < <(git diff --name-only --diff-filter=A "$merge_base" "$HEAD_SHA" -- "$MIGRATIONS_DIR" | grep '\.sql$' || true)
+done < <(git diff --name-only --diff-filter=A "$BASE_SHA" "$HEAD_SHA" -- "$MIGRATIONS_DIR" | grep '\.sql$' || true)
 
 if [ "$failed" -ne 0 ]; then
   exit 1
