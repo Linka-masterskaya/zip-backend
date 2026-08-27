@@ -169,8 +169,10 @@ cors:
     - "Content-Type"
     - "Authorization"
     - "X-Request-Id"
+  expose_headers:
+    - "X-Request-Id"
   allow_credentials: true
-  max_age: 86400
+  max_age: 24h
 
 ttsapi:
   service_url: "https://tts.linka.su"

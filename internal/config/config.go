@@ -244,11 +244,12 @@ type ProfileConfig struct {
 
 // CORSConfig contains CORS settings.
 type CORSConfig struct {
-	AllowOrigins     []string `mapstructure:"allow_origins"`
-	AllowMethods     []string `mapstructure:"allow_methods"`
-	AllowHeaders     []string `mapstructure:"allow_headers"`
-	AllowCredentials bool     `mapstructure:"allow_credentials"`
-	MaxAge           int      `mapstructure:"max_age"`
+	AllowOrigins     []string      `mapstructure:"allow_origins"`
+	AllowMethods     []string      `mapstructure:"allow_methods"`
+	AllowHeaders     []string      `mapstructure:"allow_headers"`
+	ExposeHeaders    []string      `mapstructure:"expose_headers"`
+	AllowCredentials bool          `mapstructure:"allow_credentials"`
+	MaxAge           time.Duration `mapstructure:"max_age"`
 }
 
 // TTSConfig contains TTS settings.
@@ -302,6 +303,10 @@ func Load(path string) (*Config, error) {
 	if envOrigins := os.Getenv("CORS_ALLOW_ORIGINS"); envOrigins != "" {
 		cfg.CORS.AllowOrigins = strings.Split(envOrigins, ",")
 	}
+	cfg.CORS.AllowOrigins = normalizeStringSlice(cfg.CORS.AllowOrigins)
+	cfg.CORS.AllowMethods = normalizeStringSlice(cfg.CORS.AllowMethods)
+	cfg.CORS.AllowHeaders = normalizeStringSlice(cfg.CORS.AllowHeaders)
+	cfg.CORS.ExposeHeaders = normalizeStringSlice(cfg.CORS.ExposeHeaders)
 
 	// Validate required fields
 	if err := validateConfig(&cfg); err != nil {
@@ -504,8 +509,11 @@ func setDefaults(v *viper.Viper) {
 		"Authorization",
 		"X-Request-Id",
 	})
+	v.SetDefault("cors.expose_headers", []string{
+		"X-Request-Id",
+	})
 	v.SetDefault("cors.allow_credentials", true)
-	v.SetDefault("cors.max_age", 86400)
+	v.SetDefault("cors.max_age", "24h")
 
 	// Cron defaults
 	v.SetDefault("cron.voice_refresh.interval", "1h")
@@ -635,5 +643,18 @@ func validateCORSConfig(cfg *CORSConfig) error {
 	if len(cfg.AllowHeaders) == 0 {
 		return fmt.Errorf("cors.allow_headers is required")
 	}
+	if cfg.MaxAge < 0 {
+		return fmt.Errorf("cors.max_age must be non-negative")
+	}
 	return nil
+}
+
+func normalizeStringSlice(origins []string) []string {
+	result := make([]string, 0, len(origins))
+	for _, o := range origins {
+		if o = strings.TrimSpace(o); o != "" {
+			result = append(result, o)
+		}
+	}
+	return result
 }

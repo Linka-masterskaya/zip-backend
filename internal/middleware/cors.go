@@ -18,20 +18,27 @@ func CORSMiddleware(cfg config.CORSConfig) func(http.Handler) http.Handler {
 		}
 	}
 
-	allowCreds := strconv.FormatBool(cfg.AllowCredentials)
+	maxAge := strconv.Itoa(int(cfg.MaxAge.Seconds()))
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("Vary", "Origin")
+
 			origin := r.Header.Get("Origin")
 			if _, ok := origins[origin]; ok {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Credentials", allowCreds)
-				w.Header().Add("Vary", "Origin")
+				if cfg.AllowCredentials {
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
+				if len(cfg.ExposeHeaders) > 0 {
+					w.Header().Set("Access-Control-Expose-Headers", strings.Join(cfg.ExposeHeaders, ", "))
+				}
 			}
-			w.Header().Set("Access-Control-Allow-Headers", headers)
-			w.Header().Set("Access-Control-Allow-Methods", methods)
 
 			if r.Method == http.MethodOptions {
+				w.Header().Set("Access-Control-Allow-Headers", headers)
+				w.Header().Set("Access-Control-Allow-Methods", methods)
+				w.Header().Set("Access-Control-Max-Age", maxAge)
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 )
@@ -15,6 +16,7 @@ func newCORSConfig() config.CORSConfig {
 		AllowMethods:     []string{"GET", "POST", "PATCH"},
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,
+		MaxAge:           24 * time.Hour,
 	}
 }
 
@@ -81,13 +83,16 @@ func TestCORSMiddleware_Preflight(t *testing.T) {
 }
 
 func TestCORSMiddleware_MethodsAndHeaders(t *testing.T) {
-	rec := doCORSRequest(t, newCORSConfig(), http.MethodGet, "https://example.com")
+	rec := doCORSRequest(t, newCORSConfig(), http.MethodOptions, "https://example.com")
 
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PATCH" {
 		t.Errorf("Allow-Methods = %q, want %q", got, "GET, POST, PATCH")
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization" {
 		t.Errorf("Allow-Headers = %q, want %q", got, "Content-Type, Authorization")
+	}
+	if got := rec.Header().Get("Access-Control-Max-Age"); got != "86400" {
+		t.Errorf("Max-Age = %q, want %q", got, "86400")
 	}
 }
 
@@ -96,8 +101,8 @@ func TestCORSMiddleware_CredentialsFalse(t *testing.T) {
 	cfg.AllowCredentials = false
 	rec := doCORSRequest(t, cfg, http.MethodGet, "https://example.com")
 
-	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "false" {
-		t.Errorf("Allow-Credentials = %q, want %q", got, "false")
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("Allow-Credentials = %q, want empty (header should be omitted)", got)
 	}
 }
 
