@@ -107,3 +107,11 @@ cron:
 ### Известные ограничения
 
 Английские аббревиатуры (`IBM`, `USA`, `HTML`) произносятся как слова, а не по буквам. Если такое произношение критично — обратитесь к разработчикам, потребуется поддержка SSML-разметки.
+
+---
+
+## Local Pictures Bank
+
+N11 supports a PostgreSQL + MinIO Pictures Bank adapter selected by `feature_flags.local_bank`. System images use the private `system/pictures-bank/` MinIO namespace and are managed with the supported `cmd/picturebank-seed` operator command; the public frontend contract remains unchanged.
+
+See `docs/picturebank/local-bank.md` and `docs/picturebank/ADR-001-local-ingestion.md`.

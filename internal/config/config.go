@@ -443,7 +443,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pictures_bank.max_metadata_bytes", 2097152)
 	v.SetDefault("pictures_bank.max_image_bytes", 10485760)
 
-	// The adapter is intentionally disabled until its implementation lands.
+	// External Pictures Bank remains the default; local mode is file-owned.
 	v.SetDefault("feature_flags.local_bank", false)
 
 	// SMTP defaults

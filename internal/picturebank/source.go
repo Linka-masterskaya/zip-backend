@@ -7,10 +7,6 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 )
 
-// ErrLocalBankNotImplemented keeps the feature flag fail-closed until a local
-// adapter is supplied.
-var ErrLocalBankNotImplemented = errors.New("local pictures bank is not implemented")
-
 // Source is the read-side boundary shared by picture bank adapters.
 type Source interface {
 	Categories(context.Context) ([]Category, error)
@@ -18,15 +14,26 @@ type Source interface {
 	Image(context.Context, string) (*Image, error)
 }
 
-// NewSource selects the configured adapter. Local mode deliberately fails at
-// startup instead of silently contacting the external Pictures Bank.
+// NewSource selects the configured adapter without initializing the unused one.
 func NewSource(
 	local bool,
 	cfg config.PicturesBankConfig,
 	limiter distributedLimiter,
+	localDependencies ...LocalDependencies,
 ) (Source, error) {
-	if local {
-		return nil, ErrLocalBankNotImplemented
+	if !local {
+		return NewClient(cfg, limiter)
 	}
-	return NewClient(cfg, limiter)
+	if len(localDependencies) != 1 {
+		return nil, errors.New("local pictures bank dependencies are required")
+	}
+	dependencies := localDependencies[0]
+	if dependencies.DB == nil {
+		return nil, errors.New("local pictures bank database is required")
+	}
+	return newLocalSource(
+		newLocalRepository(dependencies.DB),
+		dependencies.Storage,
+		cfg.MaxImageBytes,
+	)
 }

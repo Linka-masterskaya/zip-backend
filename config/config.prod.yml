@@ -100,7 +100,12 @@ openai:
   org_id: ""
 
 pictures_bank:
+  # Required only while feature_flags.local_bank is false.
   url: ""
+
+feature_flags:
+  # File-owned flag: set true to use PostgreSQL + MinIO instead of the external bank.
+  local_bank: false
 
 smtp:
   host: "smtp.yandex.ru"
