@@ -20,9 +20,8 @@ type fakeRepo struct {
 	createOrGetInflightFn func(context.Context, uuid.UUID, string, string) (uuid.UUID, bool, error)
 	updateStatusFn        func(context.Context, uuid.UUID, string) error
 	getOrgIDFn            func(context.Context, uuid.UUID) (uuid.UUID, error)
-	getJobFn              func(context.Context, uuid.UUID) (*JobDetails, error)
+	getJobFn              func(context.Context, uuid.UUID, uuid.UUID) (*JobDetails, error)
 	createMediaFileFn     func(context.Context, uuid.UUID, uuid.UUID, MediaFileInput) (uuid.UUID, error)
-	isQuotaLowFn          func(context.Context, uuid.UUID) (bool, error)
 }
 
 func (f *fakeRepo) GetFromBank(ctx context.Context, text, voice string) (*BankEntry, error) {
@@ -60,9 +59,9 @@ func (f *fakeRepo) GetOrgID(ctx context.Context, userID uuid.UUID) (uuid.UUID, e
 	return uuid.New(), nil
 }
 
-func (f *fakeRepo) GetJob(ctx context.Context, jobID uuid.UUID) (*JobDetails, error) {
+func (f *fakeRepo) GetJob(ctx context.Context, jobID, orgID uuid.UUID) (*JobDetails, error) {
 	if f.getJobFn != nil {
-		return f.getJobFn(ctx, jobID)
+		return f.getJobFn(ctx, jobID, orgID)
 	}
 	return &JobDetails{Status: StatusPending}, nil
 }
@@ -80,13 +79,6 @@ func (f *fakeRepo) GetVoices(_ context.Context) ([]Voice, error) {
 
 func (f *fakeRepo) UpsertVoices(_ context.Context, _ []Voice) error {
 	return nil
-}
-
-func (f *fakeRepo) IsQuotaLow(ctx context.Context, orgID uuid.UUID) (bool, error) {
-	if f.isQuotaLowFn != nil {
-		return f.isQuotaLowFn(ctx, orgID)
-	}
-	return false, nil
 }
 
 type fakePub struct {
@@ -208,14 +200,15 @@ func TestCreateAudioTextTooLong(t *testing.T) {
 }
 
 func TestGetJobPending(t *testing.T) {
+	ctx := authctx.SetUserIDToCtx(context.Background(), uuid.New())
 	repo := &fakeRepo{
-		getJobFn: func(_ context.Context, _ uuid.UUID) (*JobDetails, error) {
+		getJobFn: func(_ context.Context, _, _ uuid.UUID) (*JobDetails, error) {
 			return &JobDetails{Status: StatusPending}, nil
 		},
 	}
 
 	svc := testService(repo, &fakePub{}, &fakeClient{})
-	status, mediaID, err := svc.GetJob(context.Background(), uuid.New())
+	status, mediaID, err := svc.GetJob(ctx, uuid.New())
 
 	require.NoError(t, err)
 	assert.Equal(t, StatusPending, status)
@@ -223,10 +216,11 @@ func TestGetJobPending(t *testing.T) {
 }
 
 func TestGetJobSucceeded(t *testing.T) {
+	ctx := authctx.SetUserIDToCtx(context.Background(), uuid.New())
 	expectedMediaID := uuid.New()
 
 	repo := &fakeRepo{
-		getJobFn: func(_ context.Context, _ uuid.UUID) (*JobDetails, error) {
+		getJobFn: func(_ context.Context, _, _ uuid.UUID) (*JobDetails, error) {
 			return &JobDetails{
 				Status:  StatusSucceeded,
 				MediaID: &expectedMediaID,
@@ -235,7 +229,7 @@ func TestGetJobSucceeded(t *testing.T) {
 	}
 
 	svc := testService(repo, &fakePub{}, &fakeClient{})
-	status, mediaID, err := svc.GetJob(context.Background(), uuid.New())
+	status, mediaID, err := svc.GetJob(ctx, uuid.New())
 
 	require.NoError(t, err)
 	assert.Equal(t, StatusSucceeded, status)
@@ -330,21 +324,4 @@ func TestCreateAudioBankHitCreatesMedia(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, expectedJobID.String(), jobID)
 	assert.True(t, mediaCreated)
-}
-
-func TestCreateAudioQuotaExceeded(t *testing.T) {
-	repo := &fakeRepo{
-		isQuotaLowFn: func(_ context.Context, _ uuid.UUID) (bool, error) {
-			return true, nil
-		},
-	}
-
-	svc := testService(repo, &fakePub{}, &fakeClient{})
-	ctx := authctx.SetUserIDToCtx(context.Background(), uuid.New())
-	_, err := svc.CreateAudio(ctx, TTSDataRequest{Text: "привет", Voice: "alena"})
-
-	var appErr *apperr.AppError
-	require.ErrorAs(t, err, &appErr)
-	assert.Equal(t, "PAYLOAD_TOO_LARGE", appErr.Code)
-	assert.Equal(t, "organization storage quota exceeded", appErr.Message)
 }

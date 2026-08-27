@@ -1,11 +1,13 @@
 -- +goose Up
-ALTER TABLE tts_jobs ADD COLUMN org_id UUID REFERENCES organizations(id);
+ALTER TABLE tts_jobs ADD COLUMN org_id UUID REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE tts_jobs ADD COLUMN media_id UUID REFERENCES media_files(id) ON DELETE SET NULL;
 
 ALTER TABLE tts_jobs
     DROP COLUMN minio_key,
     DROP COLUMN sha256,
     DROP COLUMN size_bytes;
+
+UPDATE tts_jobs SET status = 'failed' WHERE org_id IS NULL AND status IN ('pending', 'in_progress');
 
 DROP INDEX tts_jobs_inflight_uniq;
 CREATE UNIQUE INDEX tts_jobs_inflight_uniq ON tts_jobs(org_id, text, voice)

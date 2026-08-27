@@ -40,7 +40,7 @@ ON CONFLICT (text, voice) DO NOTHING`
 const getJob = `
 SELECT status, media_id
 FROM tts_jobs
-WHERE id=$1`
+WHERE id=$1 AND org_id=$2`
 
 const insertMediaFromTTS = `
 WITH ins AS (
@@ -86,8 +86,3 @@ const selectExpiredBank = `
 	WHERE mf.id IS NULL
 	AND ab.last_used_at < $1
 	LIMIT $2`
-
-const isQuotaLow = `
-SELECT storage_quota_bytes - storage_used_bytes < 1048576
-FROM organizations
-WHERE id = $1`

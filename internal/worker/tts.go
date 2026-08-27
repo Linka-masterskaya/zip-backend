@@ -24,7 +24,6 @@ type synthesizer interface {
 
 type uploader interface {
 	PutObject(context.Context, string, io.Reader, int64, string) error
-	RemoveObject(context.Context, string) error
 }
 
 type audioBank interface {
@@ -51,19 +50,8 @@ func NewTTS(ttsapi synthesizer, storage uploader, repo audioBank, mimeType strin
 }
 
 func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool) error {
-	jobID, err := uuid.Parse(job.JobId)
-	if err != nil {
-		slog.ErrorContext(ctx, "worker.Handle: bad job id in message", "job_id", job.JobId, "err", err)
-		return nil
-	}
-	orgID, err := uuid.Parse(job.OrgID)
-	if err != nil {
-		slog.ErrorContext(ctx, "worker.Handle: bad org id", "org_id", job.OrgID, "err", err)
-		return nil
-	}
-	userID, err := uuid.Parse(job.UserID)
-	if err != nil {
-		slog.ErrorContext(ctx, "worker.Handle: bad user id", "user_id", job.UserID, "err", err)
+	jobID, orgID, userID, ok := w.parseJob(ctx, job)
+	if !ok {
 		return nil
 	}
 
@@ -103,7 +91,10 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 	})
 	if err != nil {
 		if errors.Is(err, tts.ErrQuotaExceeded) {
-			w.handleQuotaExceeded(ctx, jobID, key)
+			w.handleQuotaExceeded(ctx, jobID, &tts.BankEntry{
+				Text: job.Text, Voice: job.Voice,
+				MinioKey: key, SHA256: digest, SizeBytes: audioSize,
+			})
 			return nil
 		}
 		return w.handleRetryable(ctx, jobID, "CreateMediaFile", isLastAttempt, err)
@@ -122,7 +113,8 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 		SizeBytes: audioSize,
 	})
 	if err != nil {
-		return w.handleRetryable(ctx, jobID, "PutToBank", isLastAttempt, err)
+		slog.ErrorContext(ctx, "worker.Handle: put to bank failed, skipping cache",
+			"job_id", jobID, "err", err)
 	}
 
 	return nil
@@ -158,13 +150,38 @@ func (w *TTS) handleRetryable(ctx context.Context, jobID uuid.UUID, opName strin
 	return nil
 }
 
-func (w *TTS) handleQuotaExceeded(ctx context.Context, jobID uuid.UUID, key string) {
-	if err := w.storage.RemoveObject(ctx, key); err != nil {
-		slog.ErrorContext(ctx, "worker.Handle: cleanup MinIO after quota exceeded",
-			"job_id", jobID, "key", key, "err", err)
+func (w *TTS) handleQuotaExceeded(ctx context.Context, jobID uuid.UUID, entry *tts.BankEntry) {
+	if err := w.repo.PutToBank(ctx, entry); err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: put to bank after quota exceeded",
+			"job_id", jobID, "err", err)
 	}
 	if err := w.markFailedWithRetry(ctx, jobID); err != nil {
 		slog.ErrorContext(ctx, "worker.Handle: mark failed after quota exceeded",
 			"job_id", jobID, "db_err", err)
 	}
+}
+
+func (w *TTS) parseJob(ctx context.Context, job broker.TTSJob) (jobID, orgID, userID uuid.UUID, ok bool) {
+	jobID, err := uuid.Parse(job.JobId)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: bad job id", "job_id", job.JobId, "err", err)
+		return uuid.Nil, uuid.Nil, uuid.Nil, false
+	}
+	orgID, err = uuid.Parse(job.OrgID)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: bad org id", "org_id", job.OrgID, "err", err)
+		if fErr := w.markFailedWithRetry(ctx, jobID); fErr != nil {
+			slog.ErrorContext(ctx, "worker.Handle: mark failed", "job_id", jobID, "err", fErr)
+		}
+		return uuid.Nil, uuid.Nil, uuid.Nil, false
+	}
+	userID, err = uuid.Parse(job.UserID)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: bad user id", "user_id", job.UserID, "err", err)
+		if fErr := w.markFailedWithRetry(ctx, jobID); fErr != nil {
+			slog.ErrorContext(ctx, "worker.Handle: mark failed", "job_id", jobID, "err", fErr)
+		}
+		return uuid.Nil, uuid.Nil, uuid.Nil, false
+	}
+	return jobID, orgID, userID, true
 }
