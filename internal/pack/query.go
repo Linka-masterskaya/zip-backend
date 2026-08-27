@@ -452,7 +452,7 @@ const putFavoriteQuery = `
 const deleteFavoriteQuery = `
 	DELETE FROM favorite_packs WHERE user_id = $1 AND pack_id = $2`
 
-const listFavoritePacksQuery = `
+const listFavoritePacksBaseQuery = `
 	WITH active_user AS (
 		SELECT id, org_id
 		FROM users
@@ -472,13 +472,18 @@ const listFavoritePacksQuery = `
 		JOIN folders f ON f.id = CASE WHEN p.owner_id = u.id THEN p.folder_id ELSE p.library_folder_id END
 		              AND f.org_id = u.org_id
 		WHERE p.owner_id = u.id OR p.published_at IS NOT NULL
-	)
+	)`
+
+const listFavoritePacksQuery = listFavoritePacksBaseQuery + `
 	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
 	       published_at, title, status, age_min, age_max, difficulty,
 	       goals, notes, config, true AS is_favorite, section, created_at, updated_at
 	FROM favorites
 	ORDER BY favorited_at DESC, id
 	LIMIT $2 OFFSET $3`
+
+const countFavoritePacksQuery = listFavoritePacksBaseQuery + `
+	SELECT count(*) FROM favorites`
 
 const packColumns = `
 	id, org_id, owner_id, folder_id, library_folder_id, published_at,

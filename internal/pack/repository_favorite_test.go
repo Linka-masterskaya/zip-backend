@@ -175,8 +175,19 @@ func TestRepositoryListFavoritesPaginates(t *testing.T) {
 	}
 
 	listed, err := repo.ListFavorites(t.Context(), userID, ListInput{Limit: 1, Offset: 1})
-
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created[1].ID, listed[0].ID)
+
+	total, err := repo.CountFavorites(t.Context(), userID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, total)
+
+	beyond, err := repo.ListFavorites(t.Context(), userID, ListInput{Limit: 1, Offset: 10})
+	require.NoError(t, err)
+	assert.Empty(t, beyond)
+
+	total, err = repo.CountFavorites(t.Context(), userID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, total)
 }
