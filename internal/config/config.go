@@ -362,7 +362,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.env", "dev")
 	v.SetDefault("app.port", "8080")
 	v.SetDefault("app.public_url", "http://localhost:8080")
-	v.SetDefault("app.frontend_url", "http://localhost:3000")
+	v.SetDefault("app.frontend_url", "http://localhost:5173")
 	v.SetDefault("app.migrations_dir", "./migrations")
 	v.SetDefault("app.trusted_proxies", []string{})
 	v.SetDefault("app.docs_enabled", false)
