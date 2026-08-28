@@ -15,6 +15,7 @@ type studentService interface {
 	Create(context.Context, CreateInput) (*Student, error)
 	List(context.Context, ListInput) (*ListResult, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Student, error)
+	ReplaceAvatar(context.Context, uuid.UUID, []byte, string) (*Student, error)
 	Delete(context.Context, uuid.UUID) error
 }
 

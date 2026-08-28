@@ -19,6 +19,7 @@ type repository interface {
 	List(context.Context, uuid.UUID, ListInput) ([]storedStudent, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, storedUpdate) (*storedStudent, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
+	Owned(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 	AvatarMediaAccessible(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 }
 
@@ -43,13 +44,19 @@ var errCardsShift = apperr.ErrBadRequest.WithMessage(
 	"invalid cards_shift. allowed: left, full, right")
 
 type Service struct {
-	repo    repository
-	crypto  crypto
-	storage objectStorage
+	repo     repository
+	crypto   crypto
+	storage  objectStorage
+	uploader mediaUploader
 }
 
-func NewService(repo repository, crypto crypto, storage objectStorage) *Service {
-	return &Service{repo: repo, crypto: crypto, storage: storage}
+func NewService(
+	repo repository,
+	crypto crypto,
+	storage objectStorage,
+	uploader mediaUploader,
+) *Service {
+	return &Service{repo: repo, crypto: crypto, storage: storage, uploader: uploader}
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, error) {

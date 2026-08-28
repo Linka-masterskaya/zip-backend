@@ -432,6 +432,23 @@ components:
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
 
+    StudentAvatarResponse:
+      type: object
+      required: [avatar_url, avatar_media_id]
+      properties:
+        avatar_url:
+          type: string
+          nullable: true
+          description: |
+            Presigned-ссылка на загруженный аватар, живёт 15 минут. `null`,
+            если подписать ссылку не удалось — файл при этом сохранён.
+        avatar_media_id:
+          type: string
+          format: uuid
+          description: |
+            Идентификатор созданного файла в банке медиа. Им же аватар
+            снимается или меняется через `PATCH /students/{id}`.
+
     StudentListResponse:
       type: object
       required: [items, total]
@@ -1905,6 +1922,43 @@ paths:
               schema: { items: { $ref: '#/components/schemas/StudentListResponse' } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /students/{id}/avatar:
+    put:
+      tags: [students]
+      operationId: replaceStudentAvatar
+      summary: Загрузить аватар ученика
+      description: |
+        Симметрично `PUT /profile/me/avatar`. Файл кладётся в банк медиа
+        организации (как через `POST /media`) и сразу становится аватаром
+        ученика. Принимаются png, jpeg и webp до 2 МБ. Снять аватар можно
+        через `PATCH /students/{id}` с `avatar_media_id: null`.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - {
+            name: id,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+          }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties: { file: { type: string, format: binary } }
+      responses:
+        '200':
+          description: Аватар загружен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentAvatarResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Ученик не найден }
+        '413': { description: Файл слишком большой }
 
   /students/{id}:
     patch:

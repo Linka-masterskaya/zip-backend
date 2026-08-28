@@ -9,6 +9,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 	"github.com/Linka-masterskaya/zip-backend/migrations"
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
 	foreignID := seedStudentUser(t, pool, "foreign")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	created, err := service.Create(studentContext(ownerID), CreateInput{
 		Email: " Student@Example.com ", Name: " Анна ", Age: intPtr(7),
@@ -70,7 +71,7 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 func TestStudentCreateRequiresEmail(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	_, err := service.Create(studentContext(ownerID), CreateInput{Name: "No email"})
 	assertStudentStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
@@ -95,6 +96,33 @@ func (s stubStorage) PresignedURL(_ context.Context, key string, _ time.Duration
 		return "", s.err
 	}
 	return "https://minio.test/" + key + "?signature=stub", nil
+}
+
+// stubUploader подменяет банк медиа: запись кладётся прямо в таблицу,
+// MinIO для этого не нужен.
+type stubUploader struct{ pool *pgxpool.Pool }
+
+func (u *stubUploader) Upload(ctx context.Context, _ []byte, name string) (*media.Response, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mediaID := uuid.New()
+	key := "avatars/" + mediaID.String() + "-" + name
+	if _, err = u.pool.Exec(ctx, `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key,
+			name, media_type
+		)
+		SELECT $1, u.org_id, u.id, $3, 'image/png', 10, $4, $5, 'image'
+		FROM users u WHERE u.id = $2`,
+		mediaID, userID, mediaID.String(), key, name); err != nil {
+		return nil, err
+	}
+	return &media.Response{
+		File: media.File{ID: mediaID, Name: name, MinIOKey: key},
+		URL:  "https://minio.test/" + key,
+	}, nil
 }
 
 func seedStudentMedia(t *testing.T, pool *pgxpool.Pool, uploaderID uuid.UUID, key string) uuid.UUID {
@@ -168,7 +196,7 @@ func TestStudentAvatarLifecycle(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
 	foreignID := seedStudentUser(t, pool, "foreign")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	mediaID := seedStudentMedia(t, pool, ownerID, "avatars/own.png")
 	foreignMediaID := seedStudentMedia(t, pool, foreignID, "avatars/foreign.png")
@@ -228,7 +256,7 @@ func TestStudentAvatarLifecycle(t *testing.T) {
 func TestStudentAvatarSurvivesPresignFailure(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{err: errors.New("minio is down")})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{err: errors.New("minio is down")}, &stubUploader{pool: pool})
 
 	mediaID := seedStudentMedia(t, pool, ownerID, "avatars/broken.png")
 	created, err := service.Create(studentContext(ownerID), CreateInput{
@@ -244,7 +272,7 @@ func TestStudentAvatarSurvivesPresignFailure(t *testing.T) {
 func TestStudentAvatarClearedWhenMediaDeleted(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	mediaID := seedStudentMedia(t, pool, ownerID, "avatars/doomed.png")
 	created, err := service.Create(studentContext(ownerID), CreateInput{
@@ -268,7 +296,7 @@ func TestStudentAvatarClearedWhenMediaDeleted(t *testing.T) {
 func TestStudentCardsShiftLifecycle(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	created, err := service.Create(studentContext(ownerID), CreateInput{
 		Email: "shift@example.com", Name: "Аня",
@@ -317,4 +345,51 @@ func TestStudentCardsShiftLifecycle(t *testing.T) {
 		Email: "bad-shift@example.com", Name: "Петя", CardsShift: &center,
 	})
 	assertStudentStatus(t, err, 400)
+}
+
+// pngBytes — минимальная картинка: важны только сигнатура PNG, по ней
+// определяется тип, и непустое тело.
+var pngBytes = append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+
+// TestStudentAvatarUpload проверяет ручку PUT /students/{id}/avatar:
+// картинка уезжает в банк медиа, ученик получает ссылку, чужой ученик и
+// не-картинка отбиваются до загрузки.
+func TestStudentAvatarUpload(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	foreignID := seedStudentUser(t, pool, "foreign")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "upload@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+	require.Nil(t, created.AvatarMediaID)
+
+	updated, err := service.ReplaceAvatar(studentContext(ownerID), created.ID, pngBytes, "photo.png")
+	require.NoError(t, err)
+	require.NotNil(t, updated.AvatarMediaID)
+	require.NotNil(t, updated.AvatarURL)
+	assert.Contains(t, *updated.AvatarURL, "photo.png")
+
+	// Замена аватара ставит новый файл.
+	replaced, err := service.ReplaceAvatar(studentContext(ownerID), created.ID, pngBytes, "second.png")
+	require.NoError(t, err)
+	require.NotNil(t, replaced.AvatarMediaID)
+	assert.NotEqual(t, *updated.AvatarMediaID, *replaced.AvatarMediaID)
+
+	// Не картинка — 400.
+	_, err = service.ReplaceAvatar(studentContext(ownerID), created.ID, []byte("not an image"), "note.txt")
+	assertStudentStatus(t, err, 400)
+
+	// Чужой ученик — 404, файл в банк не попадает.
+	var before int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM media_files`).Scan(&before))
+	_, err = service.ReplaceAvatar(studentContext(foreignID), created.ID, pngBytes, "stolen.png")
+	assertStudentStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+	var after int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM media_files`).Scan(&after))
+	assert.Equal(t, before, after, "битый id не должен оставлять файл в банке")
 }

@@ -192,6 +192,22 @@ func (r *Repository) Delete(ctx context.Context, ownerID, studentID uuid.UUID) e
 	return ErrNotFound
 }
 
+// Owned сообщает, есть ли у дефектолога такой ученик. Нужно до загрузки
+// файла: иначе неверный id оставлял бы в банке медиа никому не нужную
+// картинку.
+func (r *Repository) Owned(ctx context.Context, ownerID, studentID uuid.UUID) (bool, error) {
+	var owned bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM students
+			WHERE id = $2 AND defectologist_id = $1 AND deleted_at IS NULL
+		)`, ownerID, studentID).Scan(&owned)
+	if err != nil {
+		return false, fmt.Errorf("student owned check: %w", err)
+	}
+	return owned, nil
+}
+
 // AvatarMediaAccessible сообщает, существует ли медиа-файл и принадлежит ли он
 // той же организации, что и владелец картотеки. Без проверки один
 // дефектолог мог бы поставить ученику картинку из чужой организации.

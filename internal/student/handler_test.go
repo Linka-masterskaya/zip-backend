@@ -1,7 +1,9 @@
 package student
 
 import (
+	"bytes"
 	"context"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,8 +15,10 @@ import (
 )
 
 type captureService struct {
-	update UpdateInput
-	create CreateInput
+	update     UpdateInput
+	create     CreateInput
+	avatar     []byte
+	avatarName string
 }
 
 func (c *captureService) Create(_ context.Context, input CreateInput) (*Student, error) {
@@ -29,6 +33,15 @@ func (c *captureService) List(context.Context, ListInput) (*ListResult, error) {
 func (c *captureService) Update(_ context.Context, _ uuid.UUID, input UpdateInput) (*Student, error) {
 	c.update = input
 	return &Student{ID: uuid.New()}, nil
+}
+
+func (c *captureService) ReplaceAvatar(
+	_ context.Context, _ uuid.UUID, data []byte, name string,
+) (*Student, error) {
+	c.avatar = data
+	c.avatarName = name
+	mediaID, url := uuid.New(), "https://minio.test/"+name
+	return &Student{ID: uuid.New(), AvatarMediaID: &mediaID, AvatarURL: &url}, nil
 }
 
 func (c *captureService) Delete(context.Context, uuid.UUID) error { return nil }
@@ -143,4 +156,46 @@ func TestUpdateRejectsNonStringCardsShift(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	require.Error(t, NewHandler(service).Update(rec, req))
+}
+
+func TestUploadAvatarReadsMultipartFile(t *testing.T) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	file, err := writer.CreateFormFile("file", "photo.png")
+	require.NoError(t, err)
+	_, err = file.Write(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 8)...))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	service := &captureService{}
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPut,
+		"/api/v1/students/"+uuid.New().String()+"/avatar", body,
+	)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.SetPathValue("id", uuid.New().String())
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, NewHandler(service).UploadAvatar(rec, req))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "photo.png", service.avatarName)
+	assert.NotEmpty(t, service.avatar)
+	assert.Contains(t, rec.Body.String(), "avatar_url")
+}
+
+func TestUploadAvatarRequiresFileField(t *testing.T) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	require.NoError(t, writer.WriteField("other", "x"))
+	require.NoError(t, writer.Close())
+
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPut,
+		"/api/v1/students/"+uuid.New().String()+"/avatar", body,
+	)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.SetPathValue("id", uuid.New().String())
+	rec := httptest.NewRecorder()
+
+	require.Error(t, NewHandler(&captureService{}).UploadAvatar(rec, req))
 }
