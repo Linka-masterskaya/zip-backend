@@ -18,7 +18,7 @@ type packService interface {
 	Create(context.Context, string, uuid.UUID) (*Pack, error)
 	Duplicate(context.Context, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID) (*Pack, error)
-	List(context.Context, ListInput) ([]*ListItem, error)
+	List(context.Context, ListInput) (*ListPage, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)

@@ -10,7 +10,7 @@ import (
 type favoriteService interface {
 	Favorite(context.Context, uuid.UUID) error
 	Unfavorite(context.Context, uuid.UUID) error
-	ListFavorites(context.Context, ListInput) ([]*ListItem, error)
+	ListFavorites(context.Context, ListInput) (*ListPage, error)
 }
 
 type FavoriteHandler struct {

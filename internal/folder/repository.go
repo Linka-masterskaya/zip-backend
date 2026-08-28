@@ -356,8 +356,13 @@ func (r *Repository) Contents(
 		return nil, err
 	}
 
-	query, args := contentsQuery(userID, input)
+	countQuery, countArgs := contentsCountQuery(userID, input)
+	var total int
+	if err := r.pool.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("folder contents count: %w", err)
+	}
 
+	query, args := contentsQuery(userID, input)
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("folder contents: %w", err)
@@ -378,7 +383,7 @@ func (r *Repository) Contents(
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("folder contents rows: %w", err)
 	}
-	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset}, nil
+	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
 }
 
 // ensureParentVisible проверяет, что запрошенная папка существует и доступна.
@@ -413,16 +418,34 @@ func (r *Repository) ensureParentVisible(
 }
 
 func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
+	base, args := contentsBaseQuery(userID, input)
+
 	orderColumn := "name"
 	if input.Sort == "updated_at" {
 		orderColumn = "updated_at"
 	}
+
 	direction := "ASC"
 	if input.Order == "desc" {
 		direction = "DESC"
 	}
-	order := "\n\t\tORDER BY " + orderColumn + " " + direction + ", id"
 
+	limitIndex := len(args) + 1
+	offsetIndex := len(args) + 2
+	query := base +
+		"\n\t\tORDER BY " + orderColumn + " " + direction + ", id" +
+		fmt.Sprintf("\n\t\tLIMIT $%d OFFSET $%d", limitIndex, offsetIndex)
+
+	args = append(args, input.Limit, input.Offset)
+	return query, args
+}
+
+func contentsCountQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
+	base, args := contentsBaseQuery(userID, input)
+	return "SELECT count(*) FROM (" + base + ") AS counted", args
+}
+
+func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 	if input.ParentID == nil {
 		// Корень раздела содержит только папки: packs.folder_id объявлен
 		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
@@ -432,9 +455,8 @@ func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		FROM folders f
 		WHERE f.parent_id IS NULL
 		  AND f.section = $2
-		  AND ($2 = 'library' OR f.owner_id = $1)` + order + `
-		LIMIT $3 OFFSET $4`
-		return query, []any{userID, input.Section, input.Limit, input.Offset}
+		  AND ($2 = 'library' OR f.owner_id = $1)`
+		return query, []any{userID, input.Section}
 	}
 
 	packFolderColumn := "p.folder_id"
@@ -443,6 +465,7 @@ func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		packFolderColumn = "p.library_folder_id"
 		packScope = "AND p.published_at IS NOT NULL"
 	}
+
 	studentAssignments := ""
 	if input.Section == SectionStudents {
 		studentAssignments = `
@@ -456,6 +479,7 @@ func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			  AND student_folder.owner_id = $2
 			  AND p.folder_id <> $1`
 	}
+
 	query := `
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
@@ -471,9 +495,8 @@ func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at
-		FROM items` + order + `
-		LIMIT $4 OFFSET $5`
-	return query, []any{*input.ParentID, userID, input.Section, input.Limit, input.Offset}
+		FROM items`
+	return query, []any{*input.ParentID, userID, input.Section}
 }
 
 func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {

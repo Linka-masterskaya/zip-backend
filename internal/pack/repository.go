@@ -187,6 +187,29 @@ func (r *Repository) List(
 	return packs, nil
 }
 
+// Count returns the total number of pack placements matching the same filters as List.
+func (r *Repository) Count(
+	ctx context.Context,
+	userID uuid.UUID,
+	input ListInput,
+) (int, error) {
+	var total int
+	err := r.pool.QueryRow(
+		ctx,
+		countPacksQuery,
+		userID,
+		input.Query,
+		input.Age,
+		input.Difficulty,
+		input.Section,
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("pack repository count: %w", err)
+	}
+
+	return total, nil
+}
+
 // Update changes editable pack metadata without touching config.
 func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input UpdateInput) (*Pack, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})

@@ -14,6 +14,7 @@ type fakeFavoriteRepository struct {
 	putFn    func(context.Context, uuid.UUID, uuid.UUID) error
 	deleteFn func(context.Context, uuid.UUID, uuid.UUID) error
 	listFn   func(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
+	countFn  func(context.Context, uuid.UUID) (int, error)
 }
 
 func (f *fakeFavoriteRepository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) error {
@@ -37,6 +38,13 @@ func (f *fakeFavoriteRepository) ListFavorites(
 		return f.listFn(ctx, userID, input)
 	}
 	return []*ListItem{}, nil
+}
+
+func (f *fakeFavoriteRepository) CountFavorites(ctx context.Context, userID uuid.UUID) (int, error) {
+	if f.countFn != nil {
+		return f.countFn(ctx, userID)
+	}
+	return 0, nil
 }
 
 func TestFavoriteServiceFavoriteDelegatesUserScope(t *testing.T) {
@@ -97,11 +105,18 @@ func TestFavoriteServiceListFavoritesAppliesDefaultLimit(t *testing.T) {
 		assert.Equal(t, ListInput{Limit: 50}, input)
 		return []*ListItem{{ID: packID, IsFavorite: true}}, nil
 	}
+	repo.countFn = func(_ context.Context, gotUserID uuid.UUID) (int, error) {
+		assert.Equal(t, userID, gotUserID)
+		return 7, nil
+	}
 
 	result, err := NewFavoriteService(repo).ListFavorites(packContext(userID), ListInput{})
 
 	require.NoError(t, err)
-	require.Len(t, result, 1)
-	assert.Equal(t, packID, result[0].ID)
-	assert.True(t, result[0].IsFavorite)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, packID, result.Items[0].ID)
+	assert.True(t, result.Items[0].IsFavorite)
+	assert.Equal(t, 50, result.Limit)
+	assert.Zero(t, result.Offset)
+	assert.Equal(t, 7, result.Total)
 }

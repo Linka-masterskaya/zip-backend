@@ -56,14 +56,17 @@ func TestHandlerListPacks(t *testing.T) {
 	folderID := uuid.New()
 	packID := uuid.New()
 	age := 5
-	service.listFn = func(_ context.Context, input ListInput) ([]*ListItem, error) {
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
 		assert.Equal(t, ListInput{
 			Query: "speech", Age: &age, Difficulty: "medium",
 			Section: "students", Limit: 25, Offset: 10,
 		}, input)
-		return []*ListItem{{
-			ID: packID, FolderID: folderID, IsFavorite: true, Section: "students",
-		}}, nil
+		return &ListPage{
+			Items: []*ListItem{{
+				ID: packID, FolderID: folderID, IsFavorite: true, Section: "students",
+			}},
+			Limit: 25, Offset: 10, Total: 42,
+		}, nil
 	}
 	handler := NewHandler(service)
 
@@ -72,13 +75,16 @@ func TestHandlerListPacks(t *testing.T) {
 		nil, "")
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var result []*ListItem
+	var result ListPage
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
-	require.Len(t, result, 1)
-	assert.Equal(t, packID, result[0].ID)
-	assert.True(t, result[0].IsFavorite)
-	assert.Equal(t, folderID, result[0].FolderID)
-	assert.Equal(t, "students", result[0].Section)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, packID, result.Items[0].ID)
+	assert.True(t, result.Items[0].IsFavorite)
+	assert.Equal(t, folderID, result.Items[0].FolderID)
+	assert.Equal(t, "students", result.Items[0].Section)
+	assert.Equal(t, 25, result.Limit)
+	assert.Equal(t, 10, result.Offset)
+	assert.Equal(t, 42, result.Total)
 }
 
 func TestHandlerUpdateRejectsConfigField(t *testing.T) {
@@ -138,9 +144,9 @@ func TestHandlerUpdatePreservesExplicitNull(t *testing.T) {
 
 func TestHandlerListAllowsEmptyFilters(t *testing.T) {
 	service := &fakePackService{}
-	service.listFn = func(_ context.Context, input ListInput) ([]*ListItem, error) {
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
 		assert.Equal(t, ListInput{Limit: 50}, input)
-		return []*ListItem{{FolderID: uuid.New(), Section: "my"}}, nil
+		return &ListPage{Items: []*ListItem{{FolderID: uuid.New(), Section: "my"}}, Limit: 50, Total: 1}, nil
 	}
 	handler := NewHandler(service)
 
@@ -306,7 +312,7 @@ type fakePackService struct {
 	createFn      func(context.Context, string, uuid.UUID) (*Pack, error)
 	duplicateFn   func(context.Context, uuid.UUID, DuplicateInput) (*Pack, error)
 	getFn         func(context.Context, uuid.UUID) (*Pack, error)
-	listFn        func(context.Context, ListInput) ([]*ListItem, error)
+	listFn        func(context.Context, ListInput) (*ListPage, error)
 	updateFn      func(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn      func(context.Context, uuid.UUID) error
 	moveFn        func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -337,11 +343,11 @@ func (f *fakePackService) Get(ctx context.Context, packID uuid.UUID) (*Pack, err
 	return &Pack{}, nil
 }
 
-func (f *fakePackService) List(ctx context.Context, input ListInput) ([]*ListItem, error) {
+func (f *fakePackService) List(ctx context.Context, input ListInput) (*ListPage, error) {
 	if f.listFn != nil {
 		return f.listFn(ctx, input)
 	}
-	return []*ListItem{}, nil
+	return &ListPage{Items: []*ListItem{}}, nil
 }
 
 func (f *fakePackService) Update(ctx context.Context, packID uuid.UUID, input UpdateInput) (*Pack, error) {

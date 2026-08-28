@@ -52,3 +52,13 @@ func (r *Repository) ListFavorites(ctx context.Context, userID uuid.UUID, input 
 	}
 	return packs, nil
 }
+
+// CountFavorites returns the total number of currently accessible favorited packs.
+func (r *Repository) CountFavorites(ctx context.Context, userID uuid.UUID) (int, error) {
+	var total int
+	if err := r.pool.QueryRow(ctx, countFavoritePacksQuery, userID).Scan(&total); err != nil {
+		return 0, fmt.Errorf("pack repository count favorites: %w", err)
+	}
+
+	return total, nil
+}

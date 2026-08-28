@@ -83,6 +83,13 @@ type ListItem struct {
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
+type ListPage struct {
+	Items  []*ListItem `json:"items"`
+	Limit  int         `json:"limit"`
+	Offset int         `json:"offset"`
+	Total  int         `json:"total"`
+}
+
 // ListInput contains filters and offset pagination parameters for placement listing.
 type ListInput struct {
 	Query      string
