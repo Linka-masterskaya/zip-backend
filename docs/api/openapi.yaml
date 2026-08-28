@@ -470,6 +470,38 @@ components:
         published: { type: boolean }
         updated_at: { type: string, format: date-time }
 
+    CurrentFolder:
+      type: object
+      description: Запрошенная папка. Отсутствует (null), если запрошен корень раздела.
+      required: [id, name, parent_id]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        parent_id:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: Родитель этой папки; null — папка лежит в корне раздела,
+          }
+
+    Breadcrumb:
+      type: object
+      description: >-
+        Один узел пути от корня раздела до текущей папки. Первый элемент
+        breadcrumbs — всегда сам раздел: id = null, name = его подпись
+        («Мои наборы», «Библиотека», «Ученики»).
+      required: [id, name]
+      properties:
+        id:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: null для узла-раздела (первый элемент пути),
+          }
+        name: { type: string }
+
     SettingsDocument:
       type: object
       additionalProperties: false
@@ -1104,8 +1136,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, limit, offset, total]
+                required: [current_folder, breadcrumbs, items, limit, offset, total]
                 properties:
+                  current_folder:
+                    nullable: true
+                    allOf:
+                      - $ref: '#/components/schemas/CurrentFolder'
+                  breadcrumbs:
+                    {
+                      type: array,
+                      items: { $ref: '#/components/schemas/Breadcrumb' },
+                    }
                   items:
                     {
                       type: array,

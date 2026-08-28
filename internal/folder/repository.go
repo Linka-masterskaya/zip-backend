@@ -361,7 +361,8 @@ func (r *Repository) Contents(
 	}
 	defer rollback(ctx, tx)
 
-	if err = r.ensureParentVisible(ctx, tx, userID, input); err != nil {
+	current, breadcrumbs, err := r.ensureParentVisible(ctx, tx, userID, input)
+	if err != nil {
 		return nil, err
 	}
 
@@ -395,39 +396,82 @@ func (r *Repository) Contents(
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("folder contents commit: %w", err)
 	}
-	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
+
+	return &ContentsPage{
+		CurrentFolder: current,
+		Breadcrumbs:   breadcrumbs,
+		Items:         items,
+		Limit:         input.Limit,
+		Offset:        input.Offset,
+		Total:         total,
+	}, nil
 }
 
-// ensureParentVisible проверяет, что запрошенная папка существует и доступна.
-// Для корня раздела проверять нечего: он не строка в таблице.
+// ensureParentVisible проверяет, что запрошенная папка существует и доступна,
+// и в том же запросе строит цепочку предков от корня раздела до неё самой.
+// Для корня раздела (ParentID == nil) проверять нечего — он не строка в
+// таблице, поэтому текущей папки нет, а путь состоит только из самого раздела.
 func (r *Repository) ensureParentVisible(
 	ctx context.Context,
 	tx pgx.Tx,
 	userID uuid.UUID,
 	input ContentsInput,
-) error {
+) (*CurrentFolder, []BreadCrumbs, error) {
+	breadcrumbs := []BreadCrumbs{{Name: sectionLabel(input.Section)}}
 	if input.ParentID == nil {
-		return nil
+		return nil, breadcrumbs, nil
 	}
+	orgID, err := activeUserOrg(ctx, tx, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := tx.Query(ctx, `
+         WITH RECURSIVE ancestors AS (
+		 SELECT id, name, parent_id, section, owner_id, depth
+		 FROM folders
+		 WHERE id = $1 AND org_id = $2
+		 UNION ALL
+	     SELECT f.id, f.name, f.parent_id, f.section, f.owner_id, f.depth
+		 FROM folders f
+		 JOIN ancestors a ON f.id = a.parent_id
+		 WHERE f.depth < a.depth AND f.org_id = $2)
+		 SELECT id, name, parent_id, section, owner_id
+		 FROM ancestors
+		 ORDER BY depth ASC`, *input.ParentID, orgID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("folder ancestors: %w", err)
+	}
+	defer rows.Close()
 
-	var section string
-	var ownerID uuid.UUID
-	err := tx.QueryRow(ctx, `
-		SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
-		Scan(&section, &ownerID)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return ErrNotFound
-	case err != nil:
-		return fmt.Errorf("folder contents access: %w", err)
-	// Папка из другого раздела считается отсутствующей: ответ не должен
-	// подтверждать, что она существует где-то ещё.
-	case section != input.Section:
-		return ErrNotFound
-	case section != SectionLibrary && ownerID != userID:
-		return ErrNotFound
+	var current *CurrentFolder
+	var found bool
+	for rows.Next() {
+		var id uuid.UUID
+		var name, section string
+		var parentID *uuid.UUID
+		var ownerID uuid.UUID
+		if err = rows.Scan(&id, &name, &parentID, &section, &ownerID); err != nil {
+			return nil, nil, fmt.Errorf("folder ancestors scan: %w", err)
+		}
+		breadcrumbs = append(breadcrumbs, BreadCrumbs{ID: &id, Name: name})
+		current = &CurrentFolder{ID: id, Name: name, ParentID: parentID}
+		if id == *input.ParentID {
+			found = true
+			// Папка из другого раздела или чужая (кроме library) считается
+			// отсутствующей: ответ не должен подтверждать, что она
+			// существует где-то ещё.
+			if section != input.Section || (section != SectionLibrary && ownerID != userID) {
+				return nil, nil, ErrNotFound
+			}
+		}
 	}
-	return nil
+	if err = rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("folder ancestors rows: %w", err)
+	}
+	if !found {
+		return nil, nil, ErrNotFound
+	}
+	return current, breadcrumbs, nil
 }
 
 func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {

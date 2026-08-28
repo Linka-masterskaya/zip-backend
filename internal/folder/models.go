@@ -16,6 +16,20 @@ const (
 	KindStudent = "student"
 )
 
+var sectionLabels = map[string]string{
+	SectionLibrary:  "Библиотека",
+	SectionMy:       "Мои наборы",
+	SectionStudents: "Картотека ученика",
+}
+
+// sectionLabel возвращает название разделов для breadcrumbs.
+func sectionLabel(section string) string {
+	if label, ok := sectionLabels[section]; ok {
+		return label
+	}
+	return section
+}
+
 type Folder struct {
 	ID        uuid.UUID  `json:"id"`
 	OrgID     uuid.UUID  `json:"org_id"`
@@ -75,8 +89,20 @@ type ContentItem struct {
 }
 
 type ContentsPage struct {
-	Items  []ContentItem `json:"items"`
-	Limit  int           `json:"limit"`
-	Offset int           `json:"offset"`
-	Total  int           `json:"total"`
+	CurrentFolder *CurrentFolder `json:"current_folder"`
+	Breadcrumbs   []BreadCrumbs  `json:"breadcrumbs"`
+	Items         []ContentItem  `json:"items"`
+	Limit         int            `json:"limit"`
+	Offset        int            `json:"offset"`
+	Total         int            `json:"total"`
+}
+
+type CurrentFolder struct {
+	ID       uuid.UUID  `json:"id"`
+	Name     string     `json:"name"`
+	ParentID *uuid.UUID `json:"parent_id"`
+}
+type BreadCrumbs struct {
+	ID   *uuid.UUID `json:"id"`
+	Name string     `json:"name"`
 }
