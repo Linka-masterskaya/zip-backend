@@ -2014,7 +2014,14 @@ paths:
         '404': { description: Ученик не найден }
     delete:
       tags: [students]
-      summary: Архивировать ученика; запрещено при наличии student folder
+      summary: Архивировать ученика; с force=true — удалить насовсем
+      description: |
+        По умолчанию — soft-delete, и он запрещён при наличии student folder
+        (`409`). С `force=true` ученик удаляется полностью: вместе с его
+        папкой, вложенными папками, наборами внутри них и адаптациями.
+        Операция необратима и выполняется одной транзакцией. Опубликованный
+        набор в папке ученика её отменяет (`409`) — сначала снимают
+        публикацию. Аватар остаётся в банке медиа: файл удаляют отдельно.
       security: [{ bearerAuth: [] }]
       parameters:
         - {
@@ -2023,8 +2030,16 @@ paths:
             required: true,
             schema: { type: string, format: uuid },
           }
+        - {
+            name: force,
+            in: query,
+            required: false,
+            schema: { type: boolean, default: false },
+            description: Удалить ученика полностью вместе с папкой и наборами,
+          }
       responses:
-        '204': { description: Soft-delete выполнен }
+        '204': { description: Удалено }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { description: Ученик не найден }
         '409': { $ref: '#/components/responses/Conflict' }
 

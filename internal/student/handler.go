@@ -16,7 +16,7 @@ type studentService interface {
 	List(context.Context, ListInput) (*ListResult, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Student, error)
 	ReplaceAvatar(context.Context, uuid.UUID, []byte, string) (*Student, error)
-	Delete(context.Context, uuid.UUID) error
+	Delete(context.Context, uuid.UUID, bool) error
 }
 
 type Handler struct {
@@ -91,11 +91,28 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err = h.service.Delete(r.Context(), id); err != nil {
+	force, err := forceFlag(r)
+	if err != nil {
+		return err
+	}
+	if err = h.service.Delete(r.Context(), id, force); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// forceFlag читает ?force=true — полное удаление вместо архивации.
+func forceFlag(r *http.Request) (bool, error) {
+	raw := r.URL.Query().Get("force")
+	if raw == "" {
+		return false, nil
+	}
+	force, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, apperr.ErrBadRequest.WithMessage("force must be a boolean")
+	}
+	return force, nil
 }
 
 func pathID(r *http.Request) (uuid.UUID, error) {

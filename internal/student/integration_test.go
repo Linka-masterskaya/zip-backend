@@ -55,16 +55,16 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 		FROM users WHERE id = $1`, ownerID, created.ID)
 	require.NoError(t, err)
 
-	err = service.Delete(studentContext(ownerID), created.ID)
+	err = service.Delete(studentContext(ownerID), created.ID, false)
 	assertStudentStatus(t, err, apperr.ErrConflict.HTTPStatus)
 	_, err = pool.Exec(context.Background(), `DELETE FROM folders WHERE student_id = $1`, created.ID)
 	require.NoError(t, err)
-	require.NoError(t, service.Delete(studentContext(ownerID), created.ID))
+	require.NoError(t, service.Delete(studentContext(ownerID), created.ID, false))
 
 	ownerList, err = service.List(studentContext(ownerID), ListInput{})
 	require.NoError(t, err)
 	assert.Empty(t, ownerList.Items)
-	err = service.Delete(studentContext(foreignID), created.ID)
+	err = service.Delete(studentContext(foreignID), created.ID, false)
 	assertStudentStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
 
@@ -392,4 +392,136 @@ func TestStudentAvatarUpload(t *testing.T) {
 	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM media_files`).Scan(&after))
 	assert.Equal(t, before, after, "битый id не должен оставлять файл в банке")
+}
+
+// seedStudentFolder заводит папку ученика с вложенной папкой и возвращает
+// их идентификаторы: корень и вложенную.
+func seedStudentFolder(t *testing.T, pool *pgxpool.Pool, ownerID, studentID uuid.UUID) (uuid.UUID, uuid.UUID) {
+	t.Helper()
+	var rootID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO folders (org_id, owner_id, section, kind, student_id, name, depth)
+		SELECT org_id, id, 'students', 'student', $2, 'Аня', 0
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID, studentID).Scan(&rootID))
+
+	var childID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO folders (org_id, owner_id, parent_id, section, kind, name, depth)
+		SELECT org_id, id, $2, 'students', 'folder', 'Занятия', 1
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID, rootID).Scan(&childID))
+	return rootID, childID
+}
+
+func seedStudentPack(t *testing.T, pool *pgxpool.Pool, ownerID, folderID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var packID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO packs (org_id, owner_id, folder_id, title)
+		SELECT org_id, id, $2, 'Набор'
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID, folderID).Scan(&packID))
+	return packID
+}
+
+// TestStudentForceDeleteRemovesFolderTree: force сносит ученика вместе с
+// папкой, вложенными папками, наборами и следами использования медиа.
+func TestStudentForceDeleteRemovesFolderTree(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "purge@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+
+	_, childID := seedStudentFolder(t, pool, ownerID, created.ID)
+	packID := seedStudentPack(t, pool, ownerID, childID)
+	mediaID := seedStudentMedia(t, pool, ownerID, "packs/picture.png")
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack', $2)`, mediaID, packID)
+	require.NoError(t, err)
+
+	// Без force ученик с папкой не удаляется.
+	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID, false),
+		apperr.ErrConflict.HTTPStatus)
+
+	require.NoError(t, service.Delete(studentContext(ownerID), created.ID, true))
+
+	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM folders WHERE student_id = $1`, created.ID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM folders WHERE id = $1`, childID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM media_usages WHERE source_id = $1`, packID, 0)
+	// Сам файл остаётся в банке: его удаляют отдельно, зато теперь он
+	// больше ничем не занят.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, mediaID, 1)
+
+	// Повторный вызов — 404.
+	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID, true),
+		apperr.ErrNotFound.HTTPStatus)
+}
+
+// TestStudentForceDeleteRefusesPublishedPack: опубликованный набор виден
+// всей организации, поэтому вместе с учеником он не сносится.
+func TestStudentForceDeleteRefusesPublishedPack(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "published@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+
+	_, childID := seedStudentFolder(t, pool, ownerID, created.ID)
+	packID := seedStudentPack(t, pool, ownerID, childID)
+
+	var libraryID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO folders (org_id, owner_id, section, kind, name, depth)
+		SELECT org_id, id, 'library', 'folder', 'Библиотека', 0
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID).Scan(&libraryID))
+	_, err = pool.Exec(context.Background(), `
+		UPDATE packs SET library_folder_id = $2, published_at = now()
+		WHERE id = $1`, packID, libraryID)
+	require.NoError(t, err)
+
+	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID, true),
+		apperr.ErrConflict.HTTPStatus)
+	// Транзакция откатилась целиком: ученик и набор на месте.
+	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 1)
+	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packID, 1)
+}
+
+// TestStudentForceDeleteWithoutFolder: ученика без папки force тоже сносит
+// насовсем, а не архивирует.
+func TestStudentForceDeleteWithoutFolder(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	foreignID := seedStudentUser(t, pool, "foreign")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "plain@example.com", Name: "Петя",
+	})
+	require.NoError(t, err)
+
+	// Чужого ученика снести нельзя.
+	assertStudentStatus(t, service.Delete(studentContext(foreignID), created.ID, true),
+		apperr.ErrNotFound.HTTPStatus)
+
+	require.NoError(t, service.Delete(studentContext(ownerID), created.ID, true))
+	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 0)
+}
+
+func assertCount(t *testing.T, pool *pgxpool.Pool, query string, arg uuid.UUID, want int) {
+	t.Helper()
+	var got int
+	require.NoError(t, pool.QueryRow(context.Background(), query, arg).Scan(&got))
+	assert.Equal(t, want, got, query)
 }

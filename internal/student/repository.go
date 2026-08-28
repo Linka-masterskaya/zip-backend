@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -14,6 +15,10 @@ import (
 var (
 	ErrNotFound  = errors.New("student not found")
 	ErrHasFolder = errors.New("student has a folder")
+	// ErrHasPublishedPack — в папке ученика лежит опубликованный набор.
+	// Такой набор виден всей организации через библиотеку, поэтому снести
+	// его вместе с учеником нельзя: сначала снимают публикацию.
+	ErrHasPublishedPack = errors.New("student folder has a published pack")
 )
 
 type Repository struct {
@@ -255,3 +260,169 @@ const studentColumnsWithAvatar = `
 	s.id, s.email_encrypted, s.email_verified, s.name, s.age, s.status,
 	s.cards_shift, s.last_lesson_at, s.avatar_media_id, m.minio_key,
 	s.created_at, s.updated_at, s.deleted_at`
+
+// ForceDelete сносит ученика насовсем вместе с его папкой: soft delete
+// оставляет карточку в базе, а здесь нужно именно полное удаление. Всё в
+// одной транзакции — частично снесённая картотека хуже, чем не снесённая.
+func (r *Repository) ForceDelete(ctx context.Context, ownerID, studentID uuid.UUID) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("student force delete begin: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil &&
+			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.WarnContext(ctx, "student force delete rollback", "err", rollbackErr)
+		}
+	}()
+
+	var locked uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM students
+		WHERE id = $2 AND defectologist_id = $1
+		FOR UPDATE`, ownerID, studentID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("student force delete lock: %w", err)
+	}
+
+	folderIDs, maxDepth, err := studentFolderTree(ctx, tx, ownerID, studentID)
+	if err != nil {
+		return err
+	}
+	if err = purgeStudentPacks(ctx, tx, studentID, folderIDs); err != nil {
+		return err
+	}
+	// Папки удаляются снизу вверх: folders.parent_id объявлен RESTRICT,
+	// поэтому родителя нельзя снести раньше детей.
+	for depth := maxDepth; depth >= 0; depth-- {
+		if _, err = tx.Exec(ctx,
+			`DELETE FROM folders WHERE id = ANY($1) AND depth = $2`,
+			folderIDs, depth); err != nil {
+			return fmt.Errorf("student force delete folders: %w", err)
+		}
+	}
+	if _, err = tx.Exec(ctx,
+		`DELETE FROM students WHERE id = $2 AND defectologist_id = $1`,
+		ownerID, studentID); err != nil {
+		return fmt.Errorf("student force delete: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("student force delete commit: %w", err)
+	}
+	return nil
+}
+
+// studentFolderTree возвращает папку ученика вместе со всеми вложенными.
+func studentFolderTree(
+	ctx context.Context,
+	tx pgx.Tx,
+	ownerID, studentID uuid.UUID,
+) ([]uuid.UUID, int, error) {
+	rows, err := tx.Query(ctx, `
+		WITH RECURSIVE tree AS (
+			SELECT f.id, f.depth
+			FROM folders f
+			WHERE f.student_id = $2 AND f.owner_id = $1
+			UNION ALL
+			SELECT c.id, c.depth
+			FROM folders c
+			JOIN tree t ON c.parent_id = t.id
+		)
+		SELECT id, depth FROM tree`, ownerID, studentID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("student force delete folder tree: %w", err)
+	}
+	defer rows.Close()
+
+	folderIDs := make([]uuid.UUID, 0)
+	maxDepth := 0
+	for rows.Next() {
+		var (
+			id    uuid.UUID
+			depth int
+		)
+		if err = rows.Scan(&id, &depth); err != nil {
+			return nil, 0, fmt.Errorf("student force delete folder scan: %w", err)
+		}
+		folderIDs = append(folderIDs, id)
+		if depth > maxDepth {
+			maxDepth = depth
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("student force delete folder rows: %w", err)
+	}
+	return folderIDs, maxDepth, nil
+}
+
+// purgeStudentPacks удаляет наборы из папок ученика и следы использования
+// медиа. media_usages не связаны с packs внешним ключом, поэтому строки
+// нужно снимать руками — иначе файлы навсегда останутся «занятыми» и их
+// не выйдет удалить из банка.
+func purgeStudentPacks(
+	ctx context.Context,
+	tx pgx.Tx,
+	studentID uuid.UUID,
+	folderIDs []uuid.UUID,
+) error {
+	if len(folderIDs) > 0 {
+		var published int
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM packs
+			WHERE folder_id = ANY($1) AND published_at IS NOT NULL`,
+			folderIDs).Scan(&published); err != nil {
+			return fmt.Errorf("student force delete published check: %w", err)
+		}
+		if published > 0 {
+			return ErrHasPublishedPack
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM media_usages
+			WHERE source_type = 'pack'
+			  AND source_id IN (SELECT id FROM packs WHERE folder_id = ANY($1))`,
+			folderIDs); err != nil {
+			return fmt.Errorf("student force delete pack usages: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM media_usages
+			WHERE source_type = 'pack_adaptation'
+			  AND source_id IN (
+				SELECT pa.id FROM pack_adaptations pa
+				JOIN packs p ON p.id = pa.pack_id
+				WHERE p.folder_id = ANY($1)
+			  )`, folderIDs); err != nil {
+			return fmt.Errorf("student force delete pack adaptation usages: %w", err)
+		}
+		// Версии наборов уходят каскадом вместе с наборами.
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM media_usages
+			WHERE source_type = 'pack_version'
+			  AND source_id IN (
+				SELECT pv.id FROM pack_versions pv
+				JOIN packs p ON p.id = pv.pack_id
+				WHERE p.folder_id = ANY($1)
+			  )`, folderIDs); err != nil {
+			return fmt.Errorf("student force delete pack version usages: %w", err)
+		}
+	}
+	// Адаптации самого ученика уходят каскадом вместе с ним, включая те,
+	// что сделаны из чужих наборов, — их следы тоже надо снять.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM media_usages
+		WHERE source_type = 'pack_adaptation'
+		  AND source_id IN (SELECT id FROM pack_adaptations WHERE student_id = $1)`,
+		studentID); err != nil {
+		return fmt.Errorf("student force delete adaptation usages: %w", err)
+	}
+	if len(folderIDs) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM packs WHERE folder_id = ANY($1)`, folderIDs); err != nil {
+		return fmt.Errorf("student force delete packs: %w", err)
+	}
+	return nil
+}

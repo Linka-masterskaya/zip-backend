@@ -19,6 +19,7 @@ type captureService struct {
 	create     CreateInput
 	avatar     []byte
 	avatarName string
+	force      bool
 }
 
 func (c *captureService) Create(_ context.Context, input CreateInput) (*Student, error) {
@@ -44,7 +45,10 @@ func (c *captureService) ReplaceAvatar(
 	return &Student{ID: uuid.New(), AvatarMediaID: &mediaID, AvatarURL: &url}, nil
 }
 
-func (c *captureService) Delete(context.Context, uuid.UUID) error { return nil }
+func (c *captureService) Delete(_ context.Context, _ uuid.UUID, force bool) error {
+	c.force = force
+	return nil
+}
 
 func patchStudent(t *testing.T, body string) (*captureService, *httptest.ResponseRecorder) {
 	t.Helper()
@@ -198,4 +202,34 @@ func TestUploadAvatarRequiresFileField(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	require.Error(t, NewHandler(&captureService{}).UploadAvatar(rec, req))
+}
+
+func deleteStudent(t *testing.T, query string) (*captureService, error) {
+	t.Helper()
+	service := &captureService{}
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodDelete,
+		"/api/v1/students/"+uuid.New().String()+query, nil,
+	)
+	req.SetPathValue("id", uuid.New().String())
+	return service, NewHandler(service).Delete(httptest.NewRecorder(), req)
+}
+
+func TestDeleteReadsForceFlag(t *testing.T) {
+	t.Run("без параметра — архивация", func(t *testing.T) {
+		service, err := deleteStudent(t, "")
+		require.NoError(t, err)
+		assert.False(t, service.force)
+	})
+
+	t.Run("force=true — полное удаление", func(t *testing.T) {
+		service, err := deleteStudent(t, "?force=true")
+		require.NoError(t, err)
+		assert.True(t, service.force)
+	})
+
+	t.Run("не булево значение — 400", func(t *testing.T) {
+		_, err := deleteStudent(t, "?force=maybe")
+		require.Error(t, err)
+	})
 }

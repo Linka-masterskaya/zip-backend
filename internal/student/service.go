@@ -19,6 +19,7 @@ type repository interface {
 	List(context.Context, uuid.UUID, ListInput) ([]storedStudent, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, storedUpdate) (*storedStudent, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
+	ForceDelete(context.Context, uuid.UUID, uuid.UUID) error
 	Owned(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 	AvatarMediaAccessible(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 }
@@ -210,10 +211,15 @@ func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 	return result, nil
 }
 
-func (s *Service) Delete(ctx context.Context, studentID uuid.UUID) error {
+// Delete архивирует ученика. force сносит его насовсем — вместе с папкой,
+// вложенными папками и наборами внутри.
+func (s *Service) Delete(ctx context.Context, studentID uuid.UUID, force bool) error {
 	ownerID, err := owner(ctx)
 	if err != nil {
 		return err
+	}
+	if force {
+		return mapStudentError(s.repo.ForceDelete(ctx, ownerID, studentID))
 	}
 	return mapStudentError(s.repo.Delete(ctx, ownerID, studentID))
 }
@@ -326,6 +332,9 @@ func mapStudentError(err error) error {
 		return apperr.ErrNotFound
 	case errors.Is(err, ErrHasFolder):
 		return apperr.ErrConflict
+	case errors.Is(err, ErrHasPublishedPack):
+		return apperr.ErrConflict.WithMessage(
+			"student folder contains published packs. unpublish them first")
 	default:
 		return err
 	}
