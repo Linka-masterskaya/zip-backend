@@ -72,8 +72,7 @@ type duplicatePackRequest struct {
 type updatePackRequest struct {
 	Title      *string                   `json:"title"`
 	FolderID   *uuid.UUID                `json:"folder_id"`
-	AgeMin     nullableJSONField[int]    `json:"age_min"`
-	AgeMax     nullableJSONField[int]    `json:"age_max"`
+	Age        nullableJSONField[int]    `json:"age"`
 	Difficulty nullableJSONField[string] `json:"difficulty"`
 	Goals      *[]string                 `json:"goals"`
 	Notes      nullableJSONField[string] `json:"notes"`
@@ -224,8 +223,7 @@ func (r updatePackRequest) updateInput() UpdateInput {
 	input := UpdateInput{Title: r.Title, FolderID: r.FolderID, Notes: r.Notes.patch()}
 	if r.hasFilterMetadata() {
 		input.FilterMetadata = &FilterMetadataPatch{
-			AgeMin:     r.AgeMin.patch(),
-			AgeMax:     r.AgeMax.patch(),
+			Age:        r.Age.patch(),
 			Difficulty: r.Difficulty.patch(),
 			Goals:      r.Goals,
 		}
@@ -234,7 +232,7 @@ func (r updatePackRequest) updateInput() UpdateInput {
 }
 
 func (r updatePackRequest) hasFilterMetadata() bool {
-	return r.AgeMin.Set || r.AgeMax.Set || r.Difficulty.Set || r.Goals != nil
+	return r.Age.Set || r.Difficulty.Set || r.Goals != nil
 }
 
 func listInputFromRequest(r *http.Request) (ListInput, error) {

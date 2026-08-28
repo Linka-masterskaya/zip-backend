@@ -135,8 +135,8 @@ func TestServiceUpdateAllowsClearingNullableMetadata(t *testing.T) {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, packID, gotPackID)
 		require.NotNil(t, input.FilterMetadata)
-		assert.True(t, input.FilterMetadata.AgeMin.Set)
-		assert.Nil(t, input.FilterMetadata.AgeMin.Value)
+		assert.True(t, input.FilterMetadata.Age.Set)
+		assert.Nil(t, input.FilterMetadata.Age.Value)
 		assert.True(t, input.FilterMetadata.Difficulty.Set)
 		assert.Nil(t, input.FilterMetadata.Difficulty.Value)
 		assert.True(t, input.Notes.Set)
@@ -145,7 +145,7 @@ func TestServiceUpdateAllowsClearingNullableMetadata(t *testing.T) {
 	}
 	input := UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true},
+			Age:        NullablePatch[int]{Set: true},
 			Difficulty: NullablePatch[string]{Set: true},
 		},
 		Notes: NullablePatch[string]{Set: true},
@@ -157,18 +157,16 @@ func TestServiceUpdateAllowsClearingNullableMetadata(t *testing.T) {
 }
 
 func TestServiceUpdateRejectsInvalidMetadata(t *testing.T) {
-	ageMin := 8
-	ageMax := 5
+	invalidAge := 2
 	invalidDifficulty := "expert"
 	tests := []struct {
 		name     string
 		metadata *FilterMetadataPatch
 	}{
 		{
-			name: "age range",
+			name: "age",
 			metadata: &FilterMetadataPatch{
-				AgeMin: NullablePatch[int]{Set: true, Value: &ageMin},
-				AgeMax: NullablePatch[int]{Set: true, Value: &ageMax},
+				Age: NullablePatch[int]{Set: true, Value: &invalidAge},
 			},
 		},
 		{
@@ -298,6 +296,7 @@ func TestServiceRequiresAuthenticatedUser(t *testing.T) {
 		})
 	}
 }
+
 func packContext(userID uuid.UUID) context.Context {
 	return authctx.SetUserIDToCtx(context.Background(), userID)
 }
@@ -333,6 +332,7 @@ func (f *fakePackRepository) Duplicate(
 	}
 	return &Pack{}, nil
 }
+
 func (f *fakePackRepository) GetForPublication(
 	ctx context.Context,
 	userID, packID uuid.UUID,

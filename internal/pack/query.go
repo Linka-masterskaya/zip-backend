@@ -42,9 +42,9 @@ const lockDuplicateFolderQuery = `
 const insertDuplicatePackQuery = `
 	INSERT INTO packs (
 		org_id, owner_id, folder_id, title,
-		age_min, age_max, difficulty, goals, notes, config
+		age, difficulty, goals, notes, config
 	)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	RETURNING ` + packColumns
 
 const copyDuplicateMediaUsagesQuery = `
@@ -93,9 +93,9 @@ const listPacksBaseQuery = `
 	), placements AS (
 		SELECT p.id, p.org_id, p.owner_id, p.folder_id AS result_folder_id,
 		       p.library_folder_id, p.published_at, p.title, p.status,
-		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.age, p.difficulty, p.goals, p.notes, p.config,
 		       p.created_at, p.updated_at, f.section, fs.student_id
-		FROM active_user u
+	FROM active_user u
 		JOIN packs p ON p.owner_id = u.id AND p.org_id = u.org_id
 		LEFT JOIN folder_students fs ON fs.id = p.folder_id
 		JOIN folders f ON f.id = p.folder_id
@@ -105,9 +105,9 @@ const listPacksBaseQuery = `
 		UNION ALL
 		SELECT p.id, p.org_id, p.owner_id, student_folder.id AS result_folder_id,
 		       p.library_folder_id, p.published_at, p.title, p.status,
-		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.age, p.difficulty, p.goals, p.notes, p.config,
 		       p.created_at, p.updated_at, student_folder.section, s.id AS student_id
-		FROM active_user u
+	FROM active_user u
 		JOIN students s ON s.defectologist_id = u.id
 		               AND s.deleted_at IS NULL
 		JOIN folders student_folder ON student_folder.student_id = s.id
@@ -124,9 +124,9 @@ const listPacksBaseQuery = `
 		UNION ALL
 		SELECT p.id, p.org_id, p.owner_id, p.library_folder_id AS result_folder_id,
 		       p.library_folder_id, p.published_at, p.title, p.status,
-		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.age, p.difficulty, p.goals, p.notes, p.config,
 		       p.created_at, p.updated_at, f.section, NULL::uuid AS student_id
-		FROM active_user u
+	FROM active_user u
 		JOIN packs p ON p.org_id = u.org_id
 		            AND p.published_at IS NOT NULL
 		JOIN folders f ON f.id = p.library_folder_id
@@ -141,7 +141,7 @@ const listPacksBaseQuery = `
 		       ) AS is_favorite
 		FROM placements
 		WHERE ($2::text = '' OR title ILIKE '%' || $2::text || '%')
-		  AND ($3::int IS NULL OR (age_min <= $3::int AND $3::int <= age_max))
+		  AND ($3::int IS NULL OR age = $3::int)
 		  AND ($4::text = '' OR difficulty = $4::text)
 		  AND ($5::text = '' OR section = $5::text)
 		  AND ($6::uuid IS NULL OR student_id = $6::uuid)
@@ -163,7 +163,7 @@ func listPacksQuery(sortBy, order string) string {
 	}
 	return listPacksBaseQuery + `
 	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
-	       published_at, title, status, age_min, age_max, difficulty,
+	       published_at, title, status, age, difficulty,
 	       goals, notes, config, is_favorite, section, created_at, updated_at
 	FROM filtered
 	ORDER BY ` + column + ` ` + direction + `, id, section, result_folder_id
@@ -196,11 +196,10 @@ const updatePackQuery = `
 	UPDATE packs p
 	SET title = COALESCE($3::text, p.title),
 	    folder_id = COALESCE($4::uuid, p.folder_id),
-	    age_min = CASE WHEN $5::boolean THEN $6::int ELSE p.age_min END,
-	    age_max = CASE WHEN $7::boolean THEN $8::int ELSE p.age_max END,
-	    difficulty = CASE WHEN $9::boolean THEN $10::text ELSE p.difficulty END,
-	    goals = COALESCE($11::text[], p.goals),
-	    notes = CASE WHEN $12::boolean THEN COALESCE($13::text, '') ELSE p.notes END,
+	    age = CASE WHEN $5::boolean THEN $6::int ELSE p.age END,
+	    difficulty = CASE WHEN $7::boolean THEN $8::text ELSE p.difficulty END,
+	    goals = COALESCE($9::text[], p.goals),
+	    notes = CASE WHEN $10::boolean THEN COALESCE($11::text, '') ELSE p.notes END,
 	    updated_at = now()
 	WHERE p.id = $2
 	  AND p.owner_id = $1
@@ -494,7 +493,7 @@ const listFavoritePacksBaseQuery = `
 		       CASE WHEN p.owner_id = u.id THEN p.folder_id ELSE p.library_folder_id
 		       END AS result_folder_id,
 		       p.library_folder_id, p.published_at, p.title, p.status,
-		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.age, p.difficulty, p.goals, p.notes, p.config,
 		       p.created_at, p.updated_at, f.section, fp.created_at AS favorited_at
 		FROM active_user u
 		JOIN favorite_packs fp ON fp.user_id = u.id
@@ -506,7 +505,7 @@ const listFavoritePacksBaseQuery = `
 
 const listFavoritePacksQuery = listFavoritePacksBaseQuery + `
 	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
-	       published_at, title, status, age_min, age_max, difficulty,
+	       published_at, title, status, age, difficulty,
 	       goals, notes, config, true AS is_favorite, section, created_at, updated_at
 	FROM favorites
 	ORDER BY favorited_at DESC, id
@@ -517,11 +516,11 @@ const countFavoritePacksQuery = listFavoritePacksBaseQuery + `
 
 const packColumns = `
 	id, org_id, owner_id, folder_id, library_folder_id, published_at,
-	title, status, age_min, age_max,
+	title, status, age,
 	difficulty, goals, notes, config, created_at, updated_at`
 
 const qualifiedPackColumns = `
 	p.id, p.org_id, p.owner_id, p.folder_id, p.library_folder_id,
 	p.published_at, p.title, p.status,
-	p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+	p.age, p.difficulty, p.goals, p.notes, p.config,
 	p.created_at, p.updated_at`

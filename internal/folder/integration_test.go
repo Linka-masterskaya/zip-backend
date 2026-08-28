@@ -403,13 +403,13 @@ func TestContentsFilters(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = pool.Exec(context.Background(), `
-		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age_min, age_max, difficulty)
-		SELECT org_id, id, $2, 'Азбука набор', '{}'::jsonb, 4, 6, 'easy'
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age, difficulty)
+		SELECT org_id, id, $2, 'Азбука набор', '{}'::jsonb, 5, 'easy'
 		FROM users WHERE id = $1`, ownerID, root.ID)
 	require.NoError(t, err)
 	_, err = pool.Exec(context.Background(), `
-		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age_min, age_max, difficulty)
-		SELECT org_id, id, $2, 'Счёт набор', '{}'::jsonb, 7, 9, 'hard'
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age, difficulty)
+		SELECT org_id, id, $2, 'Счёт набор', '{}'::jsonb, 8, 'hard'
 		FROM users WHERE id = $1`, ownerID, root.ID)
 	require.NoError(t, err)
 

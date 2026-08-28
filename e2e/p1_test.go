@@ -169,15 +169,15 @@ func TestE2E_P1UserJourney(t *testing.T) {
 			http.MethodPatch,
 			"/api/v1/packs/"+createdPack.ID.String(),
 			map[string]any{
-				"title": "Автоматизация звука Р", "age_min": 5, "age_max": 8,
+				"title": "Автоматизация звука Р", "age": 5,
 				"difficulty": "medium", "goals": []string{"speech"}, "notes": "Домашнее задание",
 			},
 		),
 		http.StatusOK,
 	)
 	assert.Equal(t, "Автоматизация звука Р", updatedPack.Title)
-	require.NotNil(t, updatedPack.AgeMin)
-	assert.Equal(t, 5, *updatedPack.AgeMin)
+	require.NotNil(t, updatedPack.Age)
+	assert.Equal(t, 5, *updatedPack.Age)
 
 	movedPack := e2eJSON[pack.Pack](
 		t,

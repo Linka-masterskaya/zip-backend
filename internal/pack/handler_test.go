@@ -104,15 +104,15 @@ func TestHandlerUpdateMapsFilterMetadata(t *testing.T) {
 	service.updateFn = func(_ context.Context, gotPackID uuid.UUID, input UpdateInput) (*Pack, error) {
 		assert.Equal(t, packID, gotPackID)
 		require.NotNil(t, input.FilterMetadata)
-		assert.True(t, input.FilterMetadata.AgeMin.Set)
-		require.NotNil(t, input.FilterMetadata.AgeMin.Value)
+		assert.True(t, input.FilterMetadata.Age.Set)
+		require.NotNil(t, input.FilterMetadata.Age.Value)
 		require.NotNil(t, input.FilterMetadata.Goals)
-		assert.Equal(t, 5, *input.FilterMetadata.AgeMin.Value)
+		assert.Equal(t, 5, *input.FilterMetadata.Age.Value)
 		assert.Equal(t, []string{"speech", "attention"}, *input.FilterMetadata.Goals)
 		return &Pack{ID: packID}, nil
 	}
 	handler := NewHandler(service)
-	body := []byte(`{"age_min":5,"goals":["speech","attention"]}`)
+	body := []byte(`{"age":5,"goals":["speech","attention"]}`)
 
 	rec := performPackRequest(t, handler.UpdatePack, http.MethodPatch, "/api/v1/packs/"+packID.String(), body, packID.String())
 
@@ -125,8 +125,8 @@ func TestHandlerUpdatePreservesExplicitNull(t *testing.T) {
 	packID := uuid.New()
 	service.updateFn = func(_ context.Context, _ uuid.UUID, input UpdateInput) (*Pack, error) {
 		require.NotNil(t, input.FilterMetadata)
-		assert.True(t, input.FilterMetadata.AgeMin.Set)
-		assert.Nil(t, input.FilterMetadata.AgeMin.Value)
+		assert.True(t, input.FilterMetadata.Age.Set)
+		assert.Nil(t, input.FilterMetadata.Age.Value)
 		assert.True(t, input.FilterMetadata.Difficulty.Set)
 		assert.Nil(t, input.FilterMetadata.Difficulty.Value)
 		assert.True(t, input.Notes.Set)
@@ -134,7 +134,7 @@ func TestHandlerUpdatePreservesExplicitNull(t *testing.T) {
 		return &Pack{ID: packID}, nil
 	}
 	handler := NewHandler(service)
-	body := []byte(`{"age_min":null,"difficulty":null,"notes":null}`)
+	body := []byte(`{"age":null,"difficulty":null,"notes":null}`)
 
 	rec := performPackRequest(t, handler.UpdatePack, http.MethodPatch, "/api/v1/packs/"+packID.String(), body, packID.String())
 

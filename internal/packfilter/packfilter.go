@@ -2,14 +2,14 @@ package packfilter
 
 import "github.com/Linka-masterskaya/zip-backend/internal/apperr"
 
-// Границы возраста повторяют CHECK'и packs_age_min_chk и packs_age_max_chk.
+// Границы возраста повторяют CHECK packs_age_chk.
 const (
 	MinAge = 3
 	MaxAge = 18
 )
 
 // ValidateAge принимает имя параметра, чтобы одна и та же проверка годилась
-// и для age в фильтре, и для age_min/age_max в метаданных набора.
+// и для фильтров по age, и для метаданных набора.
 func ValidateAge(name string, value *int) error {
 	if value == nil {
 		return nil

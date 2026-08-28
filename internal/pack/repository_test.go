@@ -32,7 +32,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	assert.Equal(t, folderID, created.FolderID)
 	assert.JSONEq(t, string(config), string(created.Config))
 
-	ageMin, ageMax := 5, 8
+	age := 5
 	difficulty := "medium"
 	notes := "notes"
 	goals := []string{"speech", "attention"}
@@ -40,8 +40,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	updated, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
 		Title: &title,
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true, Value: &ageMin},
-			AgeMax:     NullablePatch[int]{Set: true, Value: &ageMax},
+			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
 			Goals:      &goals,
 		},
@@ -54,15 +53,13 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 
 	cleared, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true},
-			AgeMax:     NullablePatch[int]{Set: true},
+			Age:        NullablePatch[int]{Set: true},
 			Difficulty: NullablePatch[string]{Set: true},
 		},
 		Notes: NullablePatch[string]{Set: true},
 	})
 	require.NoError(t, err)
-	assert.Nil(t, cleared.AgeMin)
-	assert.Nil(t, cleared.AgeMax)
+	assert.Nil(t, cleared.Age)
 	assert.Nil(t, cleared.Difficulty)
 	assert.Empty(t, cleared.Notes)
 	assert.JSONEq(t, string(config), string(cleared.Config))
@@ -162,13 +159,13 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	foreignLibraryID := seedPackLibraryFolder(t, pool, foreignID)
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
 
-	ownPack := createFilteredPack(t, repo, userID, myFolderID, "Speech Easy", 4, 6, "easy", config)
-	studentPack := createFilteredPack(t, repo, userID, studentFolderID, "Reading Hard", 5, 9, "hard", config)
-	privateColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "Speech Private", 4, 7, "easy", config)
-	publishedColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "SPEECH Medium", 5, 8, "medium", config)
+	ownPack := createFilteredPack(t, repo, userID, myFolderID, "Speech Easy", 5, "easy", config)
+	studentPack := createFilteredPack(t, repo, userID, studentFolderID, "Reading Hard", 7, "hard", config)
+	privateColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "Speech Private", 5, "easy", config)
+	publishedColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "SPEECH Medium", 5, "medium", config)
 	_, err := repo.Publish(t.Context(), colleagueID, publishedColleague.ID, libraryFolderID, false)
 	require.NoError(t, err)
-	foreignPack := createFilteredPack(t, repo, foreignID, foreignFolderID, "Speech Foreign", 4, 8, "easy", config)
+	foreignPack := createFilteredPack(t, repo, foreignID, foreignFolderID, "Speech Foreign", 5, "easy", config)
 	_, err = repo.Publish(t.Context(), foreignID, foreignPack.ID, foreignLibraryID, false)
 	require.NoError(t, err)
 	_, err = pool.Exec(t.Context(), `INSERT INTO favorite_packs (user_id, pack_id) VALUES ($1, $2)`, userID, ownPack.ID)
@@ -203,15 +200,12 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	require.Len(t, hard, 1)
 	assert.Equal(t, studentPack.ID, hard[0].ID)
 
-	for _, boundaryAge := range []int{4, 6} {
-		boundary, boundaryErr := repo.List(t.Context(), userID, ListInput{
-			Query: "Speech Easy", Age: &boundaryAge, Limit: 50,
-		})
-		require.NoError(t, boundaryErr)
-		require.Len(t, boundary, 1)
-		assert.Equal(t, ownPack.ID, boundary[0].ID)
-	}
-
+	nonMatchingAge := 4
+	notMatched, err := repo.List(t.Context(), userID, ListInput{
+		Query: "Speech Easy", Age: &nonMatchingAge, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, notMatched)
 	my, err := repo.List(t.Context(), userID, ListInput{Section: "my", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, my, 1)
@@ -238,7 +232,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
 
 	created := createFilteredPack(
-		t, repo, userID, myFolderID, "Placement Speech", 4, 7, "easy", config,
+		t, repo, userID, myFolderID, "Placement Speech", 5, "easy", config,
 	)
 	_, err := repo.Publish(t.Context(), userID, created.ID, libraryFolderID, false)
 	require.NoError(t, err)
@@ -280,7 +274,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	)
 
 	direct := createFilteredPack(
-		t, repo, userID, studentOneFolderID, "Direct Student Pack", 5, 8, "hard", config,
+		t, repo, userID, studentOneFolderID, "Direct Student Pack", 5, "hard", config,
 	)
 	_, err = repo.Assign(t.Context(), userID, direct.ID, []uuid.UUID{studentOneID})
 	require.NoError(t, err)
@@ -357,14 +351,11 @@ func TestRepositoryMapsMetadataConstraintViolation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ageMax := 5
+	invalidAge := 19
 	_, err = repo.Update(context.Background(), userID, created.ID, UpdateInput{
-		FilterMetadata: &FilterMetadataPatch{AgeMax: NullablePatch[int]{Set: true, Value: &ageMax}},
-	})
-	require.NoError(t, err)
-	ageMin := 8
-	_, err = repo.Update(context.Background(), userID, created.ID, UpdateInput{
-		FilterMetadata: &FilterMetadataPatch{AgeMin: NullablePatch[int]{Set: true, Value: &ageMin}},
+		FilterMetadata: &FilterMetadataPatch{
+			Age: NullablePatch[int]{Set: true, Value: &invalidAge},
+		},
 	})
 	assert.ErrorIs(t, err, ErrInvalidPackMetadata)
 }
@@ -741,7 +732,7 @@ func createFilteredPack(
 	repo *Repository,
 	userID, folderID uuid.UUID,
 	title string,
-	ageMin, ageMax int,
+	age int,
 	difficulty string,
 	config []byte,
 ) *Pack {
@@ -752,8 +743,7 @@ func createFilteredPack(
 	require.NoError(t, err)
 	updated, err := repo.Update(t.Context(), userID, created.ID, UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true, Value: &ageMin},
-			AgeMax:     NullablePatch[int]{Set: true, Value: &ageMax},
+			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
 		},
 	})
