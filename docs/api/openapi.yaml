@@ -1139,6 +1139,7 @@ paths:
                 required: [current_folder, breadcrumbs, items, limit, offset, total]
                 properties:
                   current_folder:
+                    type: object
                     nullable: true
                     allOf:
                       - $ref: '#/components/schemas/CurrentFolder'
