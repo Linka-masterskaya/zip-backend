@@ -223,7 +223,7 @@ func buildModules(in *infra) (*modules, error) {
 		},
 		students: httpapi.StudentHandlers{
 			Student: student.NewHandler(
-				student.NewService(studentRepo, in.crypto, in.storage),
+				student.NewService(studentRepo, in.crypto, in.storage, mediaService),
 			),
 		},
 		auth: httpapi.AuthHandlers{

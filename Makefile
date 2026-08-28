@@ -1,4 +1,4 @@
-.PHONY: build run run-local test test-e2e lint mock dev-up dev-down dev-reset migrate migrate-down
+.PHONY: build run run-local test test-e2e lint oapi ts-types mock dev-up dev-down dev-reset migrate migrate-down
 
 # ── Environment ──────────────────────────────────────────────────────────────
 # Load variables from .env file (if exists) and export them for subprocesses
@@ -38,6 +38,13 @@ test-cover:
 # ── Lint ─────────────────────────────────────────────────────────────────────
 lint:
 	golangci-lint run ./...
+
+# ── Codegen ─────────────────────────────────────────────────────────────────
+oapi:
+	bash scripts/generate-oapi.sh
+
+ts-types:
+	bash scripts/generate-ts-types.sh
 
 # ── Mocks (uber/gomock) ──────────────────────────────────────────────────────
 mock:

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/packfilter"
 	"github.com/google/uuid"
 )
 
@@ -121,6 +122,9 @@ func (s *Service) Contents(ctx context.Context, input ContentsInput) (*ContentsP
 		(input.Order != "asc" && input.Order != "desc") {
 		return nil, apperr.ErrBadRequest.WithMessage("invalid sort or order")
 	}
+	if err = validateContentsFilters(&input); err != nil {
+		return nil, err
+	}
 	result, err := s.repo.Contents(ctx, userID, input)
 	return result, mapError(err)
 }
@@ -145,6 +149,22 @@ func page(limit, offset int) (int, int, error) {
 		return 0, 0, apperr.ErrBadRequest.WithMessage("invalid pagination")
 	}
 	return limit, offset, nil
+}
+
+// validateContentsFilters приводит фильтры к виду, понятному запросу, и
+// отбивает значения, которых в базе быть не может.
+func validateContentsFilters(input *ContentsInput) error {
+	input.Query = strings.TrimSpace(input.Query)
+	input.Type = strings.TrimSpace(input.Type)
+	input.Difficulty = strings.TrimSpace(input.Difficulty)
+
+	if input.Type != "" && input.Type != "folder" && input.Type != "pack" {
+		return apperr.ErrBadRequest.WithMessage("type must be folder or pack")
+	}
+	if err := packfilter.ValidateAge("age", input.Age); err != nil {
+		return err
+	}
+	return packfilter.ValidateDifficulty(input.Difficulty)
 }
 
 func validSection(value string) bool {

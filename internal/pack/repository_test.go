@@ -783,3 +783,124 @@ func seedPackLibraryFolder(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) 
 func stringPtr(value string) *string {
 	return &value
 }
+
+// TestRepositoryListFiltersByStudent: наборы ученика — это и его папка, и
+// вложенные в неё папки, и адаптации из чужих разделов.
+func TestRepositoryListFiltersByStudent(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, userID, myFolderID := seedPackOwner(t, pool, "student filter org")
+	studentA, folderA := seedPackStudentFolder(t, pool, userID, "Аня")
+	studentB, folderB := seedPackStudentFolder(t, pool, userID, "Боря")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	var nestedID uuid.UUID
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		INSERT INTO folders (org_id, owner_id, parent_id, section, kind, name, depth)
+		SELECT org_id, id, $2, 'students', 'folder', 'Занятия', 1
+		FROM users WHERE id = $1
+		RETURNING id`, userID, folderA).Scan(&nestedID))
+
+	direct, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: "Прямо в папке", FolderID: folderA, Config: config,
+	})
+	require.NoError(t, err)
+	nested, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: "Во вложенной", FolderID: nestedID, Config: config,
+	})
+	require.NoError(t, err)
+	other, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: "У другого ученика", FolderID: folderB, Config: config,
+	})
+	require.NoError(t, err)
+	mine, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: "Мой набор", FolderID: myFolderID, Config: config,
+	})
+	require.NoError(t, err)
+	_, err = repo.Assign(t.Context(), userID, mine.ID, []uuid.UUID{studentA})
+	require.NoError(t, err)
+
+	listed, err := repo.List(t.Context(), userID, ListInput{StudentID: &studentA, Limit: 50})
+	require.NoError(t, err)
+	items := listItemsByID(listed)
+	assert.Contains(t, items, direct.ID)
+	assert.Contains(t, items, nested.ID, "вложенная папка принадлежит тому же ученику")
+	assert.Contains(t, items, mine.ID, "адаптация из «Моих наборов» тоже относится к ученику")
+	assert.NotContains(t, items, other.ID)
+
+	forB, err := repo.List(t.Context(), userID, ListInput{StudentID: &studentB, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, forB, 1)
+	assert.Equal(t, other.ID, forB[0].ID)
+
+	// Фильтр складывается с разделом. Адаптация числится в разделе
+	// students по папке ученика, хотя сам набор лежит в «Моих наборах»,
+	// поэтому из выдачи она не выпадает.
+	scoped, err := repo.List(t.Context(), userID, ListInput{
+		StudentID: &studentA, Section: "students", Limit: 50,
+	})
+	require.NoError(t, err)
+	scopedItems := listItemsByID(scoped)
+	assert.Contains(t, scopedItems, direct.ID)
+	assert.Contains(t, scopedItems, nested.ID)
+	require.Contains(t, scopedItems, mine.ID)
+	assert.Equal(t, "students", scopedItems[mine.ID].Section)
+
+	inMy, err := repo.List(t.Context(), userID, ListInput{
+		StudentID: &studentA, Section: "my", Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, inMy, "в «Моих наборах» у набора нет ученика")
+
+	unknown := uuid.New()
+	empty, err := repo.List(t.Context(), userID, ListInput{StudentID: &unknown, Limit: 50})
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+// TestRepositoryListSorts проверяет белый список сортировок: колонка и
+// направление приходят от клиента, но в SQL попадают только свои.
+func TestRepositoryListSorts(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, userID, folderID := seedPackOwner(t, pool, "sort org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	titles := []string{"Собака", "азбука", "Мячик"}
+	created := make([]*Pack, 0, len(titles))
+	for _, title := range titles {
+		pack, err := repo.Create(t.Context(), userID, CreateInput{
+			Title: title, FolderID: folderID, Config: config,
+		})
+		require.NoError(t, err)
+		created = append(created, pack)
+	}
+
+	byTitle, err := repo.List(t.Context(), userID, ListInput{
+		SortBy: "title", Order: "asc", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, byTitle, 3)
+	assert.Equal(t, []string{"азбука", "Мячик", "Собака"},
+		[]string{byTitle[0].Title, byTitle[1].Title, byTitle[2].Title})
+
+	desc, err := repo.List(t.Context(), userID, ListInput{
+		SortBy: "title", Order: "desc", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, desc, 3)
+	assert.Equal(t, "Собака", desc[0].Title)
+
+	byCreated, err := repo.List(t.Context(), userID, ListInput{
+		SortBy: "created_at", Order: "asc", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, byCreated, 3)
+	assert.Equal(t, created[0].ID, byCreated[0].ID)
+
+	// По умолчанию — свежие сверху, как было до появления сортировок.
+	byDefault, err := repo.List(t.Context(), userID, ListInput{Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, byDefault, 3)
+	assert.Equal(t, created[2].ID, byDefault[0].ID)
+}

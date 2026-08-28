@@ -96,8 +96,13 @@ type ListInput struct {
 	Age        *int
 	Difficulty string
 	Section    string
-	Limit      int
-	Offset     int
+	// StudentID сужает выдачу до наборов одного ученика: его собственной
+	// папки, вложенных в неё папок и адаптаций.
+	StudentID *uuid.UUID
+	SortBy    string
+	Order     string
+	Limit     int
+	Offset    int
 }
 
 // NullablePatch distinguishes an omitted PATCH field from an explicit null.

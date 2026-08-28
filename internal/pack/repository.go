@@ -159,12 +159,13 @@ func (r *Repository) List(
 	limit, offset := repositoryListBounds(input)
 	rows, err := r.pool.Query(
 		ctx,
-		listPacksQuery,
+		listPacksQuery(input.SortBy, input.Order),
 		userID,
 		input.Query,
 		input.Age,
 		input.Difficulty,
 		input.Section,
+		input.StudentID,
 		limit,
 		offset,
 	)
@@ -202,6 +203,7 @@ func (r *Repository) Count(
 		input.Age,
 		input.Difficulty,
 		input.Section,
+		input.StudentID,
 	).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("pack repository count: %w", err)

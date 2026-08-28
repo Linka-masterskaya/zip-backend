@@ -379,3 +379,86 @@ func TestContentsTotalIgnoresPaginationAndVisibility(t *testing.T) {
 	assert.Empty(t, pastEnd.Items)
 	assert.Equal(t, 3, pastEnd.Total)
 }
+
+// TestContentsFilters: поиск и фильтры работают на общем списке папок и
+// наборов. Возраст и сложность есть только у наборов, поэтому такие
+// фильтры сами по себе отсекают папки.
+func TestContentsFilters(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "owner")
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	root, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Мои наборы",
+	})
+	require.NoError(t, err)
+	_, err = service.Create(ctx, CreateInput{
+		ParentID: &root.ID, Section: SectionMy, Kind: KindFolder, Name: "Азбука папка",
+	})
+	require.NoError(t, err)
+	_, err = service.Create(ctx, CreateInput{
+		ParentID: &root.ID, Section: SectionMy, Kind: KindFolder, Name: "Счёт",
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age_min, age_max, difficulty)
+		SELECT org_id, id, $2, 'Азбука набор', '{}'::jsonb, 4, 6, 'easy'
+		FROM users WHERE id = $1`, ownerID, root.ID)
+	require.NoError(t, err)
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age_min, age_max, difficulty)
+		SELECT org_id, id, $2, 'Счёт набор', '{}'::jsonb, 7, 9, 'hard'
+		FROM users WHERE id = $1`, ownerID, root.ID)
+	require.NoError(t, err)
+
+	byQuery, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, Query: "азбука",
+	})
+	require.NoError(t, err)
+	require.Len(t, byQuery.Items, 2, "поиск идёт и по папкам, и по наборам")
+	assert.Equal(t, 2, byQuery.Total)
+
+	onlyPacks, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, Type: "pack",
+	})
+	require.NoError(t, err)
+	require.Len(t, onlyPacks.Items, 2)
+	for _, item := range onlyPacks.Items {
+		assert.Equal(t, "pack", item.Type)
+	}
+
+	onlyFolders, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, Type: "folder",
+	})
+	require.NoError(t, err)
+	require.Len(t, onlyFolders.Items, 2)
+
+	age := 5
+	byAge, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, Age: &age,
+	})
+	require.NoError(t, err)
+	require.Len(t, byAge.Items, 1, "у папок возраста нет, остаётся только набор")
+	assert.Equal(t, "Азбука набор", byAge.Items[0].Name)
+
+	byDifficulty, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, Difficulty: "hard",
+	})
+	require.NoError(t, err)
+	require.Len(t, byDifficulty.Items, 1)
+	assert.Equal(t, "Счёт набор", byDifficulty.Items[0].Name)
+
+	combined, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, Query: "счёт", Difficulty: "easy",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, combined.Items)
+	assert.Equal(t, 0, combined.Total)
+
+	// В корне раздела фильтры тоже работают: там только папки.
+	rootPacks, err := service.Contents(ctx, ContentsInput{Section: SectionMy, Type: "pack"})
+	require.NoError(t, err)
+	assert.Empty(t, rootPacks.Items)
+}

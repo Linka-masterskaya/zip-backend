@@ -98,6 +98,7 @@ func TestRegisterStudentRoutesPatterns(t *testing.T) {
 		"GET /api/v1/students",
 		"PATCH /api/v1/students/{id}",
 		"DELETE /api/v1/students/{id}",
+		"PUT /api/v1/students/{id}/avatar",
 	})
 }
 

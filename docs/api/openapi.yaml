@@ -1,4 +1,4 @@
-openapi: 3.0.3
+openapi: 3.1.1
 info:
   title: Linka Backend API
   version: 0.4.0
@@ -114,12 +114,12 @@ components:
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
-        display_name: { type: string, nullable: true }
+        display_name: { type: [string, "null"] }
         avatar_url:
-          { type: string, nullable: true, description: presigned MinIO URL }
+          { type: [string, "null"], description: presigned MinIO URL }
         role: { type: string, enum: [defectologist, parent, viewer, admin] }
         email_verified: { type: boolean }
-        org_id: { type: string, format: uuid, nullable: true }
+        org_id: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
 
     AvatarResponse:
@@ -144,10 +144,10 @@ components:
         id: { type: string, format: uuid }
         org_id: { type: string, format: uuid }
         owner_id: { type: string, format: uuid }
-        parent_id: { type: string, format: uuid, nullable: true }
+        parent_id: { type: [string, "null"], format: uuid }
         section: { type: string, enum: [library, my, students] }
         kind: { type: string, enum: [folder, student] }
-        student_id: { type: string, format: uuid, nullable: true }
+        student_id: { type: [string, "null"], format: uuid }
         name: { type: string }
         depth: { type: integer, minimum: 0, maximum: 4 }
         created_at: { type: string, format: date-time }
@@ -236,13 +236,13 @@ components:
         org_id: { type: string, format: uuid }
         owner_id: { type: string, format: uuid }
         folder_id: { type: string, format: uuid }
-        library_folder_id: { type: string, format: uuid, nullable: true }
-        published_at: { type: string, format: date-time, nullable: true }
+        library_folder_id: { type: [string, "null"], format: uuid }
+        published_at: { type: [string, "null"], format: date-time }
         title: { type: string }
         status: { type: string, enum: [draft, published] }
-        age_min: { type: integer, minimum: 3, maximum: 18, nullable: true }
-        age_max: { type: integer, minimum: 3, maximum: 18, nullable: true }
-        difficulty: { type: string, enum: [easy, medium, hard], nullable: true }
+        age_min: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        age_max: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
         notes: { type: string }
         config: { type: object, additionalProperties: true }
@@ -259,18 +259,18 @@ components:
     DuplicatePackRequest:
       type: object
       properties:
-        folder_id: { type: string, format: uuid, nullable: true }
+        folder_id: { type: [string, "null"], format: uuid }
 
     UpdatePackRequest:
       type: object
       properties:
         title: { type: string }
         folder_id: { type: string, format: uuid }
-        age_min: { type: integer, minimum: 3, maximum: 18, nullable: true }
-        age_max: { type: integer, minimum: 3, maximum: 18, nullable: true }
-        difficulty: { type: string, enum: [easy, medium, hard], nullable: true }
+        age_min: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        age_max: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
-        notes: { type: string, nullable: true }
+        notes: { type: [string, "null"] }
 
     MovePackRequest:
       type: object
@@ -403,29 +403,48 @@ components:
     Student:
       type: object
       required:
-        [id, email, email_verified, name, status, created_at, updated_at]
+        [id, email, email_verified, name, status, cards_shift, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
         email_verified: { type: boolean }
         name:           { type: string }
-        age:            { type: integer, minimum: 0, maximum: 100, nullable: true }
+        age:            { type: [integer, "null"], minimum: 0, maximum: 100 }
         status:         { type: string, enum: [active, paused, archived, one_time] }
-        last_lesson_at: { type: string, format: date, nullable: true, description: Дата последнего занятия }
-        avatar_media_id:
+        cards_shift:
           type: string
+          enum: [left, full, right]
+          default: full
+          description: Смещение карточек в наборах ученика.
+        last_lesson_at: { type: [string, "null"], format: date, description: Дата последнего занятия }
+        avatar_media_id:
+          type: [string, "null"]
           format: uuid
-          nullable: true
           description: Ссылка на файл из банка медиа; `null` — аватара нет.
         avatar_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: |
             Presigned-ссылка на аватар, выданная на это чтение и живущая 15 минут.
             Хранить её нельзя — при следующем чтении приходит новая. Если подпись
             не удалась, поле придёт `null`, а `avatar_media_id` останется.
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
+
+    StudentAvatarResponse:
+      type: object
+      required: [avatar_url, avatar_media_id]
+      properties:
+        avatar_url:
+          type: [string, "null"]
+          description: |
+            Presigned-ссылка на загруженный аватар, живёт 15 минут. `null`,
+            если подписать ссылку не удалось — файл при этом сохранён.
+        avatar_media_id:
+          type: string
+          format: uuid
+          description: |
+            Идентификатор созданного файла в банке медиа. Им же аватар
+            снимается или меняется через `PATCH /students/{id}`.
 
     StudentListResponse:
       type: object
@@ -445,8 +464,8 @@ components:
         type: { type: string, enum: [folder, pack] }
         id: { type: string, format: uuid }
         name: { type: string }
-        kind: { type: string, enum: [folder, student], nullable: true }
-        student_id: { type: string, format: uuid, nullable: true }
+        kind: { type: [string, "null"], enum: [folder, student, null] }
+        student_id: { type: [string, "null"], format: uuid }
         published: { type: boolean }
         updated_at: { type: string, format: date-time }
 
@@ -869,10 +888,10 @@ paths:
               type: object
               required: [section, kind, name]
               properties:
-                parent_id: { type: string, format: uuid, nullable: true }
+                parent_id: { type: [string, "null"], format: uuid }
                 section: { type: string, enum: [library, my, students] }
                 kind: { type: string, enum: [folder, student] }
-                student_id: { type: string, format: uuid, nullable: true }
+                student_id: { type: [string, "null"], format: uuid }
                 name: { type: string }
       responses:
         '201':
@@ -991,7 +1010,7 @@ paths:
               type: object
               required: [parent_id]
               properties:
-                { parent_id: { type: string, format: uuid, nullable: true } }
+                { parent_id: { type: [string, "null"], format: uuid } }
       responses:
         '200':
           {
@@ -1021,6 +1040,10 @@ paths:
         - { name: parent_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Папка внутри раздела. Не задан — корень раздела" }
         - { name: sort, in: query, schema: { type: string, enum: [name, updated_at], default: name } }
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { name: query, in: query, schema: { type: string }, description: "Подстрока названия папки или набора без учёта регистра" }
+        - { name: type, in: query, schema: { type: string, enum: [folder, pack] }, description: "Оставить только папки или только наборы" }
+        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "age_min <= age <= age_max. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: difficulty, in: query, schema: { type: string, enum: [easy, medium, hard] }, description: "Свойство набора: папки отсеиваются" }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
@@ -1298,6 +1321,23 @@ paths:
             name: section,
             in: query,
             schema: { type: string, enum: [library, my, students] },
+          }
+        - name: student_id
+          in: query
+          schema: { type: string, format: uuid }
+          description: >-
+            Только наборы одного ученика: лежащие в его папке, во вложенных в
+            неё папках и выданные ему адаптации.
+        - {
+            name: sort_by,
+            in: query,
+            schema: { type: string, enum: [updated_at, created_at, title], default: updated_at },
+            description: Сортировка по title — без учёта регистра,
+          }
+        - {
+            name: order,
+            in: query,
+            schema: { type: string, enum: [asc, desc], default: desc },
           }
         - {
             name: limit,
@@ -1855,12 +1895,18 @@ paths:
               properties:
                 email:  { type: string, format: email }
                 name:   { type: string }
-                age:    { type: integer, minimum: 0, maximum: 100, nullable: true }
+                age:    { type: [integer, "null"], minimum: 0, maximum: 100 }
                 status: { type: string, enum: [active, paused, archived, one_time], default: active }
-                avatar_media_id:
+                cards_shift:
                   type: string
+                  enum: [left, full, right]
+                  default: full
+                  description: |
+                    Смещение карточек в наборах. Поле необязательное: без него
+                    ученик получает `full`. Значение вне списка — `400`.
+                avatar_media_id:
+                  type: [string, "null"]
                   format: uuid
-                  nullable: true
                   description: |
                     Идентификатор файла, ранее загруженного через `POST /media`.
                     Файл должен принадлежать организации текущего пользователя,
@@ -1894,6 +1940,43 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /students/{id}/avatar:
+    put:
+      tags: [students]
+      operationId: replaceStudentAvatar
+      summary: Загрузить аватар ученика
+      description: |
+        Симметрично `PUT /profile/me/avatar`. Файл кладётся в банк медиа
+        организации (как через `POST /media`) и сразу становится аватаром
+        ученика. Принимаются png, jpeg и webp до 2 МБ. Снять аватар можно
+        через `PATCH /students/{id}` с `avatar_media_id: null`.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - {
+            name: id,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+          }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties: { file: { type: string, format: binary } }
+      responses:
+        '200':
+          description: Аватар загружен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentAvatarResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Ученик не найден }
+        '413': { description: Файл слишком большой }
+
   /students/{id}:
     patch:
       tags: [students]
@@ -1918,10 +2001,16 @@ paths:
                 age:    { type: integer, minimum: 0, maximum: 100 }
                 status: { type: string, enum: [active, paused, archived, one_time] }
                 last_lesson_at: { type: string, format: date, description: Дата последнего занятия }
+                cards_shift:
+                  type: [string, "null"]
+                  enum: [left, full, right, null]
+                  description: |
+                    Смещение карточек в наборах. Отсутствие поля оставляет
+                    текущее значение; явный `null` сбрасывает к `full`.
+                    Значение вне списка — `400`.
                 avatar_media_id:
-                  type: string
+                  type: [string, "null"]
                   format: uuid
-                  nullable: true
                   description: |
                     Идентификатор файла из `POST /media`. Явный `null` снимает
                     аватар; отсутствие поля оставляет текущий. Файл чужой
@@ -1940,7 +2029,14 @@ paths:
         '404': { description: Ученик не найден }
     delete:
       tags: [students]
-      summary: Архивировать ученика; запрещено при наличии student folder
+      summary: Архивировать ученика; с force=true — удалить насовсем
+      description: |
+        По умолчанию — soft-delete, и он запрещён при наличии student folder
+        (`409`). С `force=true` ученик удаляется полностью: вместе с его
+        папкой, вложенными папками, наборами внутри них и адаптациями.
+        Операция необратима и выполняется одной транзакцией. Опубликованный
+        набор в папке ученика её отменяет (`409`) — сначала снимают
+        публикацию. Аватар остаётся в банке медиа: файл удаляют отдельно.
       security: [{ bearerAuth: [] }]
       parameters:
         - {
@@ -1949,8 +2045,16 @@ paths:
             required: true,
             schema: { type: string, format: uuid },
           }
+        - {
+            name: force,
+            in: query,
+            required: false,
+            schema: { type: boolean, default: false },
+            description: Удалить ученика полностью вместе с папкой и наборами,
+          }
       responses:
-        '204': { description: Soft-delete выполнен }
+        '204': { description: Удалено }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { description: Ученик не найден }
         '409': { $ref: '#/components/responses/Conflict' }
 

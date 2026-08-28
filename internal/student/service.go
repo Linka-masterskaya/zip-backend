@@ -11,6 +11,8 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/avatar"
+	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/google/uuid"
 )
 
@@ -19,7 +21,15 @@ type repository interface {
 	List(context.Context, uuid.UUID, ListInput) ([]storedStudent, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, storedUpdate) (*storedStudent, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
+	ForceDelete(context.Context, uuid.UUID, uuid.UUID) error
+	Owned(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 	AvatarMediaAccessible(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+}
+
+// mediaUploader — часть банка медиа: аватар ученика хранится обычным файлом
+// организации, поэтому загрузка идёт тем же путём, что и POST /media.
+type mediaUploader interface {
+	Upload(context.Context, []byte, string) (*media.Response, error)
 }
 
 // objectStorage — часть MinIO, нужная для ссылки на аватар.
@@ -35,14 +45,26 @@ type crypto interface {
 // avatarURLTTL совпадает с TTL ссылок в профиле и медиа.
 const avatarURLTTL = 15 * time.Minute
 
+// defaultCardsShift — раскладка карточек, к которой сводится и отсутствие
+// поля при создании, и явный null при обновлении.
+const defaultCardsShift = "full"
+
+const cardsShiftMessage = "invalid cards_shift. allowed: left, full, right"
+
 type Service struct {
-	repo    repository
-	crypto  crypto
-	storage objectStorage
+	repo     repository
+	crypto   crypto
+	storage  objectStorage
+	uploader mediaUploader
 }
 
-func NewService(repo repository, crypto crypto, storage objectStorage) *Service {
-	return &Service{repo: repo, crypto: crypto, storage: storage}
+func NewService(
+	repo repository,
+	crypto crypto,
+	storage objectStorage,
+	uploader mediaUploader,
+) *Service {
+	return &Service{repo: repo, crypto: crypto, storage: storage, uploader: uploader}
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, error) {
@@ -51,7 +73,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 		return nil, err
 	}
 	normalizeCreate(&input)
-	if err = validate(input.Email, input.Name, input.Age, input.Status); err != nil {
+	if err = validate(input.Email, input.Name, input.Age, input.Status, *input.CardsShift); err != nil {
 		return nil, err
 	}
 	if err = s.checkAvatarMedia(ctx, ownerID, input.AvatarMediaID); err != nil {
@@ -116,7 +138,8 @@ func (s *Service) Update(
 		return nil, err
 	}
 	if input.Email == nil && input.Name == nil && input.Age == nil &&
-		input.Status == nil && input.LastLessonAt == nil && !input.AvatarMediaID.Set {
+		input.Status == nil && input.LastLessonAt == nil &&
+		!input.CardsShift.Set && !input.AvatarMediaID.Set {
 		return nil, apperr.ErrBadRequest
 	}
 	if input.AvatarMediaID.Set {
@@ -141,6 +164,23 @@ func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 		Name: input.Name, Age: input.Age, Status: input.Status, LastLessonAt: input.LastLessonAt,
 		AvatarMediaID: input.AvatarMediaID.Value, AvatarMediaIDSet: input.AvatarMediaID.Set,
 	}
+	trimUpdate(&input, &result)
+	if err := applyCardsShift(input, &result); err != nil {
+		return storedUpdate{}, err
+	}
+	if err := s.applyEmail(input, &result); err != nil {
+		return storedUpdate{}, err
+	}
+	if err := validateUpdate(input); err != nil {
+		return storedUpdate{}, err
+	}
+	if input.LastLessonAt != nil {
+		result.LastLessonSet = true
+	}
+	return result, nil
+}
+
+func trimUpdate(input *UpdateInput, result *storedUpdate) {
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		input.Name = &value
@@ -151,43 +191,114 @@ func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 		input.Status = &value
 		result.Status = &value
 	}
-	if input.Email != nil {
-		value := strings.ToLower(strings.TrimSpace(*input.Email))
-		if !validEmail(value) {
-			return storedUpdate{}, apperr.ErrBadRequest.WithMessage("valid email is required")
-		}
-		encrypted, err := s.crypto.Encrypt([]byte(value))
-		if err != nil {
-			return storedUpdate{}, fmt.Errorf("student encrypt email: %w", err)
-		}
-		result.EmailEncrypted = encrypted
-		result.EmailSet = true
+}
+
+// applyCardsShift: отсутствие поля раскладку не трогает, null возвращает
+// значение по умолчанию.
+func applyCardsShift(input UpdateInput, result *storedUpdate) error {
+	if !input.CardsShift.Set {
+		return nil
 	}
-	if input.Name != nil && *input.Name == "" {
-		return storedUpdate{}, apperr.ErrBadRequest
+	value := defaultCardsShift
+	if input.CardsShift.Value != nil {
+		value = strings.TrimSpace(*input.CardsShift.Value)
 	}
-	if input.Age != nil && (*input.Age < 0 || *input.Age > 100) {
-		return storedUpdate{}, apperr.ErrBadRequest
+	if !validCardsShift(value) {
+		return apperr.ErrBadRequest.WithMessage(cardsShiftMessage)
 	}
-	if input.Status != nil && !validStatus(*input.Status) {
-		return storedUpdate{}, apperr.ErrBadRequest
+	result.CardsShift = &value
+	return nil
+}
+
+func (s *Service) applyEmail(input UpdateInput, result *storedUpdate) error {
+	if input.Email == nil {
+		return nil
+	}
+	value := strings.ToLower(strings.TrimSpace(*input.Email))
+	if !validEmail(value) {
+		return apperr.ErrBadRequest.WithMessage("valid email is required")
+	}
+	encrypted, err := s.crypto.Encrypt([]byte(value))
+	if err != nil {
+		return fmt.Errorf("student encrypt email: %w", err)
+	}
+	result.EmailEncrypted = encrypted
+	result.EmailSet = true
+	return nil
+}
+
+func validateUpdate(input UpdateInput) error {
+	switch {
+	case input.Name != nil && *input.Name == "":
+		return apperr.ErrBadRequest
+	case input.Age != nil && (*input.Age < 0 || *input.Age > 100):
+		return apperr.ErrBadRequest
+	case input.Status != nil && !validStatus(*input.Status):
+		return apperr.ErrBadRequest
 	}
 	if input.LastLessonAt != nil {
 		today := time.Now().Truncate(24 * time.Hour)
 		if input.LastLessonAt.After(today) {
-			return storedUpdate{}, apperr.ErrBadRequest.WithMessage("last_lesson_at cannot be in the future")
+			return apperr.ErrBadRequest.WithMessage("last_lesson_at cannot be in the future")
 		}
-		result.LastLessonSet = true
 	}
-	return result, nil
+	return nil
 }
 
+// ReplaceAvatar кладёт картинку в банк медиа и ставит её ученику. Порядок
+// важен: сначала убеждаемся, что ученик существует и наш, иначе опечатка в
+// id оставила бы в банке файл, который никому не нужен.
+func (s *Service) ReplaceAvatar(
+	ctx context.Context,
+	studentID uuid.UUID,
+	data []byte,
+	name string,
+) (*Student, error) {
+	ownerID, err := owner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if avatar.DetectMIME(data) == "" {
+		return nil, apperr.ErrBadRequest.WithMessage("avatar must be png, jpeg, or webp image")
+	}
+	owned, err := s.repo.Owned(ctx, ownerID, studentID)
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		return nil, apperr.ErrNotFound
+	}
+	uploaded, err := s.uploader.Upload(ctx, data, name)
+	if err != nil {
+		return nil, err
+	}
+	stored, err := s.repo.Update(ctx, ownerID, studentID, storedUpdate{
+		AvatarMediaID: &uploaded.ID, AvatarMediaIDSet: true,
+	})
+	if err != nil {
+		return nil, mapStudentError(err)
+	}
+	return s.decode(ctx, stored)
+}
+
+// Delete архивирует ученика: карточка остаётся в базе с проставленным
+// deleted_at, поэтому папку за собой не тянет и при её наличии отдаёт 409.
 func (s *Service) Delete(ctx context.Context, studentID uuid.UUID) error {
 	ownerID, err := owner(ctx)
 	if err != nil {
 		return err
 	}
 	return mapStudentError(s.repo.Delete(ctx, ownerID, studentID))
+}
+
+// ForceDelete сносит ученика насовсем — вместе с папкой, вложенными папками
+// и наборами внутри них.
+func (s *Service) ForceDelete(ctx context.Context, studentID uuid.UUID) error {
+	ownerID, err := owner(ctx)
+	if err != nil {
+		return err
+	}
+	return mapStudentError(s.repo.ForceDelete(ctx, ownerID, studentID))
 }
 
 // checkAvatarMedia отклоняет ссылку на чужой или несуществующий файл до
@@ -212,9 +323,11 @@ func (s *Service) decode(ctx context.Context, stored *storedStudent) (*Student, 
 	if err != nil {
 		return nil, fmt.Errorf("student decrypt email: %w", err)
 	}
+	cardsShift := stored.CardsShift
 	return &Student{
 		ID: stored.ID, Email: string(email), EmailVerified: stored.EmailVerified,
-		Name: stored.Name, Age: stored.Age, Status: stored.Status, LastLessonAt: stored.LastLessonAt,
+		Name: stored.Name, Age: stored.Age, Status: stored.Status,
+		CardsShift: &cardsShift, LastLessonAt: stored.LastLessonAt,
 		AvatarMediaID: stored.AvatarMediaID, AvatarURL: s.avatarURL(ctx, stored),
 		CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt,
 	}, nil
@@ -257,14 +370,22 @@ func normalizeCreate(input *CreateInput) {
 	if input.Status == "" {
 		input.Status = "active"
 	}
+	value := defaultCardsShift
+	if input.CardsShift != nil {
+		value = strings.TrimSpace(*input.CardsShift)
+	}
+	input.CardsShift = &value
 }
 
-func validate(email, name string, age *int, status string) error {
+func validate(email, name string, age *int, status, cardsShift string) error {
 	if !validEmail(email) || name == "" || !validStatus(status) {
 		return apperr.ErrBadRequest
 	}
 	if age != nil && (*age < 0 || *age > 100) {
 		return apperr.ErrBadRequest
+	}
+	if !validCardsShift(cardsShift) {
+		return apperr.ErrBadRequest.WithMessage(cardsShiftMessage)
 	}
 	return nil
 }
@@ -272,6 +393,10 @@ func validate(email, name string, age *int, status string) error {
 func validEmail(value string) bool {
 	address, err := mail.ParseAddress(value)
 	return err == nil && address.Address == value && strings.Contains(value, "@")
+}
+
+func validCardsShift(value string) bool {
+	return value == "left" || value == "full" || value == "right"
 }
 
 func validStatus(value string) bool {

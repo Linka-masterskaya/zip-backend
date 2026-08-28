@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -34,9 +35,9 @@ func (r *Repository) Create(
 		WITH created AS (
 			INSERT INTO students (
 				id, defectologist_id, email_encrypted, name, age, status,
-				avatar_media_id
+				cards_shift, avatar_media_id
 			)
-			SELECT $1, u.id, $3, $4, $5, $6, $7
+			SELECT $1, u.id, $3, $4, $5, $6, $7, $8
 			FROM users u
 			WHERE u.id = $2 AND u.deleted_at IS NULL
 			RETURNING `+studentColumns+`
@@ -45,7 +46,7 @@ func (r *Repository) Create(
 		FROM created s
 		LEFT JOIN media_files m ON m.id = s.avatar_media_id`,
 		uuid.New(), ownerID, emailEncrypted, input.Name, input.Age, input.Status,
-		input.AvatarMediaID)
+		input.CardsShift, input.AvatarMediaID)
 	result, err := scanStudent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -136,6 +137,7 @@ func (r *Repository) Update(
 			    name = COALESCE($5, name),
 			    age = COALESCE($6, age),
 			    status = COALESCE($7, status),
+			    cards_shift = COALESCE($12, cards_shift),
 			    last_lesson_at = CASE WHEN $8 THEN $9 ELSE last_lesson_at END,
 			    avatar_media_id = CASE WHEN $10 THEN $11 ELSE avatar_media_id END,
 			    updated_at = now()
@@ -148,7 +150,7 @@ func (r *Repository) Update(
 		ownerID, studentID, input.EmailSet, input.EmailEncrypted,
 		input.Name, input.Age, input.Status,
 		input.LastLessonSet, input.LastLessonAt,
-		input.AvatarMediaIDSet, input.AvatarMediaID)
+		input.AvatarMediaIDSet, input.AvatarMediaID, input.CardsShift)
 	result, err := scanStudent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -191,6 +193,22 @@ func (r *Repository) Delete(ctx context.Context, ownerID, studentID uuid.UUID) e
 	return ErrNotFound
 }
 
+// Owned сообщает, есть ли у дефектолога такой ученик. Нужно до загрузки
+// файла: иначе неверный id оставлял бы в банке медиа никому не нужную
+// картинку.
+func (r *Repository) Owned(ctx context.Context, ownerID, studentID uuid.UUID) (bool, error) {
+	var owned bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM students
+			WHERE id = $2 AND defectologist_id = $1 AND deleted_at IS NULL
+		)`, ownerID, studentID).Scan(&owned)
+	if err != nil {
+		return false, fmt.Errorf("student owned check: %w", err)
+	}
+	return owned, nil
+}
+
 // AvatarMediaAccessible сообщает, существует ли медиа-файл и принадлежит ли он
 // той же организации, что и владелец картотеки. Без проверки один
 // дефектолог мог бы поставить ученику картинку из чужой организации.
@@ -219,7 +237,8 @@ func scanStudent(row interface{ Scan(...any) error }) (*storedStudent, error) {
 	var result storedStudent
 	err := row.Scan(
 		&result.ID, &result.EmailEncrypted, &result.EmailVerified,
-		&result.Name, &result.Age, &result.Status, &result.LastLessonAt,
+		&result.Name, &result.Age, &result.Status, &result.CardsShift,
+		&result.LastLessonAt,
 		&result.AvatarMediaID, &result.AvatarKey,
 		&result.CreatedAt, &result.UpdatedAt, &result.DeletedAt,
 	)
@@ -227,13 +246,176 @@ func scanStudent(row interface{ Scan(...any) error }) (*storedStudent, error) {
 }
 
 const studentColumns = `
-	id, email_encrypted, email_verified, name, age, status, last_lesson_at,
-	avatar_media_id, created_at, updated_at, deleted_at`
+	id, email_encrypted, email_verified, name, age, status, cards_shift,
+	last_lesson_at, avatar_media_id, created_at, updated_at, deleted_at`
 
 // studentColumnsWithAvatar добавляет ключ объекта аватара из media_files.
 // Ключ нужен, чтобы сервис выписал presigned-ссылку; в самой таблице
 // students его нет.
 const studentColumnsWithAvatar = `
 	s.id, s.email_encrypted, s.email_verified, s.name, s.age, s.status,
-	s.last_lesson_at, s.avatar_media_id, m.minio_key,
+	s.cards_shift, s.last_lesson_at, s.avatar_media_id, m.minio_key,
 	s.created_at, s.updated_at, s.deleted_at`
+
+// ForceDelete сносит ученика насовсем вместе с его папкой: soft delete
+// оставляет карточку в базе, а здесь нужно именно полное удаление. Всё в
+// одной транзакции — частично снесённая картотека хуже, чем не снесённая.
+func (r *Repository) ForceDelete(ctx context.Context, ownerID, studentID uuid.UUID) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("student force delete begin: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil &&
+			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.WarnContext(ctx, "student force delete rollback", "err", rollbackErr)
+		}
+	}()
+
+	var locked uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM students
+		WHERE id = $2 AND defectologist_id = $1
+		FOR UPDATE`, ownerID, studentID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("student force delete lock: %w", err)
+	}
+
+	folderIDs, maxDepth, err := studentFolderTree(ctx, tx, studentID)
+	if err != nil {
+		return err
+	}
+	if err = purgeStudentPacks(ctx, tx, studentID, folderIDs); err != nil {
+		return err
+	}
+	// Папки удаляются снизу вверх: folders.parent_id объявлен RESTRICT,
+	// поэтому родителя нельзя снести раньше детей.
+	for depth := maxDepth; depth >= 0; depth-- {
+		if _, err = tx.Exec(ctx,
+			`DELETE FROM folders WHERE id = ANY($1) AND depth = $2`,
+			folderIDs, depth); err != nil {
+			return fmt.Errorf("student force delete folders: %w", err)
+		}
+	}
+	if _, err = tx.Exec(ctx,
+		`DELETE FROM students WHERE id = $2 AND defectologist_id = $1`,
+		ownerID, studentID); err != nil {
+		return fmt.Errorf("student force delete: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("student force delete commit: %w", err)
+	}
+	return nil
+}
+
+// studentFolderTree возвращает папку ученика вместе со всеми вложенными.
+// По владельцу здесь не фильтруем: право на удаление уже проверено локом
+// строки ученика, а любая папка, ссылающаяся на него, обязана уйти — иначе
+// folders.student_id с RESTRICT уронит транзакцию.
+func studentFolderTree(
+	ctx context.Context,
+	tx pgx.Tx,
+	studentID uuid.UUID,
+) ([]uuid.UUID, int, error) {
+	rows, err := tx.Query(ctx, `
+		WITH RECURSIVE tree AS (
+			SELECT f.id, f.depth
+			FROM folders f
+			WHERE f.student_id = $1
+			UNION ALL
+			SELECT c.id, c.depth
+			FROM folders c
+			JOIN tree t ON c.parent_id = t.id
+		)
+		SELECT id, depth FROM tree`, studentID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("student force delete folder tree: %w", err)
+	}
+	defer rows.Close()
+
+	folderIDs := make([]uuid.UUID, 0)
+	maxDepth := 0
+	for rows.Next() {
+		var (
+			id    uuid.UUID
+			depth int
+		)
+		if err = rows.Scan(&id, &depth); err != nil {
+			return nil, 0, fmt.Errorf("student force delete folder scan: %w", err)
+		}
+		folderIDs = append(folderIDs, id)
+		if depth > maxDepth {
+			maxDepth = depth
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("student force delete folder rows: %w", err)
+	}
+	return folderIDs, maxDepth, nil
+}
+
+// purgeStudentPacks удаляет наборы из папок ученика и следы использования
+// медиа. media_usages не связаны с packs внешним ключом, поэтому строки
+// нужно снимать руками — иначе файлы навсегда останутся «занятыми» и их
+// не выйдет удалить из банка.
+func purgeStudentPacks(
+	ctx context.Context,
+	tx pgx.Tx,
+	studentID uuid.UUID,
+	folderIDs []uuid.UUID,
+) error {
+	if len(folderIDs) > 0 {
+		// Опубликованный набор уходит вместе с остальными: просили удалять
+		// ученика «даже с папками», а отказ вернул бы ровно тот тупик, из-за
+		// которого ручку и заводили. Публикация — это ссылка на библиотечную
+		// папку в самой строке набора, поэтому отдельно снимать её не нужно.
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM media_usages
+			WHERE source_type = 'pack'
+			  AND source_id IN (SELECT id FROM packs WHERE folder_id = ANY($1))`,
+			folderIDs); err != nil {
+			return fmt.Errorf("student force delete pack usages: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM media_usages
+			WHERE source_type = 'pack_adaptation'
+			  AND source_id IN (
+				SELECT pa.id FROM pack_adaptations pa
+				JOIN packs p ON p.id = pa.pack_id
+				WHERE p.folder_id = ANY($1)
+			  )`, folderIDs); err != nil {
+			return fmt.Errorf("student force delete pack adaptation usages: %w", err)
+		}
+		// Версии наборов уходят каскадом вместе с наборами.
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM media_usages
+			WHERE source_type = 'pack_version'
+			  AND source_id IN (
+				SELECT pv.id FROM pack_versions pv
+				JOIN packs p ON p.id = pv.pack_id
+				WHERE p.folder_id = ANY($1)
+			  )`, folderIDs); err != nil {
+			return fmt.Errorf("student force delete pack version usages: %w", err)
+		}
+	}
+	// Адаптации самого ученика уходят каскадом вместе с ним, включая те,
+	// что сделаны из чужих наборов, — их следы тоже надо снять.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM media_usages
+		WHERE source_type = 'pack_adaptation'
+		  AND source_id IN (SELECT id FROM pack_adaptations WHERE student_id = $1)`,
+		studentID); err != nil {
+		return fmt.Errorf("student force delete adaptation usages: %w", err)
+	}
+	if len(folderIDs) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM packs WHERE folder_id = ANY($1)`, folderIDs); err != nil {
+		return fmt.Errorf("student force delete packs: %w", err)
+	}
+	return nil
+}
