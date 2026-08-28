@@ -72,6 +72,10 @@ func TestCORSMiddleware_DisallowedOrigin(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
 		t.Errorf("Allow-Credentials = %q, want empty", got)
 	}
+
+	if got := rec.Header().Get("Vary"); got != "Origin" {
+		t.Errorf("Vary = %q, want %q even for disallowed origin", got, "Origin")
+	}
 }
 
 func TestCORSMiddleware_Preflight(t *testing.T) {
@@ -111,5 +115,27 @@ func TestCORSMiddleware_NoOrigin(t *testing.T) {
 
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Allow-Origin = %q, want empty", got)
+	}
+}
+
+func TestCORSMiddleware_ExposeHeaders(t *testing.T) {
+	cfg := newCORSConfig()
+	cfg.ExposeHeaders = []string{"X-Request-Id"}
+
+	rec := doCORSRequest(t, cfg, http.MethodGet, "https://example.com")
+
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "X-Request-Id" {
+		t.Errorf("Expose-Headers = %q, want %q", got, "X-Request-Id")
+	}
+}
+
+func TestCORSMiddleware_ExposeHeaders_EmptyOmitted(t *testing.T) {
+	cfg := newCORSConfig()
+	cfg.ExposeHeaders = nil
+
+	rec := doCORSRequest(t, cfg, http.MethodGet, "https://example.com")
+
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "" {
+		t.Errorf("Expose-Headers = %q, want empty when not configured", got)
 	}
 }

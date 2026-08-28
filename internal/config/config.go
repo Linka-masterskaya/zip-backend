@@ -646,14 +646,17 @@ func validateCORSConfig(cfg *CORSConfig) error {
 	if cfg.MaxAge < 0 {
 		return fmt.Errorf("cors.max_age must be non-negative")
 	}
+	if cfg.MaxAge > 0 && cfg.MaxAge < time.Second {
+		return fmt.Errorf("cors.max_age is %s, which looks like a raw number misparsed as nanoseconds — use a duration string with a unit (e.g. \"24h\")", cfg.MaxAge)
+	}
 	return nil
 }
 
-func normalizeStringSlice(origins []string) []string {
-	result := make([]string, 0, len(origins))
-	for _, o := range origins {
-		if o = strings.TrimSpace(o); o != "" {
-			result = append(result, o)
+func normalizeStringSlice(items []string) []string {
+	result := make([]string, 0, len(items))
+	for _, s := range items {
+		if s = strings.TrimSpace(s); s != "" {
+			result = append(result, s)
 		}
 	}
 	return result

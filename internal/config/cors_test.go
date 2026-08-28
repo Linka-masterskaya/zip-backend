@@ -36,3 +36,28 @@ func TestValidateCORSConfig(t *testing.T) {
 		assert.ErrorContains(t, validateCORSConfig(&cfg), "cors.allow_headers")
 	})
 }
+
+func TestValidateCORSConfig_MaxAgeMisparsedAsNanoseconds(t *testing.T) {
+	cfg := &CORSConfig{
+		AllowOrigins: []string{"https://example.com"},
+		AllowMethods: []string{"GET"},
+		AllowHeaders: []string{"Content-Type"},
+		MaxAge:       86400, // raw int, viper распарсит как 86400ns из CORS_MAX_AGE=86400
+	}
+	err := validateCORSConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for MaxAge misparsed as nanoseconds, got nil")
+	}
+}
+
+func TestValidateCORSConfig_MaxAgeZeroIsValid(t *testing.T) {
+	cfg := &CORSConfig{
+		AllowOrigins: []string{"https://example.com"},
+		AllowMethods: []string{"GET"},
+		AllowHeaders: []string{"Content-Type"},
+		MaxAge:       0,
+	}
+	if err := validateCORSConfig(cfg); err != nil {
+		t.Errorf("MaxAge=0 should be valid (disables preflight caching), got error: %v", err)
+	}
+}

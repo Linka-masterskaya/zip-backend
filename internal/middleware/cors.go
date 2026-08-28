@@ -13,9 +13,7 @@ func CORSMiddleware(cfg config.CORSConfig) func(http.Handler) http.Handler {
 	headers := strings.Join(cfg.AllowHeaders, ", ")
 	origins := make(map[string]struct{}, len(cfg.AllowOrigins))
 	for _, o := range cfg.AllowOrigins {
-		if o = strings.TrimSpace(o); o != "" {
-			origins[o] = struct{}{}
-		}
+		origins[o] = struct{}{}
 	}
 
 	maxAge := strconv.Itoa(int(cfg.MaxAge.Seconds()))
