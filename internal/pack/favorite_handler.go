@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/httpquery"
 	"github.com/google/uuid"
 )
 
@@ -46,11 +47,11 @@ func (h *FavoriteHandler) DeleteFavorite(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *FavoriteHandler) ListFavorites(w http.ResponseWriter, r *http.Request) error {
-	limit, err := optionalQueryInt(r, "limit")
+	limit, err := httpquery.Int(r, "limit")
 	if err != nil {
 		return err
 	}
-	offset, err := optionalQueryInt(r, "offset")
+	offset, err := httpquery.Int(r, "offset")
 	if err != nil {
 		return err
 	}

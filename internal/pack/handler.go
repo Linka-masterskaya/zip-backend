@@ -8,9 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/httpquery"
 	"github.com/google/uuid"
 )
 
@@ -245,23 +245,23 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 		SortBy:     r.URL.Query().Get("sort_by"),
 		Order:      r.URL.Query().Get("order"),
 	}
-	studentID, err := optionalQueryUUID(r, "student_id")
+	studentID, err := httpquery.OptionalUUID(r, "student_id")
 	if err != nil {
 		return ListInput{}, err
 	}
 	input.StudentID = studentID
-	age, err := optionalQueryIntPointer(r, "age")
+	age, err := httpquery.OptionalInt(r, "age")
 	if err != nil {
 		return ListInput{}, err
 	}
-	limit, err := optionalQueryInt(r, "limit")
+	limit, err := httpquery.Int(r, "limit")
 	if err != nil {
 		return ListInput{}, err
 	}
 	if r.URL.Query().Has("limit") && limit == 0 {
 		return ListInput{}, apperr.ErrBadRequest.WithMessage("limit must be between 1 and 100")
 	}
-	offset, err := optionalQueryInt(r, "offset")
+	offset, err := httpquery.Int(r, "offset")
 	if err != nil {
 		return ListInput{}, err
 	}
@@ -269,42 +269,6 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 	input.Limit = limit
 	input.Offset = offset
 	return validateListInput(input)
-}
-
-func optionalQueryUUID(r *http.Request, name string) (*uuid.UUID, error) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return nil, nil
-	}
-	value, err := uuid.Parse(raw)
-	if err != nil || value == uuid.Nil {
-		return nil, apperr.ErrBadRequest.WithMessage(name + " must be a uuid")
-	}
-	return &value, nil
-}
-
-func optionalQueryIntPointer(r *http.Request, name string) (*int, error) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return nil, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return nil, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
-	}
-	return &value, nil
-}
-
-func optionalQueryInt(r *http.Request, name string) (int, error) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return 0, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
-	}
-	return value, nil
 }
 
 func decodeJSON(r *http.Request, target any) error {

@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strconv"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/httpquery"
 	"github.com/google/uuid"
 )
 
@@ -57,7 +57,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) error {
-	parentID, err := optionalQueryID(r, "parent_id")
+	parentID, err := httpquery.OptionalUUID(r, "parent_id")
 	if err != nil {
 		return err
 	}
@@ -80,11 +80,11 @@ func (h *Handler) Contents(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	parentID, err := optionalQueryID(r, "parent_id")
+	parentID, err := httpquery.OptionalUUID(r, "parent_id")
 	if err != nil {
 		return err
 	}
-	age, err := optionalQueryInt(r, "age")
+	age, err := httpquery.OptionalInt(r, "age")
 	if err != nil {
 		return err
 	}
@@ -147,50 +147,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
 }
 
 func pagination(r *http.Request) (int, int, error) {
-	limit, err := queryInt(r, "limit")
+	limit, err := httpquery.Int(r, "limit")
 	if err != nil {
 		return 0, 0, err
 	}
-	offset, err := queryInt(r, "offset")
+	offset, err := httpquery.Int(r, "offset")
 	return limit, offset, err
-}
-
-func queryInt(r *http.Request, name string) (int, error) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return 0, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
-	}
-	return value, nil
-}
-
-// optionalQueryID parses an optional UUID query parameter. A missing or empty
-// value yields nil, which callers read as "not scoped".
-func optionalQueryInt(r *http.Request, name string) (*int, error) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return nil, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return nil, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
-	}
-	return &value, nil
-}
-
-func optionalQueryID(r *http.Request, name string) (*uuid.UUID, error) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return nil, nil
-	}
-	parsed, err := uuid.Parse(raw)
-	if err != nil {
-		return nil, apperr.ErrBadRequest.WithMessage(name + " must be a UUID")
-	}
-	return &parsed, nil
 }
 
 func pathID(r *http.Request) (uuid.UUID, error) {

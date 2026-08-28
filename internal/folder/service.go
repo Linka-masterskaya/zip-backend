@@ -7,6 +7,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/packfilter"
 	"github.com/google/uuid"
 )
 
@@ -160,14 +161,10 @@ func validateContentsFilters(input *ContentsInput) error {
 	if input.Type != "" && input.Type != "folder" && input.Type != "pack" {
 		return apperr.ErrBadRequest.WithMessage("type must be folder or pack")
 	}
-	if input.Age != nil && (*input.Age < 3 || *input.Age > 18) {
-		return apperr.ErrBadRequest.WithMessage("age must be between 3 and 18")
+	if err := packfilter.ValidateAge("age", input.Age); err != nil {
+		return err
 	}
-	if input.Difficulty != "" && input.Difficulty != "easy" &&
-		input.Difficulty != "medium" && input.Difficulty != "hard" {
-		return apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
-	}
-	return nil
+	return packfilter.ValidateDifficulty(input.Difficulty)
 }
 
 func validSection(value string) bool {

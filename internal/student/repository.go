@@ -15,10 +15,6 @@ import (
 var (
 	ErrNotFound  = errors.New("student not found")
 	ErrHasFolder = errors.New("student has a folder")
-	// ErrHasPublishedPack — в папке ученика лежит опубликованный набор.
-	// Такой набор виден всей организации через библиотеку, поэтому снести
-	// его вместе с учеником нельзя: сначала снимают публикацию.
-	ErrHasPublishedPack = errors.New("student folder has a published pack")
 )
 
 type Repository struct {
@@ -288,7 +284,7 @@ func (r *Repository) ForceDelete(ctx context.Context, ownerID, studentID uuid.UU
 		return fmt.Errorf("student force delete lock: %w", err)
 	}
 
-	folderIDs, maxDepth, err := studentFolderTree(ctx, tx, ownerID, studentID)
+	folderIDs, maxDepth, err := studentFolderTree(ctx, tx, studentID)
 	if err != nil {
 		return err
 	}
@@ -316,22 +312,25 @@ func (r *Repository) ForceDelete(ctx context.Context, ownerID, studentID uuid.UU
 }
 
 // studentFolderTree возвращает папку ученика вместе со всеми вложенными.
+// По владельцу здесь не фильтруем: право на удаление уже проверено локом
+// строки ученика, а любая папка, ссылающаяся на него, обязана уйти — иначе
+// folders.student_id с RESTRICT уронит транзакцию.
 func studentFolderTree(
 	ctx context.Context,
 	tx pgx.Tx,
-	ownerID, studentID uuid.UUID,
+	studentID uuid.UUID,
 ) ([]uuid.UUID, int, error) {
 	rows, err := tx.Query(ctx, `
 		WITH RECURSIVE tree AS (
 			SELECT f.id, f.depth
 			FROM folders f
-			WHERE f.student_id = $2 AND f.owner_id = $1
+			WHERE f.student_id = $1
 			UNION ALL
 			SELECT c.id, c.depth
 			FROM folders c
 			JOIN tree t ON c.parent_id = t.id
 		)
-		SELECT id, depth FROM tree`, ownerID, studentID)
+		SELECT id, depth FROM tree`, studentID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("student force delete folder tree: %w", err)
 	}
@@ -369,16 +368,10 @@ func purgeStudentPacks(
 	folderIDs []uuid.UUID,
 ) error {
 	if len(folderIDs) > 0 {
-		var published int
-		if err := tx.QueryRow(ctx, `
-			SELECT count(*) FROM packs
-			WHERE folder_id = ANY($1) AND published_at IS NOT NULL`,
-			folderIDs).Scan(&published); err != nil {
-			return fmt.Errorf("student force delete published check: %w", err)
-		}
-		if published > 0 {
-			return ErrHasPublishedPack
-		}
+		// Опубликованный набор уходит вместе с остальными: просили удалять
+		// ученика «даже с папками», а отказ вернул бы ровно тот тупик, из-за
+		// которого ручку и заводили. Публикация — это ссылка на библиотечную
+		// папку в самой строке набора, поэтому отдельно снимать её не нужно.
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM media_usages
 			WHERE source_type = 'pack'

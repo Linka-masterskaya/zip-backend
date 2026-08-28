@@ -10,6 +10,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/internal/packfilter"
 	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 )
@@ -234,11 +235,11 @@ func validateListInput(input ListInput) (ListInput, error) {
 }
 
 func validateListFilters(input ListInput) error {
-	if input.Age != nil && (*input.Age < 3 || *input.Age > 18) {
-		return apperr.ErrBadRequest.WithMessage("age must be between 3 and 18")
+	if err := packfilter.ValidateAge("age", input.Age); err != nil {
+		return err
 	}
-	if input.Difficulty != "" && !validDifficulty(input.Difficulty) {
-		return apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
+	if err := packfilter.ValidateDifficulty(input.Difficulty); err != nil {
+		return err
 	}
 	if input.Section != "" && !validSection(input.Section) {
 		return apperr.ErrBadRequest.WithMessage("section must be library, my, or students")
@@ -260,10 +261,6 @@ func validateListSort(input ListInput) error {
 
 func validPackSortBy(value string) bool {
 	return value == "updated_at" || value == "created_at" || value == "title"
-}
-
-func validDifficulty(value string) bool {
-	return value == "easy" || value == "medium" || value == "hard"
 }
 
 func validSection(value string) bool {
@@ -288,21 +285,22 @@ func validateUpdate(input *UpdateInput) error {
 }
 
 func validateFilterMetadata(metadata *FilterMetadataPatch) error {
-	if metadata.AgeMin.Set && metadata.AgeMin.Value != nil &&
-		(*metadata.AgeMin.Value < 3 || *metadata.AgeMin.Value > 18) {
-		return apperr.ErrBadRequest.WithMessage("age_min must be between 3 and 18")
+	if metadata.AgeMin.Set {
+		if err := packfilter.ValidateAge("age_min", metadata.AgeMin.Value); err != nil {
+			return err
+		}
 	}
-	if metadata.AgeMax.Set && metadata.AgeMax.Value != nil &&
-		(*metadata.AgeMax.Value < 3 || *metadata.AgeMax.Value > 18) {
-		return apperr.ErrBadRequest.WithMessage("age_max must be between 3 and 18")
+	if metadata.AgeMax.Set {
+		if err := packfilter.ValidateAge("age_max", metadata.AgeMax.Value); err != nil {
+			return err
+		}
 	}
 	if invalidAgeRange(metadata) {
 		return apperr.ErrBadRequest.WithMessage("age_min must not exceed age_max")
 	}
 	if metadata.Difficulty.Set && metadata.Difficulty.Value != nil {
-		difficulty := *metadata.Difficulty.Value
-		if !validDifficulty(difficulty) {
-			return apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
+		if err := packfilter.ValidateDifficulty(*metadata.Difficulty.Value); err != nil {
+			return err
 		}
 	}
 	return nil

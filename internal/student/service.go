@@ -11,6 +11,8 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/avatar"
+	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/google/uuid"
 )
 
@@ -22,6 +24,12 @@ type repository interface {
 	ForceDelete(context.Context, uuid.UUID, uuid.UUID) error
 	Owned(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 	AvatarMediaAccessible(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+}
+
+// mediaUploader — часть банка медиа: аватар ученика хранится обычным файлом
+// организации, поэтому загрузка идёт тем же путём, что и POST /media.
+type mediaUploader interface {
+	Upload(context.Context, []byte, string) (*media.Response, error)
 }
 
 // objectStorage — часть MinIO, нужная для ссылки на аватар.
@@ -41,8 +49,7 @@ const avatarURLTTL = 15 * time.Minute
 // поля при создании, и явный null при обновлении.
 const defaultCardsShift = "full"
 
-var errCardsShift = apperr.ErrBadRequest.WithMessage(
-	"invalid cards_shift. allowed: left, full, right")
+const cardsShiftMessage = "invalid cards_shift. allowed: left, full, right"
 
 type Service struct {
 	repo     repository
@@ -66,11 +73,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 		return nil, err
 	}
 	normalizeCreate(&input)
-	if err = validate(input.Email, input.Name, input.Age, input.Status); err != nil {
+	if err = validate(input.Email, input.Name, input.Age, input.Status, *input.CardsShift); err != nil {
 		return nil, err
-	}
-	if !validCardsShift(*input.CardsShift) {
-		return nil, errCardsShift
 	}
 	if err = s.checkAvatarMedia(ctx, ownerID, input.AvatarMediaID); err != nil {
 		return nil, err
@@ -200,7 +204,7 @@ func applyCardsShift(input UpdateInput, result *storedUpdate) error {
 		value = strings.TrimSpace(*input.CardsShift.Value)
 	}
 	if !validCardsShift(value) {
-		return errCardsShift
+		return apperr.ErrBadRequest.WithMessage(cardsShiftMessage)
 	}
 	result.CardsShift = &value
 	return nil
@@ -241,15 +245,60 @@ func validateUpdate(input UpdateInput) error {
 	return nil
 }
 
-func (s *Service) Delete(ctx context.Context, studentID uuid.UUID, force bool) error {
+// ReplaceAvatar кладёт картинку в банк медиа и ставит её ученику. Порядок
+// важен: сначала убеждаемся, что ученик существует и наш, иначе опечатка в
+// id оставила бы в банке файл, который никому не нужен.
+func (s *Service) ReplaceAvatar(
+	ctx context.Context,
+	studentID uuid.UUID,
+	data []byte,
+	name string,
+) (*Student, error) {
+	ownerID, err := owner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if avatar.DetectMIME(data) == "" {
+		return nil, apperr.ErrBadRequest.WithMessage("avatar must be png, jpeg, or webp image")
+	}
+	owned, err := s.repo.Owned(ctx, ownerID, studentID)
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		return nil, apperr.ErrNotFound
+	}
+	uploaded, err := s.uploader.Upload(ctx, data, name)
+	if err != nil {
+		return nil, err
+	}
+	stored, err := s.repo.Update(ctx, ownerID, studentID, storedUpdate{
+		AvatarMediaID: &uploaded.ID, AvatarMediaIDSet: true,
+	})
+	if err != nil {
+		return nil, mapStudentError(err)
+	}
+	return s.decode(ctx, stored)
+}
+
+// Delete архивирует ученика: карточка остаётся в базе с проставленным
+// deleted_at, поэтому папку за собой не тянет и при её наличии отдаёт 409.
+func (s *Service) Delete(ctx context.Context, studentID uuid.UUID) error {
 	ownerID, err := owner(ctx)
 	if err != nil {
 		return err
 	}
-	if force {
-		return mapStudentError(s.repo.ForceDelete(ctx, ownerID, studentID))
-	}
 	return mapStudentError(s.repo.Delete(ctx, ownerID, studentID))
+}
+
+// ForceDelete сносит ученика насовсем — вместе с папкой, вложенными папками
+// и наборами внутри них.
+func (s *Service) ForceDelete(ctx context.Context, studentID uuid.UUID) error {
+	ownerID, err := owner(ctx)
+	if err != nil {
+		return err
+	}
+	return mapStudentError(s.repo.ForceDelete(ctx, ownerID, studentID))
 }
 
 // checkAvatarMedia отклоняет ссылку на чужой или несуществующий файл до
@@ -328,12 +377,15 @@ func normalizeCreate(input *CreateInput) {
 	input.CardsShift = &value
 }
 
-func validate(email, name string, age *int, status string) error {
+func validate(email, name string, age *int, status, cardsShift string) error {
 	if !validEmail(email) || name == "" || !validStatus(status) {
 		return apperr.ErrBadRequest
 	}
 	if age != nil && (*age < 0 || *age > 100) {
 		return apperr.ErrBadRequest
+	}
+	if !validCardsShift(cardsShift) {
+		return apperr.ErrBadRequest.WithMessage(cardsShiftMessage)
 	}
 	return nil
 }
@@ -360,9 +412,6 @@ func mapStudentError(err error) error {
 		return apperr.ErrNotFound
 	case errors.Is(err, ErrHasFolder):
 		return apperr.ErrConflict
-	case errors.Is(err, ErrHasPublishedPack):
-		return apperr.ErrConflict.WithMessage(
-			"student folder contains published packs. unpublish them first")
 	default:
 		return err
 	}

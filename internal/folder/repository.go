@@ -510,35 +510,24 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 	return appendContentsFilters(query, args, input)
 }
 
-// appendContentsFilters навешивает фильтры на общий список папок и наборов.
-// Возраст и сложность есть только у наборов, поэтому такие фильтры сами по
-// себе отсекают папки — у них эти поля пустые.
+// contentsFilters — общий хвост запроса: фильтры идут по одним и тем же
+// плейсхолдерам, поэтому их номера фиксированы относительно args, а не
+// считаются на лету. Возраст и сложность есть только у наборов, поэтому
+// такие фильтры сами по себе отсекают папки — у них эти поля пустые.
 func appendContentsFilters(query string, args []any, input ContentsInput) (string, []any) {
-	next := func() string { return fmt.Sprintf("$%d", len(args)+1) }
+	first := len(args) + 1
+	filters := fmt.Sprintf(`
+		WHERE ($%d::text = '' OR name ILIKE '%%' || $%d::text || '%%')
+		  AND ($%d::text = '' OR type = $%d::text)
+		  AND ($%d::int IS NULL OR (age_min <= $%d::int AND $%d::int <= age_max))
+		  AND ($%d::text = '' OR difficulty = $%d::text)`,
+		first, first,
+		first+1, first+1,
+		first+2, first+2, first+2,
+		first+3, first+3)
 
-	conditions := make([]string, 0, 4)
-	placeholder := next()
-	conditions = append(conditions,
-		"("+placeholder+"::text = '' OR name ILIKE '%' || "+placeholder+"::text || '%')")
-	args = append(args, input.Query)
-
-	placeholder = next()
-	conditions = append(conditions,
-		"("+placeholder+"::text = '' OR type = "+placeholder+"::text)")
-	args = append(args, input.Type)
-
-	placeholder = next()
-	conditions = append(conditions,
-		"("+placeholder+"::int IS NULL OR (age_min <= "+placeholder+
-			"::int AND "+placeholder+"::int <= age_max))")
-	args = append(args, input.Age)
-
-	placeholder = next()
-	conditions = append(conditions,
-		"("+placeholder+"::text = '' OR difficulty = "+placeholder+"::text)")
-	args = append(args, input.Difficulty)
-
-	return query + "\n\t\tWHERE " + strings.Join(conditions, "\n\t\t  AND "), args
+	args = append(args, input.Query, input.Type, input.Age, input.Difficulty)
+	return query + filters, args
 }
 
 func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {

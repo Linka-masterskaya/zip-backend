@@ -103,6 +103,14 @@ type storedUpdate struct {
 	AvatarMediaIDSet bool
 }
 
+// avatarResponse отвечает на PUT /students/{id}/avatar. Кроме ссылки
+// возвращаем и идентификатор файла: им клиент потом снимает или меняет
+// аватар через PATCH.
+type avatarResponse struct {
+	AvatarURL     *string    `json:"avatar_url"`
+	AvatarMediaID *uuid.UUID `json:"avatar_media_id"`
+}
+
 type ListInput struct {
 	SortBy string
 	Order  string

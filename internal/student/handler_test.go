@@ -3,12 +3,14 @@ package student
 import (
 	"bytes"
 	"context"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,8 +47,10 @@ func (c *captureService) ReplaceAvatar(
 	return &Student{ID: uuid.New(), AvatarMediaID: &mediaID, AvatarURL: &url}, nil
 }
 
-func (c *captureService) Delete(_ context.Context, _ uuid.UUID, force bool) error {
-	c.force = force
+func (c *captureService) Delete(context.Context, uuid.UUID) error { return nil }
+
+func (c *captureService) ForceDelete(_ context.Context, _ uuid.UUID) error {
+	c.force = true
 	return nil
 }
 
@@ -232,4 +236,25 @@ func TestDeleteReadsForceFlag(t *testing.T) {
 		_, err := deleteStudent(t, "?force=maybe")
 		require.Error(t, err)
 	})
+}
+
+// TestUpdateExplainsReadOnlyAvatarURL: фронт по привычке шлёт avatar_url,
+// хотя ссылка presigned и только читается. Ответ должен подсказывать, чем
+// её заменить, а не отдавать безымянный 400.
+func TestUpdateExplainsReadOnlyAvatarURL(t *testing.T) {
+	service := &captureService{}
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPatch, "/api/v1/students/x",
+		strings.NewReader(`{"avatar_url":"https://minio.test/a.png"}`),
+	)
+	req.SetPathValue("id", uuid.New().String())
+
+	err := NewHandler(service).Update(httptest.NewRecorder(), req)
+
+	require.Error(t, err)
+	var appErr *apperr.AppError
+	require.True(t, errors.As(err, &appErr))
+	assert.Equal(t, http.StatusBadRequest, appErr.HTTPStatus)
+	assert.Contains(t, appErr.Message, "PUT /students/{id}/avatar")
+	assert.Contains(t, appErr.Message, "avatar_media_id")
 }

@@ -55,16 +55,16 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 		FROM users WHERE id = $1`, ownerID, created.ID)
 	require.NoError(t, err)
 
-	err = service.Delete(studentContext(ownerID), created.ID, false)
+	err = service.Delete(studentContext(ownerID), created.ID)
 	assertStudentStatus(t, err, apperr.ErrConflict.HTTPStatus)
 	_, err = pool.Exec(context.Background(), `DELETE FROM folders WHERE student_id = $1`, created.ID)
 	require.NoError(t, err)
-	require.NoError(t, service.Delete(studentContext(ownerID), created.ID, false))
+	require.NoError(t, service.Delete(studentContext(ownerID), created.ID))
 
 	ownerList, err = service.List(studentContext(ownerID), ListInput{})
 	require.NoError(t, err)
 	assert.Empty(t, ownerList.Items)
-	err = service.Delete(studentContext(foreignID), created.ID, false)
+	err = service.Delete(studentContext(foreignID), created.ID)
 	assertStudentStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
 
@@ -446,10 +446,10 @@ func TestStudentForceDeleteRemovesFolderTree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Без force ученик с папкой не удаляется.
-	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID, false),
+	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID),
 		apperr.ErrConflict.HTTPStatus)
 
-	require.NoError(t, service.Delete(studentContext(ownerID), created.ID, true))
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), created.ID))
 
 	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 0)
 	assertCount(t, pool, `SELECT count(*) FROM folders WHERE student_id = $1`, created.ID, 0)
@@ -461,13 +461,14 @@ func TestStudentForceDeleteRemovesFolderTree(t *testing.T) {
 	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, mediaID, 1)
 
 	// Повторный вызов — 404.
-	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID, true),
+	assertStudentStatus(t, service.ForceDelete(studentContext(ownerID), created.ID),
 		apperr.ErrNotFound.HTTPStatus)
 }
 
-// TestStudentForceDeleteRefusesPublishedPack: опубликованный набор виден
-// всей организации, поэтому вместе с учеником он не сносится.
-func TestStudentForceDeleteRefusesPublishedPack(t *testing.T) {
+// TestStudentForceDeleteRemovesPublishedPack: опубликованный набор в папке
+// ученика удаление не блокирует — иначе ручка упиралась бы ровно в тот
+// тупик, из-за которого её и просили.
+func TestStudentForceDeleteRemovesPublishedPack(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
 	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
@@ -492,11 +493,12 @@ func TestStudentForceDeleteRefusesPublishedPack(t *testing.T) {
 		WHERE id = $1`, packID, libraryID)
 	require.NoError(t, err)
 
-	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID, true),
-		apperr.ErrConflict.HTTPStatus)
-	// Транзакция откатилась целиком: ученик и набор на месте.
-	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 1)
-	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packID, 1)
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), created.ID))
+
+	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packID, 0)
+	// Библиотечная папка — не папка ученика, её удаление не касается.
+	assertCount(t, pool, `SELECT count(*) FROM folders WHERE id = $1`, libraryID, 1)
 }
 
 // TestStudentForceDeleteWithoutFolder: ученика без папки force тоже сносит
@@ -513,10 +515,10 @@ func TestStudentForceDeleteWithoutFolder(t *testing.T) {
 	require.NoError(t, err)
 
 	// Чужого ученика снести нельзя.
-	assertStudentStatus(t, service.Delete(studentContext(foreignID), created.ID, true),
+	assertStudentStatus(t, service.ForceDelete(studentContext(foreignID), created.ID),
 		apperr.ErrNotFound.HTTPStatus)
 
-	require.NoError(t, service.Delete(studentContext(ownerID), created.ID, true))
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), created.ID))
 	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 0)
 }
 
