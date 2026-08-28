@@ -833,14 +833,24 @@ func TestRepositoryListFiltersByStudent(t *testing.T) {
 	require.Len(t, forB, 1)
 	assert.Equal(t, other.ID, forB[0].ID)
 
-	// Фильтр складывается с разделом.
+	// Фильтр складывается с разделом. Адаптация числится в разделе
+	// students по папке ученика, хотя сам набор лежит в «Моих наборах»,
+	// поэтому из выдачи она не выпадает.
 	scoped, err := repo.List(t.Context(), userID, ListInput{
 		StudentID: &studentA, Section: "students", Limit: 50,
 	})
 	require.NoError(t, err)
 	scopedItems := listItemsByID(scoped)
 	assert.Contains(t, scopedItems, direct.ID)
-	assert.NotContains(t, scopedItems, mine.ID, "адаптация лежит в разделе students, но набор — в my")
+	assert.Contains(t, scopedItems, nested.ID)
+	require.Contains(t, scopedItems, mine.ID)
+	assert.Equal(t, "students", scopedItems[mine.ID].Section)
+
+	inMy, err := repo.List(t.Context(), userID, ListInput{
+		StudentID: &studentA, Section: "my", Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, inMy, "в «Моих наборах» у набора нет ученика")
 
 	unknown := uuid.New()
 	empty, err := repo.List(t.Context(), userID, ListInput{StudentID: &unknown, Limit: 50})

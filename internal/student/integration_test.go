@@ -487,7 +487,8 @@ func TestStudentForceDeleteRefusesPublishedPack(t *testing.T) {
 		FROM users WHERE id = $1
 		RETURNING id`, ownerID).Scan(&libraryID))
 	_, err = pool.Exec(context.Background(), `
-		UPDATE packs SET library_folder_id = $2, published_at = now()
+		UPDATE packs
+		SET library_folder_id = $2, published_at = now(), status = 'published'
 		WHERE id = $1`, packID, libraryID)
 	require.NoError(t, err)
 
