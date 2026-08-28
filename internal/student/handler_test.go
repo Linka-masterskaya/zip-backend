@@ -93,3 +93,54 @@ func TestUpdateRejectsMalformedAvatarMediaID(t *testing.T) {
 	err := NewHandler(service).Update(rec, req)
 	require.Error(t, err, "битый uuid не должен доезжать до сервиса")
 }
+
+// TestUpdateDistinguishesMissingCardsShiftFromNull — та же договорённость,
+// что и по аватару: отсутствие поля не трогает раскладку, null сбрасывает
+// её к значению по умолчанию.
+func TestUpdateDistinguishesMissingCardsShiftFromNull(t *testing.T) {
+	t.Run("поле не передано", func(t *testing.T) {
+		service, _ := patchStudent(t, `{"name":"Аня"}`)
+		assert.False(t, service.update.CardsShift.Set, "раскладка не должна трогаться")
+	})
+
+	t.Run("передан null", func(t *testing.T) {
+		service, _ := patchStudent(t, `{"cards_shift":null}`)
+		assert.True(t, service.update.CardsShift.Set)
+		assert.Nil(t, service.update.CardsShift.Value, "null — сброс к значению по умолчанию")
+	})
+
+	t.Run("передано значение", func(t *testing.T) {
+		service, _ := patchStudent(t, `{"cards_shift":"left"}`)
+		require.True(t, service.update.CardsShift.Set)
+		require.NotNil(t, service.update.CardsShift.Value)
+		assert.Equal(t, "left", *service.update.CardsShift.Value)
+	})
+}
+
+func TestCreateAcceptsCardsShift(t *testing.T) {
+	service := &captureService{}
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/students",
+		strings.NewReader(`{"email":"a@b.c","name":"Аня","cards_shift":"right"}`),
+	)
+	rec := httptest.NewRecorder()
+	require.NoError(t, NewHandler(service).Create(rec, req))
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.NotNil(t, service.create.CardsShift)
+	assert.Equal(t, "right", *service.create.CardsShift)
+}
+
+// TestUpdateRejectsNonStringCardsShift: тип проверяется ещё на разборе тела,
+// до сервиса.
+func TestUpdateRejectsNonStringCardsShift(t *testing.T) {
+	service := &captureService{}
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPatch, "/api/v1/students/x",
+		strings.NewReader(`{"cards_shift":1}`),
+	)
+	req.SetPathValue("id", uuid.New().String())
+	rec := httptest.NewRecorder()
+
+	require.Error(t, NewHandler(service).Update(rec, req))
+}

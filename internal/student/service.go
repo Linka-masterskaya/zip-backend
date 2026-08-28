@@ -35,6 +35,13 @@ type crypto interface {
 // avatarURLTTL совпадает с TTL ссылок в профиле и медиа.
 const avatarURLTTL = 15 * time.Minute
 
+// defaultCardsShift — раскладка карточек, к которой сводится и отсутствие
+// поля при создании, и явный null при обновлении.
+const defaultCardsShift = "full"
+
+var errCardsShift = apperr.ErrBadRequest.WithMessage(
+	"invalid cards_shift. allowed: left, full, right")
+
 type Service struct {
 	repo    repository
 	crypto  crypto
@@ -53,6 +60,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 	normalizeCreate(&input)
 	if err = validate(input.Email, input.Name, input.Age, input.Status); err != nil {
 		return nil, err
+	}
+	if !validCardsShift(*input.CardsShift) {
+		return nil, errCardsShift
 	}
 	if err = s.checkAvatarMedia(ctx, ownerID, input.AvatarMediaID); err != nil {
 		return nil, err
@@ -116,7 +126,8 @@ func (s *Service) Update(
 		return nil, err
 	}
 	if input.Email == nil && input.Name == nil && input.Age == nil &&
-		input.Status == nil && input.LastLessonAt == nil && !input.AvatarMediaID.Set {
+		input.Status == nil && input.LastLessonAt == nil &&
+		!input.CardsShift.Set && !input.AvatarMediaID.Set {
 		return nil, apperr.ErrBadRequest
 	}
 	if input.AvatarMediaID.Set {
@@ -150,6 +161,16 @@ func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 		value := strings.TrimSpace(*input.Status)
 		input.Status = &value
 		result.Status = &value
+	}
+	if input.CardsShift.Set {
+		value := defaultCardsShift
+		if input.CardsShift.Value != nil {
+			value = strings.TrimSpace(*input.CardsShift.Value)
+		}
+		if !validCardsShift(value) {
+			return storedUpdate{}, errCardsShift
+		}
+		result.CardsShift = &value
 	}
 	if input.Email != nil {
 		value := strings.ToLower(strings.TrimSpace(*input.Email))
@@ -212,9 +233,11 @@ func (s *Service) decode(ctx context.Context, stored *storedStudent) (*Student, 
 	if err != nil {
 		return nil, fmt.Errorf("student decrypt email: %w", err)
 	}
+	cardsShift := stored.CardsShift
 	return &Student{
 		ID: stored.ID, Email: string(email), EmailVerified: stored.EmailVerified,
-		Name: stored.Name, Age: stored.Age, Status: stored.Status, LastLessonAt: stored.LastLessonAt,
+		Name: stored.Name, Age: stored.Age, Status: stored.Status,
+		CardsShift: &cardsShift, LastLessonAt: stored.LastLessonAt,
 		AvatarMediaID: stored.AvatarMediaID, AvatarURL: s.avatarURL(ctx, stored),
 		CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt,
 	}, nil
@@ -257,6 +280,11 @@ func normalizeCreate(input *CreateInput) {
 	if input.Status == "" {
 		input.Status = "active"
 	}
+	value := defaultCardsShift
+	if input.CardsShift != nil {
+		value = strings.TrimSpace(*input.CardsShift)
+	}
+	input.CardsShift = &value
 }
 
 func validate(email, name string, age *int, status string) error {
@@ -272,6 +300,10 @@ func validate(email, name string, age *int, status string) error {
 func validEmail(value string) bool {
 	address, err := mail.ParseAddress(value)
 	return err == nil && address.Address == value && strings.Contains(value, "@")
+}
+
+func validCardsShift(value string) bool {
+	return value == "left" || value == "full" || value == "right"
 }
 
 func validStatus(value string) bool {

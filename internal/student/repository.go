@@ -34,9 +34,9 @@ func (r *Repository) Create(
 		WITH created AS (
 			INSERT INTO students (
 				id, defectologist_id, email_encrypted, name, age, status,
-				avatar_media_id
+				cards_shift, avatar_media_id
 			)
-			SELECT $1, u.id, $3, $4, $5, $6, $7
+			SELECT $1, u.id, $3, $4, $5, $6, $7, $8
 			FROM users u
 			WHERE u.id = $2 AND u.deleted_at IS NULL
 			RETURNING `+studentColumns+`
@@ -45,7 +45,7 @@ func (r *Repository) Create(
 		FROM created s
 		LEFT JOIN media_files m ON m.id = s.avatar_media_id`,
 		uuid.New(), ownerID, emailEncrypted, input.Name, input.Age, input.Status,
-		input.AvatarMediaID)
+		input.CardsShift, input.AvatarMediaID)
 	result, err := scanStudent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -136,6 +136,7 @@ func (r *Repository) Update(
 			    name = COALESCE($5, name),
 			    age = COALESCE($6, age),
 			    status = COALESCE($7, status),
+			    cards_shift = COALESCE($12, cards_shift),
 			    last_lesson_at = CASE WHEN $8 THEN $9 ELSE last_lesson_at END,
 			    avatar_media_id = CASE WHEN $10 THEN $11 ELSE avatar_media_id END,
 			    updated_at = now()
@@ -148,7 +149,7 @@ func (r *Repository) Update(
 		ownerID, studentID, input.EmailSet, input.EmailEncrypted,
 		input.Name, input.Age, input.Status,
 		input.LastLessonSet, input.LastLessonAt,
-		input.AvatarMediaIDSet, input.AvatarMediaID)
+		input.AvatarMediaIDSet, input.AvatarMediaID, input.CardsShift)
 	result, err := scanStudent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -219,7 +220,8 @@ func scanStudent(row interface{ Scan(...any) error }) (*storedStudent, error) {
 	var result storedStudent
 	err := row.Scan(
 		&result.ID, &result.EmailEncrypted, &result.EmailVerified,
-		&result.Name, &result.Age, &result.Status, &result.LastLessonAt,
+		&result.Name, &result.Age, &result.Status, &result.CardsShift,
+		&result.LastLessonAt,
 		&result.AvatarMediaID, &result.AvatarKey,
 		&result.CreatedAt, &result.UpdatedAt, &result.DeletedAt,
 	)
@@ -227,13 +229,13 @@ func scanStudent(row interface{ Scan(...any) error }) (*storedStudent, error) {
 }
 
 const studentColumns = `
-	id, email_encrypted, email_verified, name, age, status, last_lesson_at,
-	avatar_media_id, created_at, updated_at, deleted_at`
+	id, email_encrypted, email_verified, name, age, status, cards_shift,
+	last_lesson_at, avatar_media_id, created_at, updated_at, deleted_at`
 
 // studentColumnsWithAvatar добавляет ключ объекта аватара из media_files.
 // Ключ нужен, чтобы сервис выписал presigned-ссылку; в самой таблице
 // students его нет.
 const studentColumnsWithAvatar = `
 	s.id, s.email_encrypted, s.email_verified, s.name, s.age, s.status,
-	s.last_lesson_at, s.avatar_media_id, m.minio_key,
+	s.cards_shift, s.last_lesson_at, s.avatar_media_id, m.minio_key,
 	s.created_at, s.updated_at, s.deleted_at`

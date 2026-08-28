@@ -262,3 +262,59 @@ func TestStudentAvatarClearedWhenMediaDeleted(t *testing.T) {
 	assert.Nil(t, list.Items[0].AvatarMediaID)
 	assert.Nil(t, list.Items[0].AvatarURL)
 }
+
+// TestStudentCardsShiftLifecycle: значение по умолчанию, смена, сброс через
+// null и отказ для значения вне списка.
+func TestStudentCardsShiftLifecycle(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "shift@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.CardsShift)
+	assert.Equal(t, "full", *created.CardsShift, "по умолчанию — full")
+
+	left := "left"
+	updated, err := service.Update(studentContext(ownerID), created.ID, UpdateInput{
+		CardsShift: nullableField[string]{Set: true, Value: &left},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated.CardsShift)
+	assert.Equal(t, "left", *updated.CardsShift)
+
+	// Отсутствие поля раскладку не трогает.
+	newName := "Аня П."
+	untouched, err := service.Update(studentContext(ownerID), created.ID, UpdateInput{Name: &newName})
+	require.NoError(t, err)
+	require.NotNil(t, untouched.CardsShift)
+	assert.Equal(t, "left", *untouched.CardsShift)
+
+	// null возвращает значение по умолчанию.
+	reset, err := service.Update(studentContext(ownerID), created.ID, UpdateInput{
+		CardsShift: nullableField[string]{Set: true},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, reset.CardsShift)
+	assert.Equal(t, "full", *reset.CardsShift)
+
+	// Список отдаёт раскладку по каждому ученику.
+	list, err := service.List(studentContext(ownerID), ListInput{})
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	require.NotNil(t, list.Items[0].CardsShift)
+	assert.Equal(t, "full", *list.Items[0].CardsShift)
+
+	center := "center"
+	_, err = service.Update(studentContext(ownerID), created.ID, UpdateInput{
+		CardsShift: nullableField[string]{Set: true, Value: &center},
+	})
+	assertStudentStatus(t, err, 400)
+
+	_, err = service.Create(studentContext(ownerID), CreateInput{
+		Email: "bad-shift@example.com", Name: "Петя", CardsShift: &center,
+	})
+	assertStudentStatus(t, err, 400)
+}
