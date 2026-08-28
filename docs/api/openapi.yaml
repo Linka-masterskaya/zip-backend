@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Linka Backend API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     Auth + Profile для Linka Editor. Сверено с дизайном.
     Без username. Вход по email. Refresh — httpOnly cookie (SameSite=Strict). Access — Bearer JWT (HS256, 15m).
