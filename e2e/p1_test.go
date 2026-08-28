@@ -567,7 +567,7 @@ func e2eServer(
 		pack.NewContentService(packRepo, objectStorage, mediaService, packService),
 	)
 	folderHandler := folder.NewHandler(folder.NewService(folder.NewRepository(pool)))
-	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto, objectStorage))
+	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto, objectStorage, mediaService))
 
 	mux := http.NewServeMux()
 	auth := middleware.NewAuthMW([]byte(e2eJWTSecret))

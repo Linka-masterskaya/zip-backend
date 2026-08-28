@@ -212,24 +212,14 @@ func validateListInput(input ListInput) (ListInput, error) {
 	input.Query = strings.TrimSpace(input.Query)
 	input.Difficulty = strings.TrimSpace(input.Difficulty)
 	input.Section = strings.TrimSpace(input.Section)
-	if input.Age != nil && (*input.Age < 3 || *input.Age > 18) {
-		return ListInput{}, apperr.ErrBadRequest.WithMessage("age must be between 3 and 18")
-	}
-	if input.Difficulty != "" && !validDifficulty(input.Difficulty) {
-		return ListInput{}, apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
-	}
-	if input.Section != "" && !validSection(input.Section) {
-		return ListInput{}, apperr.ErrBadRequest.WithMessage("section must be library, my, or students")
-	}
 	input.SortBy = strings.TrimSpace(input.SortBy)
 	input.Order = strings.TrimSpace(input.Order)
-	if input.SortBy != "" && !validPackSortBy(input.SortBy) {
-		return ListInput{}, apperr.ErrBadRequest.WithMessage(
-			"sort_by must be updated_at, created_at, or title")
+
+	if err := validateListFilters(input); err != nil {
+		return ListInput{}, err
 	}
-	if input.Order != "" && !strings.EqualFold(input.Order, "asc") &&
-		!strings.EqualFold(input.Order, "desc") {
-		return ListInput{}, apperr.ErrBadRequest.WithMessage("order must be asc or desc")
+	if err := validateListSort(input); err != nil {
+		return ListInput{}, err
 	}
 	if input.Limit == 0 {
 		input.Limit = defaultLimit
@@ -241,6 +231,31 @@ func validateListInput(input ListInput) (ListInput, error) {
 		return ListInput{}, apperr.ErrBadRequest.WithMessage("offset must not be negative")
 	}
 	return input, nil
+}
+
+func validateListFilters(input ListInput) error {
+	if input.Age != nil && (*input.Age < 3 || *input.Age > 18) {
+		return apperr.ErrBadRequest.WithMessage("age must be between 3 and 18")
+	}
+	if input.Difficulty != "" && !validDifficulty(input.Difficulty) {
+		return apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
+	}
+	if input.Section != "" && !validSection(input.Section) {
+		return apperr.ErrBadRequest.WithMessage("section must be library, my, or students")
+	}
+	return nil
+}
+
+func validateListSort(input ListInput) error {
+	if input.SortBy != "" && !validPackSortBy(input.SortBy) {
+		return apperr.ErrBadRequest.WithMessage(
+			"sort_by must be updated_at, created_at, or title")
+	}
+	if input.Order != "" && !strings.EqualFold(input.Order, "asc") &&
+		!strings.EqualFold(input.Order, "desc") {
+		return apperr.ErrBadRequest.WithMessage("order must be asc or desc")
+	}
+	return nil
 }
 
 func validPackSortBy(value string) bool {

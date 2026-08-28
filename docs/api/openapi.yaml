@@ -1325,14 +1325,12 @@ paths:
             in: query,
             schema: { type: string, enum: [library, my, students] },
           }
-        - {
-            name: student_id,
-            in: query,
-            schema: { type: string, format: uuid },
-            description: >-
-              Только наборы одного ученика: лежащие в его папке, во вложенных
-              в неё папках и выданные ему адаптации.,
-          }
+        - name: student_id
+          in: query
+          schema: { type: string, format: uuid }
+          description: >-
+            Только наборы одного ученика: лежащие в его папке, во вложенных в
+            неё папках и выданные ему адаптации.
         - {
             name: sort_by,
             in: query,

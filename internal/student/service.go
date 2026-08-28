@@ -160,6 +160,23 @@ func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 		Name: input.Name, Age: input.Age, Status: input.Status, LastLessonAt: input.LastLessonAt,
 		AvatarMediaID: input.AvatarMediaID.Value, AvatarMediaIDSet: input.AvatarMediaID.Set,
 	}
+	trimUpdate(&input, &result)
+	if err := applyCardsShift(input, &result); err != nil {
+		return storedUpdate{}, err
+	}
+	if err := s.applyEmail(input, &result); err != nil {
+		return storedUpdate{}, err
+	}
+	if err := validateUpdate(input); err != nil {
+		return storedUpdate{}, err
+	}
+	if input.LastLessonAt != nil {
+		result.LastLessonSet = true
+	}
+	return result, nil
+}
+
+func trimUpdate(input *UpdateInput, result *storedUpdate) {
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		input.Name = &value
@@ -170,49 +187,60 @@ func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 		input.Status = &value
 		result.Status = &value
 	}
-	if input.CardsShift.Set {
-		value := defaultCardsShift
-		if input.CardsShift.Value != nil {
-			value = strings.TrimSpace(*input.CardsShift.Value)
-		}
-		if !validCardsShift(value) {
-			return storedUpdate{}, errCardsShift
-		}
-		result.CardsShift = &value
+}
+
+// applyCardsShift: отсутствие поля раскладку не трогает, null возвращает
+// значение по умолчанию.
+func applyCardsShift(input UpdateInput, result *storedUpdate) error {
+	if !input.CardsShift.Set {
+		return nil
 	}
-	if input.Email != nil {
-		value := strings.ToLower(strings.TrimSpace(*input.Email))
-		if !validEmail(value) {
-			return storedUpdate{}, apperr.ErrBadRequest.WithMessage("valid email is required")
-		}
-		encrypted, err := s.crypto.Encrypt([]byte(value))
-		if err != nil {
-			return storedUpdate{}, fmt.Errorf("student encrypt email: %w", err)
-		}
-		result.EmailEncrypted = encrypted
-		result.EmailSet = true
+	value := defaultCardsShift
+	if input.CardsShift.Value != nil {
+		value = strings.TrimSpace(*input.CardsShift.Value)
 	}
-	if input.Name != nil && *input.Name == "" {
-		return storedUpdate{}, apperr.ErrBadRequest
+	if !validCardsShift(value) {
+		return errCardsShift
 	}
-	if input.Age != nil && (*input.Age < 0 || *input.Age > 100) {
-		return storedUpdate{}, apperr.ErrBadRequest
+	result.CardsShift = &value
+	return nil
+}
+
+func (s *Service) applyEmail(input UpdateInput, result *storedUpdate) error {
+	if input.Email == nil {
+		return nil
 	}
-	if input.Status != nil && !validStatus(*input.Status) {
-		return storedUpdate{}, apperr.ErrBadRequest
+	value := strings.ToLower(strings.TrimSpace(*input.Email))
+	if !validEmail(value) {
+		return apperr.ErrBadRequest.WithMessage("valid email is required")
+	}
+	encrypted, err := s.crypto.Encrypt([]byte(value))
+	if err != nil {
+		return fmt.Errorf("student encrypt email: %w", err)
+	}
+	result.EmailEncrypted = encrypted
+	result.EmailSet = true
+	return nil
+}
+
+func validateUpdate(input UpdateInput) error {
+	switch {
+	case input.Name != nil && *input.Name == "":
+		return apperr.ErrBadRequest
+	case input.Age != nil && (*input.Age < 0 || *input.Age > 100):
+		return apperr.ErrBadRequest
+	case input.Status != nil && !validStatus(*input.Status):
+		return apperr.ErrBadRequest
 	}
 	if input.LastLessonAt != nil {
 		today := time.Now().Truncate(24 * time.Hour)
 		if input.LastLessonAt.After(today) {
-			return storedUpdate{}, apperr.ErrBadRequest.WithMessage("last_lesson_at cannot be in the future")
+			return apperr.ErrBadRequest.WithMessage("last_lesson_at cannot be in the future")
 		}
-		result.LastLessonSet = true
 	}
-	return result, nil
+	return nil
 }
 
-// Delete архивирует ученика. force сносит его насовсем — вместе с папкой,
-// вложенными папками и наборами внутри.
 func (s *Service) Delete(ctx context.Context, studentID uuid.UUID, force bool) error {
 	ownerID, err := owner(ctx)
 	if err != nil {
