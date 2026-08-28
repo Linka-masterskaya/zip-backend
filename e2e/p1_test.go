@@ -208,6 +208,10 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	require.Len(t, contents.Items, 1)
 	assert.Equal(t, "pack", contents.Items[0].Type)
 	assert.Equal(t, createdPack.ID, contents.Items[0].ID)
+	require.NotNil(t, contents.Items[0].Age)
+	assert.Equal(t, 5, *contents.Items[0].Age)
+	require.NotNil(t, contents.Items[0].Difficulty)
+	assert.Equal(t, "medium", *contents.Items[0].Difficulty)
 
 	t.Run("section root is addressable without a folder id", func(t *testing.T) {
 		// «Мои наборы» — пункт меню, а не папка: id для корня не существует.

@@ -491,7 +491,7 @@ export interface paths {
                     query?: string;
                     /** @description Оставить только папки или только наборы */
                     type?: "folder" | "pack";
-                    /** @description age_min <= age <= age_max. У папок возраста нет, поэтому фильтр оставляет только наборы */
+                    /** @description Точное совпадение с рекомендуемым возрастом набора. У папок возраста нет, поэтому фильтр оставляет только наборы */
                     age?: number;
                     /** @description Свойство набора: папки отсеиваются */
                     difficulty?: "easy" | "medium" | "hard";
@@ -911,7 +911,7 @@ export interface paths {
                 query?: {
                     /** @description Подстрока title без учёта регистра */
                     query?: string;
-                    /** @description age_min <= age <= age_max */
+                    /** @description Точное совпадение с рекомендуемым возрастом набора */
                     age?: number;
                     difficulty?: "easy" | "medium" | "hard";
                     section?: "library" | "my" | "students";
@@ -2682,8 +2682,7 @@ export interface components {
             title: string;
             /** @enum {string} */
             status: "draft" | "published";
-            age_min?: number | null;
-            age_max?: number | null;
+            age?: number | null;
             /** @enum {string|null} */
             difficulty?: "easy" | "medium" | "hard" | null;
             goals: string[];
@@ -2709,8 +2708,7 @@ export interface components {
             title?: string;
             /** Format: uuid */
             folder_id?: string;
-            age_min?: number | null;
-            age_max?: number | null;
+            age?: number | null;
             /** @enum {string|null} */
             difficulty?: "easy" | "medium" | "hard" | null;
             goals?: string[];
@@ -2855,9 +2853,13 @@ export interface components {
             /** @description Общее количество записей для пагинации */
             total: number;
         };
-        ContentItem: {
-            /** @enum {string} */
-            type: "folder" | "pack";
+        ContentItem: components["schemas"]["FolderContentItem"] | components["schemas"]["PackContentItem"];
+        FolderContentItem: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "folder";
             /** Format: uuid */
             id: string;
             name: string;
@@ -2865,7 +2867,26 @@ export interface components {
             kind?: "folder" | "student" | null;
             /** Format: uuid */
             student_id?: string | null;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PackContentItem: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "pack";
+            /** Format: uuid */
+            id: string;
+            name: string;
             published?: boolean;
+            /** @description Рекомендуемый возраст; `null`, если не заполнен */
+            age: number | null;
+            /**
+             * @description Сложность набора; `null`, если не заполнена
+             * @enum {string|null}
+             */
+            difficulty: "easy" | "medium" | "hard" | null;
             /** Format: date-time */
             updated_at: string;
         };

@@ -111,6 +111,8 @@ func TestStudentFolderOwnershipAndMixedContents(t *testing.T) {
 	assert.Equal(t, "folder", page.Items[0].Type)
 	assert.Equal(t, child.ID, page.Items[0].ID)
 	assert.Equal(t, "pack", page.Items[1].Type)
+	assert.Nil(t, page.Items[1].Age)
+	assert.Nil(t, page.Items[1].Difficulty)
 }
 
 func TestConcurrentChildCreateAndParentDeleteNeverCascadesData(t *testing.T) {
@@ -442,6 +444,10 @@ func TestContentsFilters(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, byAge.Items, 1, "у папок возраста нет, остаётся только набор")
 	assert.Equal(t, "Азбука набор", byAge.Items[0].Name)
+	require.NotNil(t, byAge.Items[0].Age)
+	assert.Equal(t, 5, *byAge.Items[0].Age)
+	require.NotNil(t, byAge.Items[0].Difficulty)
+	assert.Equal(t, "easy", *byAge.Items[0].Difficulty)
 
 	byDifficulty, err := service.Contents(ctx, ContentsInput{
 		Section: SectionMy, ParentID: &root.ID, Difficulty: "hard",

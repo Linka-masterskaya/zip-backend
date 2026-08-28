@@ -374,7 +374,7 @@ func (r *Repository) Contents(
 		var item ContentItem
 		if err = rows.Scan(
 			&item.Type, &item.ID, &item.Name, &item.Kind, &item.StudentID,
-			&item.Published, &item.UpdatedAt,
+			&item.Published, &item.UpdatedAt, &item.Age, &item.Difficulty,
 		); err != nil {
 			return nil, fmt.Errorf("folder contents scan: %w", err)
 		}
@@ -460,7 +460,8 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			  AND f.section = $2
 			  AND ($2 = 'library' OR f.owner_id = $1)
 		)
-		SELECT type, id, name, kind, student_id, published, updated_at
+		SELECT type, id, name, kind, student_id, published, updated_at,
+		       age, difficulty
 		FROM items`
 		args := []any{userID, input.Section}
 		return appendContentsFilters(query, args, input)
@@ -504,7 +505,8 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			FROM packs p
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
-		SELECT type, id, name, kind, student_id, published, updated_at
+		SELECT type, id, name, kind, student_id, published, updated_at,
+		       age, difficulty
 		FROM items`
 	args := []any{*input.ParentID, userID, input.Section}
 	return appendContentsFilters(query, args, input)
