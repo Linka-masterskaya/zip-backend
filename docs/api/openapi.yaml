@@ -1043,6 +1043,10 @@ paths:
         - { name: parent_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Папка внутри раздела. Не задан — корень раздела" }
         - { name: sort, in: query, schema: { type: string, enum: [name, updated_at], default: name } }
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { name: query, in: query, schema: { type: string }, description: "Подстрока названия папки или набора без учёта регистра" }
+        - { name: type, in: query, schema: { type: string, enum: [folder, pack] }, description: "Оставить только папки или только наборы" }
+        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "age_min <= age <= age_max. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: difficulty, in: query, schema: { type: string, enum: [easy, medium, hard] }, description: "Свойство набора: папки отсеиваются" }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
@@ -1320,6 +1324,25 @@ paths:
             name: section,
             in: query,
             schema: { type: string, enum: [library, my, students] },
+          }
+        - {
+            name: student_id,
+            in: query,
+            schema: { type: string, format: uuid },
+            description: >-
+              Только наборы одного ученика: лежащие в его папке, во вложенных
+              в неё папках и выданные ему адаптации.,
+          }
+        - {
+            name: sort_by,
+            in: query,
+            schema: { type: string, enum: [updated_at, created_at, title], default: updated_at },
+            description: Сортировка по title — без учёта регистра,
+          }
+        - {
+            name: order,
+            in: query,
+            schema: { type: string, enum: [asc, desc], default: desc },
           }
         - {
             name: limit,

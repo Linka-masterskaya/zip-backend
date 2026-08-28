@@ -380,3 +380,36 @@ func (f *fakePackService) Publish(context.Context, uuid.UUID, uuid.UUID) (*Pack,
 func (f *fakePackService) Unpublish(context.Context, uuid.UUID) error {
 	return nil
 }
+
+func TestHandlerListPacksReadsStudentAndSort(t *testing.T) {
+	service := &fakePackService{}
+	studentID := uuid.New()
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
+		require.NotNil(t, input.StudentID)
+		assert.Equal(t, studentID, *input.StudentID)
+		assert.Equal(t, "title", input.SortBy)
+		assert.Equal(t, "asc", input.Order)
+		return &ListPage{}, nil
+	}
+
+	rec := performPackRequest(t, NewHandler(service).ListPacks, http.MethodGet,
+		"/api/v1/packs?section=students&student_id="+studentID.String()+"&sort_by=title&order=asc",
+		nil, "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHandlerListPacksRejectsBadStudentAndSort(t *testing.T) {
+	handler := NewHandler(&fakePackService{})
+
+	rec := performPackRequest(t, handler.ListPacks, http.MethodGet,
+		"/api/v1/packs?student_id=not-a-uuid", nil, "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	rec = performPackRequest(t, handler.ListPacks, http.MethodGet,
+		"/api/v1/packs?sort_by=colour", nil, "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	rec = performPackRequest(t, handler.ListPacks, http.MethodGet,
+		"/api/v1/packs?order=sideways", nil, "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}

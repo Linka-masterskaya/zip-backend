@@ -1,5 +1,7 @@
 package pack
 
+import "strings"
+
 const createPackQuery = `
 	INSERT INTO packs (org_id, owner_id, folder_id, title, config)
 	SELECT u.org_id, u.id, f.id, $3, $4
@@ -71,19 +73,31 @@ const getPackForPublicationQuery = `
 	  AND (p.owner_id = u.id OR $3)`
 
 const listPacksBaseQuery = `
-	WITH active_user AS (
+	WITH RECURSIVE active_user AS (
 		SELECT id, org_id
 		FROM users
 		WHERE id = $1
 		  AND org_id IS NOT NULL
 		  AND deleted_at IS NULL
+	), folder_students AS (
+		-- Набор может лежать не в самой папке ученика, а во вложенной, у
+		-- которой student_id уже пустой. Спускаемся от папок учеников вниз,
+		-- чтобы у каждой вложенной папки был свой ученик.
+		SELECT f.id, f.student_id
+		FROM folders f
+		WHERE f.kind = 'student' AND f.owner_id = $1
+		UNION ALL
+		SELECT child.id, parent.student_id
+		FROM folders child
+		JOIN folder_students parent ON child.parent_id = parent.id
 	), placements AS (
 		SELECT p.id, p.org_id, p.owner_id, p.folder_id AS result_folder_id,
 		       p.library_folder_id, p.published_at, p.title, p.status,
 		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
-		       p.created_at, p.updated_at, f.section
+		       p.created_at, p.updated_at, f.section, fs.student_id
 		FROM active_user u
 		JOIN packs p ON p.owner_id = u.id AND p.org_id = u.org_id
+		LEFT JOIN folder_students fs ON fs.id = p.folder_id
 		JOIN folders f ON f.id = p.folder_id
 		              AND f.owner_id = u.id
 		              AND f.org_id = u.org_id
@@ -92,7 +106,7 @@ const listPacksBaseQuery = `
 		SELECT p.id, p.org_id, p.owner_id, student_folder.id AS result_folder_id,
 		       p.library_folder_id, p.published_at, p.title, p.status,
 		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
-		       p.created_at, p.updated_at, student_folder.section
+		       p.created_at, p.updated_at, student_folder.section, s.id AS student_id
 		FROM active_user u
 		JOIN students s ON s.defectologist_id = u.id
 		               AND s.deleted_at IS NULL
@@ -111,7 +125,7 @@ const listPacksBaseQuery = `
 		SELECT p.id, p.org_id, p.owner_id, p.library_folder_id AS result_folder_id,
 		       p.library_folder_id, p.published_at, p.title, p.status,
 		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
-		       p.created_at, p.updated_at, f.section
+		       p.created_at, p.updated_at, f.section, NULL::uuid AS student_id
 		FROM active_user u
 		JOIN packs p ON p.org_id = u.org_id
 		            AND p.published_at IS NOT NULL
@@ -130,15 +144,31 @@ const listPacksBaseQuery = `
 		  AND ($3::int IS NULL OR (age_min <= $3::int AND $3::int <= age_max))
 		  AND ($4::text = '' OR difficulty = $4::text)
 		  AND ($5::text = '' OR section = $5::text)
+		  AND ($6::uuid IS NULL OR student_id = $6::uuid)
 	)`
 
-const listPacksQuery = listPacksBaseQuery + `
+// listPacksQuery подставляет сортировку из белого списка: значения
+// приходят от клиента, но в SQL попадают только проверенные строки.
+func listPacksQuery(sortBy, order string) string {
+	column := "updated_at"
+	switch sortBy {
+	case "title":
+		column = "lower(title)"
+	case "created_at":
+		column = "created_at"
+	}
+	direction := "DESC"
+	if strings.EqualFold(order, "asc") {
+		direction = "ASC"
+	}
+	return listPacksBaseQuery + `
 	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
 	       published_at, title, status, age_min, age_max, difficulty,
 	       goals, notes, config, is_favorite, section, created_at, updated_at
 	FROM filtered
-	ORDER BY updated_at DESC, id, section, result_folder_id
-	LIMIT $6 OFFSET $7`
+	ORDER BY ` + column + ` ` + direction + `, id, section, result_folder_id
+	LIMIT $7 OFFSET $8`
+}
 
 const countPacksQuery = listPacksBaseQuery + `
 	SELECT count(*) FROM filtered`

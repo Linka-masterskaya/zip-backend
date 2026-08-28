@@ -221,6 +221,16 @@ func validateListInput(input ListInput) (ListInput, error) {
 	if input.Section != "" && !validSection(input.Section) {
 		return ListInput{}, apperr.ErrBadRequest.WithMessage("section must be library, my, or students")
 	}
+	input.SortBy = strings.TrimSpace(input.SortBy)
+	input.Order = strings.TrimSpace(input.Order)
+	if input.SortBy != "" && !validPackSortBy(input.SortBy) {
+		return ListInput{}, apperr.ErrBadRequest.WithMessage(
+			"sort_by must be updated_at, created_at, or title")
+	}
+	if input.Order != "" && !strings.EqualFold(input.Order, "asc") &&
+		!strings.EqualFold(input.Order, "desc") {
+		return ListInput{}, apperr.ErrBadRequest.WithMessage("order must be asc or desc")
+	}
 	if input.Limit == 0 {
 		input.Limit = defaultLimit
 	}
@@ -231,6 +241,10 @@ func validateListInput(input ListInput) (ListInput, error) {
 		return ListInput{}, apperr.ErrBadRequest.WithMessage("offset must not be negative")
 	}
 	return input, nil
+}
+
+func validPackSortBy(value string) bool {
+	return value == "updated_at" || value == "created_at" || value == "title"
 }
 
 func validDifficulty(value string) bool {

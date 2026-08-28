@@ -84,11 +84,17 @@ func (h *Handler) Contents(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	age, err := optionalQueryInt(r, "age")
+	if err != nil {
+		return err
+	}
 	result, err := h.service.Contents(r.Context(), ContentsInput{
 		Section:  r.PathValue("section"),
 		ParentID: parentID,
 		Limit:    limit, Offset: offset,
 		Sort: r.URL.Query().Get("sort"), Order: r.URL.Query().Get("order"),
+		Query: r.URL.Query().Get("query"), Type: r.URL.Query().Get("type"),
+		Age: age, Difficulty: r.URL.Query().Get("difficulty"),
 	})
 	if err != nil {
 		return err
@@ -163,6 +169,18 @@ func queryInt(r *http.Request, name string) (int, error) {
 
 // optionalQueryID parses an optional UUID query parameter. A missing or empty
 // value yields nil, which callers read as "not scoped".
+func optionalQueryInt(r *http.Request, name string) (*int, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return nil, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
+	}
+	return &value, nil
+}
+
 func optionalQueryID(r *http.Request, name string) (*uuid.UUID, error) {
 	raw := r.URL.Query().Get(name)
 	if raw == "" {

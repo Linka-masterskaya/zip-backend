@@ -55,6 +55,13 @@ type ContentsInput struct {
 	Offset   int
 	Sort     string
 	Order    string
+	// Query ищет по названию папки или набора, Type оставляет только папки
+	// или только наборы. Age и Difficulty — свойства наборов, поэтому сами
+	// по себе отсекают папки.
+	Query      string
+	Type       string
+	Age        *int
+	Difficulty string
 }
 
 type ContentItem struct {

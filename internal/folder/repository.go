@@ -450,13 +450,20 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		// Корень раздела содержит только папки: packs.folder_id объявлен
 		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
 		query := `
-		SELECT 'folder'::text AS type, f.id, f.name, f.kind,
-		       f.student_id, false AS published, f.updated_at
-		FROM folders f
-		WHERE f.parent_id IS NULL
-		  AND f.section = $2
-		  AND ($2 = 'library' OR f.owner_id = $1)`
-		return query, []any{userID, input.Section}
+		WITH items AS (
+			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
+			       f.student_id, false AS published, f.updated_at,
+			       NULL::int AS age_min, NULL::int AS age_max,
+			       NULL::text AS difficulty
+			FROM folders f
+			WHERE f.parent_id IS NULL
+			  AND f.section = $2
+			  AND ($2 = 'library' OR f.owner_id = $1)
+		)
+		SELECT type, id, name, kind, student_id, published, updated_at
+		FROM items`
+		args := []any{userID, input.Section}
+		return appendContentsFilters(query, args, input)
 	}
 
 	packFolderColumn := "p.folder_id"
@@ -471,7 +478,7 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		studentAssignments = `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       false, p.updated_at
+			       false, p.updated_at, p.age_min, p.age_max, p.difficulty
 			FROM folders student_folder
 			JOIN pack_adaptations pa ON pa.student_id = student_folder.student_id
 			JOIN packs p ON p.id = pa.pack_id
@@ -483,20 +490,55 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 	query := `
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
-			       f.student_id, false AS published, f.updated_at
+			       f.student_id, false AS published, f.updated_at,
+			       NULL::int AS age_min, NULL::int AS age_max,
+			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id = $1
 			  AND f.section = $3
 			  AND ($3 = 'library' OR f.owner_id = $2)
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       p.published_at IS NOT NULL, p.updated_at
+			       p.published_at IS NOT NULL, p.updated_at,
+			       p.age_min, p.age_max, p.difficulty
 			FROM packs p
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at
 		FROM items`
-	return query, []any{*input.ParentID, userID, input.Section}
+	args := []any{*input.ParentID, userID, input.Section}
+	return appendContentsFilters(query, args, input)
+}
+
+// appendContentsFilters навешивает фильтры на общий список папок и наборов.
+// Возраст и сложность есть только у наборов, поэтому такие фильтры сами по
+// себе отсекают папки — у них эти поля пустые.
+func appendContentsFilters(query string, args []any, input ContentsInput) (string, []any) {
+	next := func() string { return fmt.Sprintf("$%d", len(args)+1) }
+
+	conditions := make([]string, 0, 4)
+	placeholder := next()
+	conditions = append(conditions,
+		"("+placeholder+"::text = '' OR name ILIKE '%' || "+placeholder+"::text || '%')")
+	args = append(args, input.Query)
+
+	placeholder = next()
+	conditions = append(conditions,
+		"("+placeholder+"::text = '' OR type = "+placeholder+"::text)")
+	args = append(args, input.Type)
+
+	placeholder = next()
+	conditions = append(conditions,
+		"("+placeholder+"::int IS NULL OR (age_min <= "+placeholder+
+			"::int AND "+placeholder+"::int <= age_max))")
+	args = append(args, input.Age)
+
+	placeholder = next()
+	conditions = append(conditions,
+		"("+placeholder+"::text = '' OR difficulty = "+placeholder+"::text)")
+	args = append(args, input.Difficulty)
+
+	return query + "\n\t\tWHERE " + strings.Join(conditions, "\n\t\t  AND "), args
 }
 
 func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {

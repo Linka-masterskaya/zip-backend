@@ -242,7 +242,14 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 		Query:      r.URL.Query().Get("query"),
 		Difficulty: r.URL.Query().Get("difficulty"),
 		Section:    r.URL.Query().Get("section"),
+		SortBy:     r.URL.Query().Get("sort_by"),
+		Order:      r.URL.Query().Get("order"),
 	}
+	studentID, err := optionalQueryUUID(r, "student_id")
+	if err != nil {
+		return ListInput{}, err
+	}
+	input.StudentID = studentID
 	age, err := optionalQueryIntPointer(r, "age")
 	if err != nil {
 		return ListInput{}, err
@@ -262,6 +269,18 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 	input.Limit = limit
 	input.Offset = offset
 	return validateListInput(input)
+}
+
+func optionalQueryUUID(r *http.Request, name string) (*uuid.UUID, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := uuid.Parse(raw)
+	if err != nil || value == uuid.Nil {
+		return nil, apperr.ErrBadRequest.WithMessage(name + " must be a uuid")
+	}
+	return &value, nil
 }
 
 func optionalQueryIntPointer(r *http.Request, name string) (*int, error) {
