@@ -421,7 +421,7 @@ func (r *Repository) ensureParentVisible(
 	if input.ParentID == nil {
 		return nil, breadcrumbs, nil
 	}
-	orgID, err := activeUserOrg(ctx, tx, userID)
+	orgID, err := currentUserOrg(ctx, tx, userID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -595,6 +595,22 @@ func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID,
 		SELECT org_id FROM users
 		WHERE id = $1 AND org_id IS NOT NULL AND deleted_at IS NULL
 		FOR UPDATE`, userID).Scan(&orgID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("folder user org: %w", err)
+	}
+	return orgID, nil
+}
+
+// currentUserOrg is like activeUserOrg but avoids FOR UPDATE, so it can run
+// inside the read-only transaction Contents uses.
+func currentUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {
+	var orgID uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT org_id FROM users
+		WHERE id = $1 AND org_id IS NOT NULL AND deleted_at IS NULL`, userID).Scan(&orgID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, ErrNotFound
 	}

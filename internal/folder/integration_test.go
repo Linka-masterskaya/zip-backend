@@ -386,7 +386,6 @@ func TestContentsRejectsFolderFromAnotherSection(t *testing.T) {
 	})
 	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
-
 func TestContentsTotalIgnoresPaginationAndVisibility(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "total owner")
