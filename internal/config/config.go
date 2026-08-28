@@ -244,12 +244,12 @@ type ProfileConfig struct {
 
 // CORSConfig contains CORS settings.
 type CORSConfig struct {
-	AllowOrigins     []string `mapstructure:"allow_origins"`
-	AllowMethods     []string `mapstructure:"allow_methods"`
-	AllowHeaders     []string `mapstructure:"allow_headers"`
-	ExposeHeaders    []string `mapstructure:"expose_headers"`
-	AllowCredentials bool     `mapstructure:"allow_credentials"`
-	MaxAge           int      `mapstructure:"max_age"`
+	AllowOrigins     []string      `mapstructure:"allow_origins"`
+	AllowMethods     []string      `mapstructure:"allow_methods"`
+	AllowHeaders     []string      `mapstructure:"allow_headers"`
+	ExposeHeaders    []string      `mapstructure:"expose_headers"`
+	AllowCredentials bool          `mapstructure:"allow_credentials"`
+	MaxAge           time.Duration `mapstructure:"max_age"`
 }
 
 // TTSConfig contains TTS settings.
@@ -303,6 +303,10 @@ func Load(path string) (*Config, error) {
 	if envOrigins := os.Getenv("CORS_ALLOW_ORIGINS"); envOrigins != "" {
 		cfg.CORS.AllowOrigins = strings.Split(envOrigins, ",")
 	}
+	cfg.CORS.AllowOrigins = normalizeStringSlice(cfg.CORS.AllowOrigins)
+	cfg.CORS.AllowMethods = normalizeStringSlice(cfg.CORS.AllowMethods)
+	cfg.CORS.AllowHeaders = normalizeStringSlice(cfg.CORS.AllowHeaders)
+	cfg.CORS.ExposeHeaders = normalizeStringSlice(cfg.CORS.ExposeHeaders)
 
 	// Validate required fields
 	if err := validateConfig(&cfg); err != nil {
@@ -358,7 +362,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.env", "dev")
 	v.SetDefault("app.port", "8080")
 	v.SetDefault("app.public_url", "http://localhost:8080")
-	v.SetDefault("app.frontend_url", "http://localhost:3000")
+	v.SetDefault("app.frontend_url", "http://localhost:5173")
 	v.SetDefault("app.migrations_dir", "./migrations")
 	v.SetDefault("app.trusted_proxies", []string{})
 	v.SetDefault("app.docs_enabled", false)
@@ -502,23 +506,14 @@ func setDefaults(v *viper.Viper) {
 	})
 	v.SetDefault("cors.allow_headers", []string{
 		"Content-Type",
-		"Content-Length",
-		"Accept-Encoding",
-		"X-CSRF-Token",
 		"Authorization",
-		"Accept",
-		"Origin",
-		"Cache-Control",
-		"X-Requested-With",
+		"X-Request-Id",
 	})
 	v.SetDefault("cors.expose_headers", []string{
-		"Content-Length",
-		"Content-Type",
-		"Date",
-		"X-Total-Count",
+		"X-Request-Id",
 	})
 	v.SetDefault("cors.allow_credentials", true)
-	v.SetDefault("cors.max_age", 86400)
+	v.SetDefault("cors.max_age", "24h")
 
 	// Cron defaults
 	v.SetDefault("cron.voice_refresh.interval", "1h")
@@ -578,6 +573,11 @@ func validateConfig(cfg *Config) error {
 	if cfg.TTS.MaxConcurrent <= 0 {
 		return fmt.Errorf("ttsapi.max_concurrent must be > 0")
 	}
+
+	// CORS validation
+	if err := validateCORSConfig(&cfg.CORS); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -631,4 +631,33 @@ func validateCryptoCongig(cfg *CryptoConfig) error {
 	}
 
 	return nil
+}
+
+func validateCORSConfig(cfg *CORSConfig) error {
+	if len(cfg.AllowOrigins) == 0 {
+		return fmt.Errorf("cors.allow_origins is required")
+	}
+	if len(cfg.AllowMethods) == 0 {
+		return fmt.Errorf("cors.allow_methods is required")
+	}
+	if len(cfg.AllowHeaders) == 0 {
+		return fmt.Errorf("cors.allow_headers is required")
+	}
+	if cfg.MaxAge < 0 {
+		return fmt.Errorf("cors.max_age must be non-negative")
+	}
+	if cfg.MaxAge > 0 && cfg.MaxAge < time.Second {
+		return fmt.Errorf("cors.max_age is %s, which looks like a raw number misparsed as nanoseconds — use a duration string with a unit (e.g. \"24h\")", cfg.MaxAge)
+	}
+	return nil
+}
+
+func normalizeStringSlice(items []string) []string {
+	result := make([]string, 0, len(items))
+	for _, s := range items {
+		if s = strings.TrimSpace(s); s != "" {
+			result = append(result, s)
+		}
+	}
+	return result
 }
