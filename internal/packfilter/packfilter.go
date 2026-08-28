@@ -1,6 +1,3 @@
-// Package packfilter хранит правила фильтрации наборов. Их проверяет и
-// листинг наборов, и содержимое разделов, поэтому границы и формулировки
-// ошибок должны совпадать.
 package packfilter
 
 import "github.com/Linka-masterskaya/zip-backend/internal/apperr"
