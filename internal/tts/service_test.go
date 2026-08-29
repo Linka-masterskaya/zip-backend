@@ -15,13 +15,12 @@ import (
 )
 
 type fakeRepo struct {
-	getFromBankFn         func(context.Context, string, string) (*BankEntry, error)
-	createSucceededJobFn  func(context.Context, uuid.UUID, *BankEntry, uuid.UUID) (uuid.UUID, error)
-	createOrGetInflightFn func(context.Context, uuid.UUID, string, string) (uuid.UUID, bool, error)
-	updateStatusFn        func(context.Context, uuid.UUID, string) error
-	getOrgIDFn            func(context.Context, uuid.UUID) (uuid.UUID, error)
-	getJobFn              func(context.Context, uuid.UUID, uuid.UUID) (*JobDetails, error)
-	createMediaFileFn     func(context.Context, uuid.UUID, uuid.UUID, MediaFileInput) (uuid.UUID, error)
+	getFromBankFn                 func(context.Context, string, string) (*BankEntry, error)
+	createOrGetInflightFn         func(context.Context, uuid.UUID, string, string) (uuid.UUID, bool, error)
+	updateStatusFn                func(context.Context, uuid.UUID, string) error
+	getOrgIDFn                    func(context.Context, uuid.UUID) (uuid.UUID, error)
+	getJobFn                      func(context.Context, uuid.UUID, uuid.UUID) (*JobDetails, error)
+	createMediaWithSucceededJobFn func(context.Context, uuid.UUID, uuid.UUID, *BankEntry, MediaFileInput) (uuid.UUID, uuid.UUID, error)
 }
 
 func (f *fakeRepo) GetFromBank(ctx context.Context, text, voice string) (*BankEntry, error) {
@@ -29,13 +28,6 @@ func (f *fakeRepo) GetFromBank(ctx context.Context, text, voice string) (*BankEn
 		return f.getFromBankFn(ctx, text, voice)
 	}
 	return nil, apperr.ErrNotFound
-}
-
-func (f *fakeRepo) CreateSucceededJob(ctx context.Context, orgID uuid.UUID, entry *BankEntry, mediaID uuid.UUID) (uuid.UUID, error) {
-	if f.createSucceededJobFn != nil {
-		return f.createSucceededJobFn(ctx, orgID, entry, mediaID)
-	}
-	return uuid.New(), nil
 }
 
 func (f *fakeRepo) CreateOrGetInflightJob(ctx context.Context, orgID uuid.UUID, text, voice string) (uuid.UUID, bool, error) {
@@ -66,19 +58,19 @@ func (f *fakeRepo) GetJob(ctx context.Context, jobID, orgID uuid.UUID) (*JobDeta
 	return &JobDetails{Status: StatusPending}, nil
 }
 
-func (f *fakeRepo) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUID, input MediaFileInput) (uuid.UUID, error) {
-	if f.createMediaFileFn != nil {
-		return f.createMediaFileFn(ctx, orgID, userID, input)
-	}
-	return uuid.New(), nil
-}
-
 func (f *fakeRepo) GetVoices(_ context.Context) ([]Voice, error) {
 	return nil, fmt.Errorf("no cache")
 }
 
 func (f *fakeRepo) UpsertVoices(_ context.Context, _ []Voice) error {
 	return nil
+}
+
+func (f *fakeRepo) CreateMediaWithSucceededJob(ctx context.Context, orgID, userID uuid.UUID, entry *BankEntry, input MediaFileInput) (uuid.UUID, uuid.UUID, error) {
+	if f.createMediaWithSucceededJobFn != nil {
+		return f.createMediaWithSucceededJobFn(ctx, orgID, userID, entry, input)
+	}
+	return uuid.New(), uuid.New(), nil
 }
 
 type fakePub struct {
@@ -116,8 +108,8 @@ func TestCreateAudioBankHit(t *testing.T) {
 		getFromBankFn: func(_ context.Context, text, voice string) (*BankEntry, error) {
 			return &BankEntry{Text: text, Voice: voice, MinioKey: "tts/abc"}, nil
 		},
-		createSucceededJobFn: func(_ context.Context, _ uuid.UUID, _ *BankEntry, _ uuid.UUID) (uuid.UUID, error) {
-			return expectedJobID, nil
+		createMediaWithSucceededJobFn: func(_ context.Context, _, _ uuid.UUID, _ *BankEntry, _ MediaFileInput) (uuid.UUID, uuid.UUID, error) {
+			return expectedJobID, uuid.New(), nil
 		},
 	}
 	pub := &fakePub{
@@ -296,21 +288,16 @@ func TestGetVoicesError(t *testing.T) {
 
 func TestCreateAudioBankHitCreatesMedia(t *testing.T) {
 	expectedJobID := uuid.New()
-	expectedMediaID := uuid.New()
 	var mediaCreated bool
 	repo := &fakeRepo{
 		getFromBankFn: func(_ context.Context, text, voice string) (*BankEntry, error) {
 			return &BankEntry{Text: text, Voice: voice, MinioKey: "tts/abc", SHA256: "d", SizeBytes: 100}, nil
 		},
-		createMediaFileFn: func(_ context.Context, _, _ uuid.UUID, input MediaFileInput) (uuid.UUID, error) {
+		createMediaWithSucceededJobFn: func(_ context.Context, _, _ uuid.UUID, _ *BankEntry, input MediaFileInput) (uuid.UUID, uuid.UUID, error) {
 			mediaCreated = true
 			assert.Equal(t, "tts/abc", input.MinioKey)
 			assert.Equal(t, "audio/mpeg", input.MimeType)
-			return expectedMediaID, nil
-		},
-		createSucceededJobFn: func(_ context.Context, _ uuid.UUID, _ *BankEntry, mediaID uuid.UUID) (uuid.UUID, error) {
-			assert.Equal(t, expectedMediaID, mediaID, "должен передать mediaID из CreateMediaFile")
-			return expectedJobID, nil
+			return expectedJobID, uuid.New(), nil
 		},
 	}
 	ctx := authctx.SetUserIDToCtx(context.Background(), uuid.New())

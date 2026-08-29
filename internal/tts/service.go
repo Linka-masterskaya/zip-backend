@@ -14,15 +14,14 @@ import (
 )
 
 type repository interface {
-	CreateSucceededJob(context.Context, uuid.UUID, *BankEntry, uuid.UUID) (uuid.UUID, error)
 	CreateOrGetInflightJob(context.Context, uuid.UUID, string, string) (uuid.UUID, bool, error)
 	GetFromBank(context.Context, string, string) (*BankEntry, error)
 	UpdateStatusTTS(context.Context, uuid.UUID, string) error
 	GetOrgID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetJob(context.Context, uuid.UUID, uuid.UUID) (*JobDetails, error)
-	CreateMediaFile(context.Context, uuid.UUID, uuid.UUID, MediaFileInput) (uuid.UUID, error)
 	GetVoices(context.Context) ([]Voice, error)
 	UpsertVoices(context.Context, []Voice) error
+	CreateMediaWithSucceededJob(context.Context, uuid.UUID, uuid.UUID, *BankEntry, MediaFileInput) (uuid.UUID, uuid.UUID, error)
 }
 
 type publisher interface {
@@ -72,7 +71,7 @@ func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (stri
 
 	entry, err := s.repo.GetFromBank(ctx, ttsData.Text, ttsData.Voice)
 	if err == nil {
-		mediaID, err := s.repo.CreateMediaFile(ctx, orgID, userID, MediaFileInput{
+		jobID, _, err := s.repo.CreateMediaWithSucceededJob(ctx, orgID, userID, entry, MediaFileInput{
 			MinioKey:  entry.MinioKey,
 			SHA256:    entry.SHA256,
 			SizeBytes: entry.SizeBytes,
@@ -81,11 +80,6 @@ func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (stri
 		})
 		if err != nil {
 			return "", ttsError(err)
-		}
-
-		jobID, err := s.repo.CreateSucceededJob(ctx, orgID, entry, mediaID)
-		if err != nil {
-			return "", err
 		}
 		return jobID.String(), nil
 	}

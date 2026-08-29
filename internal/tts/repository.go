@@ -22,29 +22,6 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-func (r *Repository) CreateSucceededJob(ctx context.Context, orgID uuid.UUID, entry *BankEntry, mediaID uuid.UUID) (uuid.UUID, error) {
-	var jobID uuid.UUID
-	err := r.pool.QueryRow(ctx,
-		createSucceededJob,
-		orgID,
-		entry.Text,
-		entry.Voice,
-		mediaID).Scan(&jobID)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("tts.CreateSucceededJob: %w", err)
-	}
-
-	return jobID, nil
-}
-
-func (r *Repository) CompleteJob(ctx context.Context, jobID, mediaID uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, completeJob, jobID, mediaID)
-	if err != nil {
-		return fmt.Errorf("tts.CompleteJob: %w", err)
-	}
-	return nil
-}
-
 func (r *Repository) UpdateStatusTTS(ctx context.Context, jobID uuid.UUID, status string) error {
 	_, err := r.pool.Exec(ctx,
 		updateStatusTTS,
@@ -151,56 +128,6 @@ func (r *Repository) GetJob(ctx context.Context, jobID, orgID uuid.UUID) (*JobDe
 	return &jobDetails, nil
 }
 
-func (r *Repository) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUID, input MediaFileInput) (uuid.UUID, error) {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
-	}
-	defer func() {
-		rollback(ctx, tx)
-	}()
-
-	var org uuid.UUID
-	err = tx.QueryRow(ctx,
-		`SELECT id FROM organizations WHERE id = $1 FOR UPDATE`,
-		orgID).Scan(&org)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
-	}
-
-	var mediaID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT id FROM media_files WHERE minio_key = $1 AND org_id = $2`, input.MinioKey, orgID).Scan(&mediaID)
-	if err == nil {
-		return mediaID, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
-	}
-
-	var quota bool
-	err = tx.QueryRow(ctx, updateOrgQuota, orgID, input.SizeBytes).Scan(&quota)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, ErrQuotaExceeded
-	}
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
-	}
-
-	mediaType, _, _ := strings.Cut(input.MimeType, "/")
-	err = tx.QueryRow(ctx, insertMediaFromTTS,
-		orgID, userID, input.SHA256, input.MimeType, input.SizeBytes, input.MinioKey,
-		input.Name, mediaType,
-	).Scan(&mediaID)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
-	}
-
-	if err = tx.Commit(ctx); err != nil {
-		return uuid.Nil, fmt.Errorf("tts.CreateMediaFile: %w", err)
-	}
-	return mediaID, nil
-}
-
 func (r *Repository) UpsertVoices(ctx context.Context, voices []Voice) error {
 	data, err := json.Marshal(voices)
 	if err != nil {
@@ -268,4 +195,105 @@ func rollback(ctx context.Context, tx pgx.Tx) {
 	if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
 		return
 	}
+}
+
+func (r *Repository) createOrFindMedia(
+	ctx context.Context,
+	tx pgx.Tx,
+	orgID, userID uuid.UUID,
+	input MediaFileInput,
+) (uuid.UUID, error) {
+	var org uuid.UUID
+	err := tx.QueryRow(ctx,
+		`SELECT id FROM organizations WHERE id = $1 FOR UPDATE`,
+		orgID).Scan(&org)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("tts.createOrFindMedia: %w", err)
+	}
+
+	var mediaID uuid.UUID
+	err = tx.QueryRow(ctx,
+		`SELECT id FROM media_files WHERE minio_key = $1 AND org_id = $2`,
+		input.MinioKey, orgID).Scan(&mediaID)
+	if err == nil {
+		return mediaID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, fmt.Errorf("tts.createOrFindMedia: %w", err)
+	}
+
+	var quota bool
+	err = tx.QueryRow(ctx, updateOrgQuota, orgID, input.SizeBytes).Scan(&quota)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrQuotaExceeded
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("tts.createOrFindMedia: %w", err)
+	}
+
+	mediaType, _, _ := strings.Cut(input.MimeType, "/")
+	err = tx.QueryRow(ctx, insertMediaFromTTS,
+		orgID, userID, input.SHA256, input.MimeType, input.SizeBytes, input.MinioKey,
+		input.Name, mediaType,
+	).Scan(&mediaID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("tts.createOrFindMedia: %w", err)
+	}
+
+	return mediaID, nil
+}
+
+func (r *Repository) CreateMediaAndCompleteJob(
+	ctx context.Context,
+	jobID, orgID, userID uuid.UUID,
+	input MediaFileInput,
+) (uuid.UUID, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("tts.CreateMediaAndCompleteJob: %w", err)
+	}
+	defer rollback(ctx, tx)
+
+	mediaID, err := r.createOrFindMedia(ctx, tx, orgID, userID, input)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	if _, err = tx.Exec(ctx, completeJob, jobID, mediaID); err != nil {
+		return uuid.Nil, fmt.Errorf("tts.CreateMediaAndCompleteJob: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("tts.CreateMediaAndCompleteJob: %w", err)
+	}
+	return mediaID, nil
+}
+
+func (r *Repository) CreateMediaWithSucceededJob(
+	ctx context.Context,
+	orgID, userID uuid.UUID,
+	entry *BankEntry,
+	input MediaFileInput,
+) (uuid.UUID, uuid.UUID, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("tts.CreateMediaWithSucceededJob: %w", err)
+	}
+	defer rollback(ctx, tx)
+
+	mediaID, err := r.createOrFindMedia(ctx, tx, orgID, userID, input)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+
+	var jobID uuid.UUID
+	err = tx.QueryRow(ctx, createSucceededJob, orgID, entry.Text, entry.Voice, mediaID).Scan(&jobID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("tts.CreateMediaWithSucceededJob: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("tts.CreateMediaWithSucceededJob: %w", err)
+	}
+	return jobID, mediaID, nil
 }

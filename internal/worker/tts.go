@@ -27,10 +27,9 @@ type uploader interface {
 }
 
 type audioBank interface {
-	CompleteJob(context.Context, uuid.UUID, uuid.UUID) error
 	PutToBank(context.Context, *tts.BankEntry) error
 	UpdateStatusTTS(context.Context, uuid.UUID, string) error
-	CreateMediaFile(context.Context, uuid.UUID, uuid.UUID, tts.MediaFileInput) (uuid.UUID, error)
+	CreateMediaAndCompleteJob(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, tts.MediaFileInput) (uuid.UUID, error)
 }
 
 type TTS struct {
@@ -82,7 +81,7 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 		return w.handleRetryable(ctx, jobID, "PutObject", isLastAttempt, err)
 	}
 
-	mediaID, err := w.repo.CreateMediaFile(ctx, orgID, userID, tts.MediaFileInput{
+	_, err = w.repo.CreateMediaAndCompleteJob(ctx, jobID, orgID, userID, tts.MediaFileInput{
 		MinioKey:  key,
 		SHA256:    digest,
 		SizeBytes: audioSize,
@@ -97,12 +96,7 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 			})
 			return nil
 		}
-		return w.handleRetryable(ctx, jobID, "CreateMediaFile", isLastAttempt, err)
-	}
-
-	err = w.repo.CompleteJob(ctx, jobID, mediaID)
-	if err != nil {
-		return w.handleRetryable(ctx, jobID, "CompleteJob", isLastAttempt, err)
+		return w.handleRetryable(ctx, jobID, "CreateMediaAndCompleteJob", isLastAttempt, err)
 	}
 
 	err = w.repo.PutToBank(ctx, &tts.BankEntry{

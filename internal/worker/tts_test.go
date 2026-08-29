@@ -40,21 +40,11 @@ func (f *fakeUploader) PutObject(ctx context.Context, key string, reader io.Read
 }
 
 type fakeAudioBank struct {
-	completeJobFn     func(ctx context.Context, jobID, mediaID uuid.UUID) error
-	putToBankFn       func(ctx context.Context, entry *tts.BankEntry) error
-	createMediaFileFn func(ctx context.Context, orgID, userID uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error)
-	completeCalled    bool
-	bankCalled        bool
-	mediaCalled       bool
-	updateStatusFn    func(context.Context, uuid.UUID, string) error
-}
-
-func (f *fakeAudioBank) CompleteJob(ctx context.Context, jobID, mediaID uuid.UUID) error {
-	f.completeCalled = true
-	if f.completeJobFn != nil {
-		return f.completeJobFn(ctx, jobID, mediaID)
-	}
-	return nil
+	createMediaAndCompleteJobFn func(ctx context.Context, jobID, orgID, userID uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error)
+	putToBankFn                 func(ctx context.Context, entry *tts.BankEntry) error
+	updateStatusFn              func(context.Context, uuid.UUID, string) error
+	mediaJobCalled              bool
+	bankCalled                  bool
 }
 
 func (f *fakeAudioBank) PutToBank(ctx context.Context, entry *tts.BankEntry) error {
@@ -72,10 +62,10 @@ func (f *fakeAudioBank) UpdateStatusTTS(ctx context.Context, jobID uuid.UUID, st
 	return nil
 }
 
-func (f *fakeAudioBank) CreateMediaFile(ctx context.Context, orgID, userID uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
-	f.mediaCalled = true
-	if f.createMediaFileFn != nil {
-		return f.createMediaFileFn(ctx, orgID, userID, input)
+func (f *fakeAudioBank) CreateMediaAndCompleteJob(ctx context.Context, jobID, orgID, userID uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
+	f.mediaJobCalled = true
+	if f.createMediaAndCompleteJobFn != nil {
+		return f.createMediaAndCompleteJobFn(ctx, jobID, orgID, userID, input)
 	}
 	return uuid.New(), nil
 }
@@ -109,7 +99,7 @@ func TestHandleOK(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, stor.called)
-	assert.True(t, repo.completeCalled)
+	assert.True(t, repo.mediaJobCalled)
 	assert.True(t, repo.bankCalled)
 }
 
@@ -138,16 +128,13 @@ func TestHandleOKVerifiesKeyAndDigest(t *testing.T) {
 		},
 	}
 	repo := &fakeAudioBank{
-		createMediaFileFn: func(_ context.Context, _, _ uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
 			assert.Equal(t, expectedKey, input.MinioKey)
 			assert.Equal(t, expectedDigest, input.SHA256)
 			assert.Equal(t, int64(len(audio)), input.SizeBytes)
 			assert.Equal(t, "audio/mpeg", input.MimeType)
 			assert.Equal(t, "привет", input.Name)
 			return uuid.New(), nil
-		},
-		completeJobFn: func(_ context.Context, _, _ uuid.UUID) error {
-			return nil
 		},
 		putToBankFn: func(_ context.Context, entry *tts.BankEntry) error {
 			assert.Equal(t, job.Text, entry.Text)
@@ -178,7 +165,7 @@ func TestHandleSynthesizeError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection refused")
 	assert.False(t, stor.called)
-	assert.False(t, repo.completeCalled)
+	assert.False(t, repo.mediaJobCalled)
 }
 
 func TestHandlePutObjectError(t *testing.T) {
@@ -199,7 +186,7 @@ func TestHandlePutObjectError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "PutObject")
-	assert.False(t, repo.completeCalled)
+	assert.False(t, repo.mediaJobCalled)
 }
 
 func TestHandleCompleteJobError(t *testing.T) {
@@ -210,8 +197,8 @@ func TestHandleCompleteJobError(t *testing.T) {
 	}
 	stor := &fakeUploader{}
 	repo := &fakeAudioBank{
-		completeJobFn: func(_ context.Context, _, _ uuid.UUID) error {
-			return fmt.Errorf("db connection lost")
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
+			return uuid.Nil, fmt.Errorf("db connection lost")
 		},
 	}
 
@@ -269,7 +256,7 @@ func TestHandlePutToBankError(t *testing.T) {
 
 	require.NoError(t, err, "ошибка банка не должна фейлить job")
 	assert.True(t, stor.called)
-	assert.True(t, repo.completeCalled)
+	assert.True(t, repo.mediaJobCalled)
 }
 
 func TestHandleCreateMediaFileError(t *testing.T) {
@@ -280,7 +267,7 @@ func TestHandleCreateMediaFileError(t *testing.T) {
 	}
 	stor := &fakeUploader{}
 	repo := &fakeAudioBank{
-		createMediaFileFn: func(_ context.Context, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
 			return uuid.Nil, fmt.Errorf("quota exceeded")
 		},
 	}
@@ -289,7 +276,7 @@ func TestHandleCreateMediaFileError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "quota exceeded")
-	assert.False(t, repo.completeCalled)
+	assert.True(t, repo.mediaJobCalled)
 }
 
 func TestHandleCreateMediaFileQuotaExceeded(t *testing.T) {
@@ -301,7 +288,7 @@ func TestHandleCreateMediaFileQuotaExceeded(t *testing.T) {
 	stor := &fakeUploader{}
 	var failedStatus string
 	repo := &fakeAudioBank{
-		createMediaFileFn: func(_ context.Context, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
 			return uuid.Nil, tts.ErrQuotaExceeded
 		},
 		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
@@ -315,7 +302,7 @@ func TestHandleCreateMediaFileQuotaExceeded(t *testing.T) {
 
 	require.NoError(t, err, "quota exceeded — permanent, ACK без ошибки")
 	assert.Equal(t, tts.StatusFailed, failedStatus)
-	assert.False(t, repo.completeCalled)
+	assert.True(t, repo.mediaJobCalled)
 	assert.True(t, repo.bankCalled)
 }
 
@@ -386,7 +373,7 @@ func TestHandleTruncatesName(t *testing.T) {
 	stor := &fakeUploader{}
 	var gotName string
 	repo := &fakeAudioBank{
-		createMediaFileFn: func(_ context.Context, _, _ uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
 			gotName = input.Name
 			return uuid.New(), nil
 		},
