@@ -60,7 +60,7 @@ func TestShareHandlerRejectsUnknownFieldsAndEmptyTarget(t *testing.T) {
 
 func performShareRequest(t *testing.T, handler *ShareHandler, packID uuid.UUID, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/packs/"+packID.String()+"/share", bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/packs/"+packID.String()+"/share", bytes.NewReader(body))
 	req.SetPathValue("id", packID.String())
 	rec := httptest.NewRecorder()
 	middleware.ErrorMiddleware(handler.SharePack).ServeHTTP(rec, req)
