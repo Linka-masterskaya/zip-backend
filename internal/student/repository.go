@@ -57,6 +57,25 @@ func (r *Repository) Create(
 	return result, nil
 }
 
+// Get returns one non-deleted student owned by the defectologist.
+func (r *Repository) Get(ctx context.Context, ownerID, studentID uuid.UUID) (*storedStudent, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT `+studentColumnsWithAvatar+`
+		FROM students s
+		LEFT JOIN media_files m ON m.id = s.avatar_media_id
+		WHERE s.id = $2
+		  AND s.defectologist_id = $1
+		  AND s.deleted_at IS NULL`, ownerID, studentID)
+	result, err := scanStudent(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("student get: %w", err)
+	}
+	return result, nil
+}
+
 func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInput) ([]storedStudent, int, error) {
 	var totalCount int
 	if err := r.pool.QueryRow(ctx, `

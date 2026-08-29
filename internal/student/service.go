@@ -18,6 +18,7 @@ import (
 
 type repository interface {
 	Create(context.Context, uuid.UUID, []byte, CreateInput) (*storedStudent, error)
+	Get(context.Context, uuid.UUID, uuid.UUID) (*storedStudent, error)
 	List(context.Context, uuid.UUID, ListInput) ([]storedStudent, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, storedUpdate) (*storedStudent, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
@@ -84,6 +85,24 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 		return nil, fmt.Errorf("student encrypt email: %w", err)
 	}
 	stored, err := s.repo.Create(ctx, ownerID, encrypted, input)
+	if err != nil {
+		return nil, mapStudentError(err)
+	}
+	return s.decode(ctx, stored)
+}
+
+// Get returns one student owned by the current defectologist. It is used by
+// domain workflows (for example pack sharing) that need the canonical,
+// decrypted student email without exposing a separate HTTP endpoint.
+func (s *Service) Get(ctx context.Context, studentID uuid.UUID) (*Student, error) {
+	ownerID, err := owner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if studentID == uuid.Nil {
+		return nil, apperr.ErrBadRequest.WithMessage("student id must be a valid UUID")
+	}
+	stored, err := s.repo.Get(ctx, ownerID, studentID)
 	if err != nil {
 		return nil, mapStudentError(err)
 	}

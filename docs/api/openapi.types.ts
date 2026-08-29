@@ -1142,6 +1142,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/packs/{id}/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Поделиться набором с папкой или учеником
+         * @description Для target_type=folder переиспользует общую операцию дублирования и создаёт независимую draft-копию в target_id. Для target_type=student проверяет доступ к ученику, формирует совместимый с Linka Looks 3.2.10 архив .linka в формате looks-3 и асинхронно отправляет его на email ученика через существующий SMTP mailer. PDF-вложение и создание adaptation не являются частью этого v1 endpoint; назначение ученику остаётся доступно через POST /packs/{id}/students.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SharePackRequest"];
+                };
+            };
+            responses: {
+                /** @description target_type=folder — независимая draft-копия создана */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Pack"];
+                    };
+                };
+                /** @description target_type=student — совместимый .linka принят в асинхронную SMTP-доставку */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                /** @description Набор или ученик не найден/недоступен */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Набор нельзя представить в looks-3 либо отсутствует media-файл */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Архив превышает 50 MiB */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/packs/{id}/move": {
         parameters: {
             query?: never;
@@ -2704,6 +2780,12 @@ export interface components {
         DuplicatePackRequest: {
             /** Format: uuid */
             folder_id?: string | null;
+        };
+        SharePackRequest: {
+            /** @enum {string} */
+            target_type: "folder" | "student";
+            /** Format: uuid */
+            target_id: string;
         };
         UpdatePackRequest: {
             title?: string;

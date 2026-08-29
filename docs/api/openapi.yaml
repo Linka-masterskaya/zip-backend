@@ -261,6 +261,16 @@ components:
       properties:
         folder_id: { type: [string, "null"], format: uuid }
 
+    SharePackRequest:
+      type: object
+      required: [target_type, target_id]
+      additionalProperties: false
+      properties:
+        target_type:
+          type: string
+          enum: [folder, student]
+        target_id: { type: string, format: uuid }
+
     UpdatePackRequest:
       type: object
       properties:
@@ -1464,6 +1474,41 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Исходный набор не найден или недоступен }
+
+  /packs/{id}/share:
+    post:
+      tags: [packs]
+      summary: Поделиться набором с папкой или учеником
+      description: >-
+        Для target_type=folder переиспользует общую операцию дублирования и
+        создаёт независимую draft-копию в target_id. Для target_type=student
+        проверяет доступ к ученику, формирует совместимый с Linka Looks 3.2.10
+        архив .linka в формате looks-3 и асинхронно отправляет его на email
+        ученика через существующий SMTP mailer. PDF-вложение и создание
+        adaptation не являются частью этого v1 endpoint; назначение ученику
+        остаётся доступно через POST /packs/{id}/students.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SharePackRequest' }
+      responses:
+        '201':
+          description: target_type=folder — независимая draft-копия создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pack' }
+        '202':
+          description: target_type=student — совместимый .linka принят в асинхронную SMTP-доставку
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Набор или ученик не найден/недоступен }
+        '409': { description: Набор нельзя представить в looks-3 либо отсутствует media-файл }
+        '413': { description: Архив превышает 50 MiB }
 
   /packs/{id}/move:
     post:

@@ -76,6 +76,7 @@ func buildModules(in *infra) (*modules, error) {
 
 	folderRepo := folder.NewRepository(in.db)
 	studentRepo := student.NewRepository(in.db)
+	studentService := student.NewService(studentRepo, in.crypto, in.storage, mediaService)
 
 	picturesSource, err := buildPicturesSource(in)
 	if err != nil {
@@ -99,6 +100,7 @@ func buildModules(in *infra) (*modules, error) {
 			return image.Data, image.ContentType, nil
 		},
 	)
+	shareService := pack.NewShareService(packService, contentService, studentService, in.mailer)
 
 	authCfg := auth.Config{
 		JWTSecret:                cfg.JWT.Secret,
@@ -210,6 +212,7 @@ func buildModules(in *infra) (*modules, error) {
 	return &modules{
 		packs: httpapi.PackHandlers{
 			Pack:     pack.NewHandler(packService),
+			Share:    pack.NewShareHandler(shareService),
 			Content:  pack.NewContentHandler(contentService),
 			Favorite: pack.NewFavoriteHandler(favoriteService),
 		},
@@ -222,9 +225,7 @@ func buildModules(in *infra) (*modules, error) {
 			),
 		},
 		students: httpapi.StudentHandlers{
-			Student: student.NewHandler(
-				student.NewService(studentRepo, in.crypto, in.storage, mediaService),
-			),
+			Student: student.NewHandler(studentService),
 		},
 		auth: httpapi.AuthHandlers{
 			Auth: auth.NewHandler(authService, authCfg),

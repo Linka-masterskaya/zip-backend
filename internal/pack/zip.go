@@ -42,8 +42,14 @@ type archiveStream struct {
 	size int64
 }
 
+var _ io.ReadSeeker = (*archiveStream)(nil)
+
 func (a *archiveStream) Read(data []byte) (int, error) {
 	return a.file.Read(data)
+}
+
+func (a *archiveStream) Seek(offset int64, whence int) (int64, error) {
+	return a.file.Seek(offset, whence)
 }
 
 func (a *archiveStream) Close() error {
