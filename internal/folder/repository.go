@@ -352,18 +352,27 @@ func (r *Repository) Contents(
 	userID uuid.UUID,
 	input ContentsInput,
 ) (*ContentsPage, error) {
-	if err := r.ensureParentVisible(ctx, userID, input); err != nil {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("folder contents begin: %w", err)
+	}
+	defer rollback(ctx, tx)
+
+	if err = r.ensureParentVisible(ctx, tx, userID, input); err != nil {
 		return nil, err
 	}
 
 	countQuery, countArgs := contentsCountQuery(userID, input)
 	var total int
-	if err := r.pool.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	if err = tx.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("folder contents count: %w", err)
 	}
 
 	query, args := contentsQuery(userID, input)
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("folder contents: %w", err)
 	}
@@ -383,6 +392,9 @@ func (r *Repository) Contents(
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("folder contents rows: %w", err)
 	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("folder contents commit: %w", err)
+	}
 	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
 }
 
@@ -390,6 +402,7 @@ func (r *Repository) Contents(
 // Для корня раздела проверять нечего: он не строка в таблице.
 func (r *Repository) ensureParentVisible(
 	ctx context.Context,
+	tx pgx.Tx,
 	userID uuid.UUID,
 	input ContentsInput,
 ) error {
@@ -399,7 +412,7 @@ func (r *Repository) ensureParentVisible(
 
 	var section string
 	var ownerID uuid.UUID
-	err := r.pool.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
 		Scan(&section, &ownerID)
 	switch {
