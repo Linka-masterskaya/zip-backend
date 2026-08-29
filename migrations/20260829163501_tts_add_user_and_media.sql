@@ -7,7 +7,8 @@ ALTER TABLE tts_jobs
     DROP COLUMN sha256,
     DROP COLUMN size_bytes;
 
-UPDATE tts_jobs SET status = 'failed' WHERE org_id IS NULL AND status IN ('pending', 'in_progress');
+DELETE FROM tts_jobs WHERE org_id IS NULL;
+ALTER TABLE tts_jobs ALTER COLUMN org_id SET NOT NULL;
 
 DROP INDEX tts_jobs_inflight_uniq;
 CREATE UNIQUE INDEX tts_jobs_inflight_uniq ON tts_jobs(org_id, text, voice)
@@ -15,6 +16,7 @@ CREATE UNIQUE INDEX tts_jobs_inflight_uniq ON tts_jobs(org_id, text, voice)
 
 -- +goose Down
 DROP INDEX tts_jobs_inflight_uniq;
+DELETE FROM tts_jobs WHERE status IN ('pending', 'in_progress');
 CREATE UNIQUE INDEX tts_jobs_inflight_uniq ON tts_jobs(text, voice)
   WHERE status IN ('pending', 'in_progress');
 ALTER TABLE tts_jobs

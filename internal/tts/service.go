@@ -77,7 +77,7 @@ func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (stri
 			SHA256:    entry.SHA256,
 			SizeBytes: entry.SizeBytes,
 			MimeType:  s.mimetype,
-			Name:      entry.Text,
+			Name:      TruncateName(entry.Text, 50),
 		})
 		if err != nil {
 			return "", ttsError(err)
@@ -196,4 +196,12 @@ func (s *Service) isValidVoice(ctx context.Context, voice string) bool {
 		}
 	}
 	return false
+}
+
+func TruncateName(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
 }

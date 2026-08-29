@@ -87,7 +87,7 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 		SHA256:    digest,
 		SizeBytes: audioSize,
 		MimeType:  w.mimeType,
-		Name:      job.Text,
+		Name:      tts.TruncateName(job.Text, 50),
 	})
 	if err != nil {
 		if errors.Is(err, tts.ErrQuotaExceeded) {

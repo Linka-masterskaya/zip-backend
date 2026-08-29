@@ -325,3 +325,26 @@ func TestCreateAudioBankHitCreatesMedia(t *testing.T) {
 	assert.Equal(t, expectedJobID.String(), jobID)
 	assert.True(t, mediaCreated)
 }
+
+func TestTruncateName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		max      int
+		expected string
+	}{
+		{"short", "привет", 50, "привет"},
+		{"exact", string(make([]rune, 50)), 50, string(make([]rune, 50))},
+		{"long", "Привет, меня зовут Маша и я хочу рассказать вам о чём-то интересном", 50, "Привет, меня зовут Маша и я хочу рассказать вам о …"},
+		{"empty", "", 50, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := TruncateName(tt.input, tt.max)
+			assert.Equal(t, tt.expected, result)
+			if len([]rune(tt.input)) > tt.max {
+				assert.Equal(t, tt.max+1, len([]rune(result)), "обрезка + символ …")
+			}
+		})
+	}
+}

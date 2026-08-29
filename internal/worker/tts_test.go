@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -231,7 +232,13 @@ func TestHandleInvalidJobID(t *testing.T) {
 		},
 	}
 	stor := &fakeUploader{}
-	repo := &fakeAudioBank{}
+	var markFailedCalled bool
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, _ string) error {
+			markFailedCalled = true
+			return nil
+		},
+	}
 
 	job := testJob()
 	job.JobId = "not-a-uuid"
@@ -241,8 +248,9 @@ func TestHandleInvalidJobID(t *testing.T) {
 
 	require.NoError(t, err, "bad job id должен ACK'аться без ошибки")
 	assert.False(t, synthCalled, "не должен синтезировать при bad job id")
-	assert.False(t, repo.completeCalled)
+	assert.False(t, markFailedCalled, "без job id нечего фейлить")
 }
+
 func TestHandlePutToBankError(t *testing.T) {
 	synth := &fakeSynthesizer{
 		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
@@ -309,4 +317,87 @@ func TestHandleCreateMediaFileQuotaExceeded(t *testing.T) {
 	assert.Equal(t, tts.StatusFailed, failedStatus)
 	assert.False(t, repo.completeCalled)
 	assert.True(t, repo.bankCalled)
+}
+
+func TestHandleInvalidOrgID(t *testing.T) {
+	var synthCalled bool
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			synthCalled = true
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	var failedStatus string
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			failedStatus = status
+			return nil
+		},
+	}
+
+	job := testJob()
+	job.OrgID = "not-a-uuid"
+
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), job, false)
+
+	require.NoError(t, err, "bad org id должен ACK'аться без ошибки")
+	assert.False(t, synthCalled, "не должен синтезировать при bad org id")
+	assert.Equal(t, tts.StatusFailed, failedStatus, "должен пометить job как failed")
+}
+
+func TestHandleInvalidUserID(t *testing.T) {
+	var synthCalled bool
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			synthCalled = true
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	var failedStatus string
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			failedStatus = status
+			return nil
+		},
+	}
+
+	job := testJob()
+	job.UserID = "not-a-uuid"
+
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), job, false)
+
+	require.NoError(t, err, "bad user id должен ACK'аться без ошибки")
+	assert.False(t, synthCalled, "не должен синтезировать при bad user id")
+	assert.Equal(t, tts.StatusFailed, failedStatus, "должен пометить job как failed")
+}
+
+func TestHandleTruncatesName(t *testing.T) {
+	longText := strings.Repeat("а", 100)
+
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	var gotName string
+	repo := &fakeAudioBank{
+		createMediaFileFn: func(_ context.Context, _, _ uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
+			gotName = input.Name
+			return uuid.New(), nil
+		},
+	}
+
+	job := testJob()
+	job.Text = longText
+
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), job, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, 51, len([]rune(gotName)), "50 символов + …")
 }
