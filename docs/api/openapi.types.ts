@@ -72,6 +72,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/yandex/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Начать вход через Яндекс
+         * @description Отдаёт редирект на страницу согласия Яндекса. Одноразовый `state`
+         *     кладётся в хранилище и в cookie `oauth_state`, привязанную к пути
+         *     callback: без совпадения обоих значений callback вернёт `403`.
+         *     Эндпоинт поднимается только если провайдер настроен.
+         */
+        get: operations["yandexLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/yandex/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Завершить вход через Яндекс
+         * @description Принимает пользователя обратно от Яндекса и выдаёт ту же сессию, что и
+         *     обычный вход: refresh — в HttpOnly-cookie, access — во фрагменте
+         *     адреса фронтенда (`#access_token=...`), чтобы токен не попал в
+         *     `Referer`, историю браузера и логи прокси.
+         *
+         *     Если на почту из Яндекса уже заведён локальный аккаунт с паролем,
+         *     связка не создаётся: пользователь уходит на `/login?email_exists=true`.
+         */
+        get: operations["yandexCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -3056,6 +3105,73 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             429: components["responses"]["TooMany"];
+        };
+    };
+    yandexLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Редирект на oauth.yandex.ru */
+            307: {
+                headers: {
+                    Location?: string;
+                    /** @description HttpOnly-cookie `oauth_state`, живёт 5 минут. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Провайдер не настроен, эндпоинт не поднят */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    yandexCallback: {
+        parameters: {
+            query: {
+                code: string;
+                state: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Редирект на фронтенд с сессией */
+            303: {
+                headers: {
+                    Location?: string;
+                    /** @description HttpOnly-cookie `refresh_token`. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description state не совпал, протух или уже использован */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Провайдер не настроен, эндпоинт не поднят */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     login: {

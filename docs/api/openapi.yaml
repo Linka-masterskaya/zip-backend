@@ -10,6 +10,7 @@ servers:
     description: API v1
 tags:
   - name: auth
+  - name: oauth
   - name: profile
   - name: folders
   - name: packs
@@ -664,6 +665,56 @@ paths:
         '202': { description: Запрос принят }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
+
+  /auth/yandex/login:
+    get:
+      tags: [oauth]
+      operationId: yandexLogin
+      summary: Начать вход через Яндекс
+      security: []
+      description: |
+        Отдаёт редирект на страницу согласия Яндекса. Одноразовый `state`
+        кладётся в хранилище и в cookie `oauth_state`, привязанную к пути
+        callback: без совпадения обоих значений callback вернёт `403`.
+        Эндпоинт поднимается только если провайдер настроен.
+      responses:
+        '307':
+          description: Редирект на oauth.yandex.ru
+          headers:
+            Location: { schema: { type: string } }
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly-cookie `oauth_state`, живёт 5 минут.
+        '404': { description: 'Провайдер не настроен, эндпоинт не поднят' }
+
+  /auth/yandex/callback:
+    get:
+      tags: [oauth]
+      operationId: yandexCallback
+      summary: Завершить вход через Яндекс
+      security: []
+      description: |
+        Принимает пользователя обратно от Яндекса и выдаёт ту же сессию, что и
+        обычный вход: refresh — в HttpOnly-cookie, access — во фрагменте
+        адреса фронтенда (`#access_token=...`), чтобы токен не попал в
+        `Referer`, историю браузера и логи прокси.
+
+        Если на почту из Яндекса уже заведён локальный аккаунт с паролем,
+        связка не создаётся: пользователь уходит на `/login?email_exists=true`.
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        '303':
+          description: Редирект на фронтенд с сессией
+          headers:
+            Location: { schema: { type: string } }
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly-cookie `refresh_token`.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { description: 'state не совпал, протух или уже использован' }
+        '404': { description: 'Провайдер не настроен, эндпоинт не поднят' }
 
   /auth/login:
     post:
