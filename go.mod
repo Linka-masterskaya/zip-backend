@@ -28,6 +28,7 @@ require (
 require (
 	github.com/lib/pq v1.12.3
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (

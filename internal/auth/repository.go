@@ -577,7 +577,7 @@ VALUES (
 $1,
 $2,
 $3,
-$4,
+NULLIF($4, ''),
 $5)`
 
 	_, err := r.db.Exec(
