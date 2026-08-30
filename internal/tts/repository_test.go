@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -72,6 +73,39 @@ func TestCreateMediaIsolatesOrgs(t *testing.T) {
 	mediaAAgain, err := repo.CreateMediaAndCompleteJob(ctx, jobA2, orgA, userA, input)
 	require.NoError(t, err)
 	assert.Equal(t, mediaA, mediaAAgain, "повторный вызов для той же org должен вернуть ту же media_files.id")
+}
+
+func TestGetJobOrgScoped(t *testing.T) {
+	pool, cleanup := testutil.NewPostgres(t)
+	t.Cleanup(cleanup)
+	db := stdlib.OpenDBFromPool(pool)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, applyTTSMigrations(db))
+
+	ctx := t.Context()
+	orgA, orgB := uuid.New(), uuid.New()
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO organizations (id, name) VALUES ($1, 'org A'), ($2, 'org B')`, orgA, orgB)
+	require.NoError(t, err)
+
+	// создаём job в org A
+	jobID := uuid.New()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO tts_jobs (id, org_id, text, voice, status) VALUES ($1, $2, 'test', 'alena', 'pending')`,
+		jobID, orgA)
+	require.NoError(t, err)
+
+	repo := NewRepository(pool)
+
+	// своя org — находит
+	job, err := repo.GetJob(ctx, jobID, orgA)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPending, job.Status)
+
+	// чужая org — 404
+	_, err = repo.GetJob(ctx, jobID, orgB)
+	require.ErrorIs(t, err, apperr.ErrNotFound)
 }
 
 func applyTTSMigrations(db *sql.DB) error {

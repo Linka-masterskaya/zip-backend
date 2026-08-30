@@ -388,3 +388,74 @@ func TestHandleTruncatesName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 51, len([]rune(gotName)), "50 символов + …")
 }
+
+func TestParseJobInvalidOrgID(t *testing.T) {
+	var markFailedCalled bool
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			markFailedCalled = true
+			assert.Equal(t, tts.StatusFailed, status)
+			return nil
+		},
+	}
+	w := NewTTS(nil, nil, repo, "audio/mpeg")
+
+	job := testJob()
+	job.OrgID = "not-a-uuid"
+
+	_, _, _, ok := w.parseJob(context.Background(), job)
+
+	assert.False(t, ok)
+	assert.True(t, markFailedCalled)
+}
+
+func TestParseJobInvalidUserID(t *testing.T) {
+	var markFailedCalled bool
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			markFailedCalled = true
+			assert.Equal(t, tts.StatusFailed, status)
+			return nil
+		},
+	}
+	w := NewTTS(nil, nil, repo, "audio/mpeg")
+
+	job := testJob()
+	job.UserID = "not-a-uuid"
+
+	_, _, _, ok := w.parseJob(context.Background(), job)
+
+	assert.False(t, ok)
+	assert.True(t, markFailedCalled)
+}
+
+func TestParseJobInvalidJobID(t *testing.T) {
+	var markFailedCalled bool
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, _ string) error {
+			markFailedCalled = true
+			return nil
+		},
+	}
+	w := NewTTS(nil, nil, repo, "audio/mpeg")
+
+	job := testJob()
+	job.JobId = "not-a-uuid"
+
+	_, _, _, ok := w.parseJob(context.Background(), job)
+
+	assert.False(t, ok)
+	assert.False(t, markFailedCalled, "без job id нечего фейлить")
+}
+
+func TestParseJobValid(t *testing.T) {
+	w := NewTTS(nil, nil, &fakeAudioBank{}, "audio/mpeg")
+	job := testJob()
+
+	jobID, orgID, userID, ok := w.parseJob(context.Background(), job)
+
+	assert.True(t, ok)
+	assert.Equal(t, job.JobId, jobID.String())
+	assert.Equal(t, job.OrgID, orgID.String())
+	assert.Equal(t, job.UserID, userID.String())
+}
