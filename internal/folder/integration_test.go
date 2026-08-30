@@ -6,15 +6,16 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
-	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 )
 
 func TestFolderTreeDepthCycleAccessAndDelete(t *testing.T) {
@@ -111,6 +112,53 @@ func TestStudentFolderOwnershipAndMixedContents(t *testing.T) {
 	assert.Equal(t, "folder", page.Items[0].Type)
 	assert.Equal(t, child.ID, page.Items[0].ID)
 	assert.Equal(t, "pack", page.Items[1].Type)
+}
+
+func TestStudentAssignmentsExcludeArchivedStudents(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "owner")
+	studentID := seedFolderStudent(t, pool, ownerID)
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	studentFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionStudents, Kind: KindStudent, StudentID: &studentID, Name: "Анна",
+	})
+	require.NoError(t, err)
+	sourceFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Материалы",
+	})
+	require.NoError(t, err)
+
+	var packID uuid.UUID
+	err = pool.QueryRow(ctx, `
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config)
+		SELECT org_id, id, $2, 'Назначенный набор', '{}'::jsonb
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID, sourceFolder.ID).Scan(&packID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO pack_adaptations (pack_id, student_id, config, created_by)
+		VALUES ($1, $2, '{}'::jsonb, $3)`, packID, studentID, ownerID)
+	require.NoError(t, err)
+
+	active, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &studentFolder.ID,
+	})
+	require.NoError(t, err)
+	require.Len(t, active.Items, 1)
+	assert.Equal(t, packID, active.Items[0].ID)
+	assert.Equal(t, 1, active.Total)
+
+	_, err = pool.Exec(ctx, `UPDATE students SET deleted_at = now() WHERE id = $1`, studentID)
+	require.NoError(t, err)
+
+	archived, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &studentFolder.ID,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, archived.Items)
+	assert.Zero(t, archived.Total)
 }
 
 func TestConcurrentChildCreateAndParentDeleteNeverCascadesData(t *testing.T) {
