@@ -2902,40 +2902,31 @@ export interface components {
             /** @description Общее количество записей для пагинации */
             total: number;
         };
-        ContentItem: components["schemas"]["FolderContentItem"] | components["schemas"]["PackContentItem"];
-        FolderContentItem: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "folder";
+        ContentItem: {
+            /** @enum {string} */
+            type: "folder" | "pack";
             /** Format: uuid */
             id: string;
             name: string;
-            /** @enum {string|null} */
-            kind?: "folder" | "student" | null;
-            /** Format: uuid */
-            student_id?: string | null;
-            /** Format: date-time */
-            updated_at: string;
-        };
-        PackContentItem: {
             /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "pack";
-            /** Format: uuid */
-            id: string;
-            name: string;
-            published?: boolean;
-            /** @description Рекомендуемый возраст; `null`, если не заполнен */
-            age: number | null;
-            /**
-             * @description Сложность набора; `null`, если не заполнена
+             * @description Тип папки; возвращается только для `type = folder`
              * @enum {string|null}
              */
-            difficulty: "easy" | "medium" | "hard" | null;
+            kind?: "folder" | "student" | null;
+            /**
+             * Format: uuid
+             * @description Идентификатор ученика; возвращается только для `type = folder`
+             */
+            student_id?: string | null;
+            /** @description Признак публикации; возвращается только для `type = pack` */
+            published?: boolean;
+            /** @description Рекомендуемый возраст; возвращается только для `type = pack`, может быть `null` */
+            age?: number | null;
+            /**
+             * @description Сложность набора; возвращается только для `type = pack`, может быть `null`
+             * @enum {string|null}
+             */
+            difficulty?: "easy" | "medium" | "hard" | null;
             /** Format: date-time */
             updated_at: string;
         };

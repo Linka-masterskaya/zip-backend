@@ -457,43 +457,32 @@ components:
           description: Общее количество записей для пагинации
            
     ContentItem:
-      oneOf:
-        - $ref: '#/components/schemas/FolderContentItem'
-        - $ref: '#/components/schemas/PackContentItem'
-      discriminator:
-        propertyName: type
-        mapping:
-          folder: '#/components/schemas/FolderContentItem'
-          pack: '#/components/schemas/PackContentItem'
-
-    FolderContentItem:
       type: object
       required: [type, id, name, updated_at]
       properties:
-        type: { type: string, enum: [folder] }
+        type: { type: string, enum: [folder, pack] }
         id: { type: string, format: uuid }
         name: { type: string }
-        kind: { type: [string, "null"], enum: [folder, student, null] }
-        student_id: { type: [string, "null"], format: uuid }
-        updated_at: { type: string, format: date-time }
-
-    PackContentItem:
-      type: object
-      required: [type, id, name, age, difficulty, updated_at]
-      properties:
-        type: { type: string, enum: [pack] }
-        id: { type: string, format: uuid }
-        name: { type: string }
-        published: { type: boolean }
+        kind:
+          type: [string, "null"]
+          enum: [folder, student, null]
+          description: Тип папки; возвращается только для `type = folder`
+        student_id:
+          type: [string, "null"]
+          format: uuid
+          description: Идентификатор ученика; возвращается только для `type = folder`
+        published:
+          type: boolean
+          description: Признак публикации; возвращается только для `type = pack`
         age:
           type: [integer, "null"]
           minimum: 3
           maximum: 18
-          description: Рекомендуемый возраст; `null`, если не заполнен
+          description: Рекомендуемый возраст; возвращается только для `type = pack`, может быть `null`
         difficulty:
           type: [string, "null"]
           enum: [easy, medium, hard, null]
-          description: Сложность набора; `null`, если не заполнена
+          description: Сложность набора; возвращается только для `type = pack`, может быть `null`
         updated_at: { type: string, format: date-time }
 
     SettingsDocument:
