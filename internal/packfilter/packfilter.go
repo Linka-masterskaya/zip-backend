@@ -8,14 +8,13 @@ const (
 	MaxAge = 18
 )
 
-// ValidateAge принимает имя параметра, чтобы одна и та же проверка годилась
-// и для фильтров по age, и для метаданных набора.
-func ValidateAge(name string, value *int) error {
+// ValidateAge проверяет возраст по тем же границам, что и CHECK packs_age_chk.
+func ValidateAge(value *int) error {
 	if value == nil {
 		return nil
 	}
 	if *value < MinAge || *value > MaxAge {
-		return apperr.ErrBadRequest.WithMessage(name + " must be between 3 and 18")
+		return apperr.ErrBadRequest.WithMessage("age must be between 3 and 18")
 	}
 	return nil
 }

@@ -161,7 +161,7 @@ func validateContentsFilters(input *ContentsInput) error {
 	if input.Type != "" && input.Type != "folder" && input.Type != "pack" {
 		return apperr.ErrBadRequest.WithMessage("type must be folder or pack")
 	}
-	if err := packfilter.ValidateAge("age", input.Age); err != nil {
+	if err := packfilter.ValidateAge(input.Age); err != nil {
 		return err
 	}
 	return packfilter.ValidateDifficulty(input.Difficulty)

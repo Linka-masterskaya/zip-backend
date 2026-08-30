@@ -65,6 +65,7 @@ type ContentsInput struct {
 	Difficulty string
 }
 
+// ContentItem is a response-only DTO for folder contents.
 type ContentItem struct {
 	Type       string     `json:"type"`
 	ID         uuid.UUID  `json:"id"`
@@ -72,13 +73,13 @@ type ContentItem struct {
 	Kind       *string    `json:"kind,omitempty"`
 	StudentID  *uuid.UUID `json:"student_id,omitempty"`
 	Published  bool       `json:"published,omitempty"`
-	Age        *int       `json:"age,omitempty"`
-	Difficulty *string    `json:"difficulty,omitempty"`
+	Age        *int       `json:"age"`
+	Difficulty *string    `json:"difficulty"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
-// MarshalJSON keeps pack metadata present even when it is not filled in,
-// while folder-only and pack-only fields stay out of the other item type.
+// MarshalJSON defines the response shape: pack metadata remains present when
+// unset, while folder-only and pack-only fields stay out of the other item type.
 func (i ContentItem) MarshalJSON() ([]byte, error) {
 	type common struct {
 		Type      string    `json:"type"`

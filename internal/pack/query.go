@@ -95,7 +95,7 @@ const listPacksBaseQuery = `
 		       p.library_folder_id, p.published_at, p.title, p.status,
 		       p.age, p.difficulty, p.goals, p.notes, p.config,
 		       p.created_at, p.updated_at, f.section, fs.student_id
-	FROM active_user u
+		FROM active_user u
 		JOIN packs p ON p.owner_id = u.id AND p.org_id = u.org_id
 		LEFT JOIN folder_students fs ON fs.id = p.folder_id
 		JOIN folders f ON f.id = p.folder_id
@@ -107,7 +107,7 @@ const listPacksBaseQuery = `
 		       p.library_folder_id, p.published_at, p.title, p.status,
 		       p.age, p.difficulty, p.goals, p.notes, p.config,
 		       p.created_at, p.updated_at, student_folder.section, s.id AS student_id
-	FROM active_user u
+		FROM active_user u
 		JOIN students s ON s.defectologist_id = u.id
 		               AND s.deleted_at IS NULL
 		JOIN folders student_folder ON student_folder.student_id = s.id
@@ -126,7 +126,7 @@ const listPacksBaseQuery = `
 		       p.library_folder_id, p.published_at, p.title, p.status,
 		       p.age, p.difficulty, p.goals, p.notes, p.config,
 		       p.created_at, p.updated_at, f.section, NULL::uuid AS student_id
-	FROM active_user u
+		FROM active_user u
 		JOIN packs p ON p.org_id = u.org_id
 		            AND p.published_at IS NOT NULL
 		JOIN folders f ON f.id = p.library_folder_id
