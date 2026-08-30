@@ -44,7 +44,7 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		return &Pack{ID: packID}, nil
 	}
 	age := 5
-	repo.listPageFn = func(
+	repo.listWithTotalFn = func(
 		_ context.Context,
 		gotUserID uuid.UUID,
 		input ListInput,
@@ -315,7 +315,7 @@ type fakePackRepository struct {
 	duplicateFn         func(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	getFn               func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	listPageFn          func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
+	listWithTotalFn     func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
 	moveFn              func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -357,13 +357,13 @@ func (f *fakePackRepository) Get(ctx context.Context, userID, packID uuid.UUID) 
 	return &Pack{}, nil
 }
 
-func (f *fakePackRepository) ListPage(
+func (f *fakePackRepository) ListWithTotal(
 	ctx context.Context,
 	userID uuid.UUID,
 	input ListInput,
 ) ([]*ListItem, int, error) {
-	if f.listPageFn != nil {
-		return f.listPageFn(ctx, userID, input)
+	if f.listWithTotalFn != nil {
+		return f.listWithTotalFn(ctx, userID, input)
 	}
 	return []*ListItem{}, 0, nil
 }

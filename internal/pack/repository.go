@@ -150,8 +150,8 @@ func (r *Repository) GetForPublication(
 	return result, nil
 }
 
-// ListPage returns items and their total from one consistent database snapshot.
-func (r *Repository) ListPage(
+// ListWithTotal returns items and their total from one consistent database snapshot.
+func (r *Repository) ListWithTotal(
 	ctx context.Context,
 	userID uuid.UUID,
 	input ListInput,

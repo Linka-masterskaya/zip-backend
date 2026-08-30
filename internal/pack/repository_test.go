@@ -67,7 +67,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	assert.Empty(t, cleared.Notes)
 	assert.JSONEq(t, string(config), string(cleared.Config))
 
-	listed, _, err := repo.ListPage(context.Background(), userID, ListInput{Limit: 50})
+	listed, _, err := repo.ListWithTotal(context.Background(), userID, ListInput{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created.ID, listed[0].ID)
@@ -101,7 +101,7 @@ func TestRepositoryEnforcesUserAndFolderAccess(t *testing.T) {
 	assert.ErrorIs(t, err, ErrFolderNotAllowed)
 	_, err = repo.Get(context.Background(), foreignUserID, created.ID)
 	assert.ErrorIs(t, err, ErrPackNotFound)
-	listed, _, err := repo.ListPage(context.Background(), ownerID, ListInput{Limit: 50})
+	listed, _, err := repo.ListWithTotal(context.Background(), ownerID, ListInput{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created.ID, listed[0].ID)
@@ -116,7 +116,7 @@ func TestRepositoryEnforcesUserAndFolderAccess(t *testing.T) {
 	assert.ErrorIs(t, repo.Delete(context.Background(), foreignUserID, created.ID), ErrPackNotFound)
 }
 
-func TestRepositoryListPageReturnsItemsAndTotal(t *testing.T) {
+func TestRepositoryListWithTotalReturnsItemsAndTotal(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	_, userID, folderID := seedPackOwner(t, pool, "pagination org")
@@ -137,7 +137,7 @@ func TestRepositoryListPageReturnsItemsAndTotal(t *testing.T) {
 	}
 
 	t.Run("page", func(t *testing.T) {
-		items, total, err := repo.ListPage(
+		items, total, err := repo.ListWithTotal(
 			t.Context(), userID, ListInput{Limit: 1, Offset: 1},
 		)
 
@@ -148,7 +148,7 @@ func TestRepositoryListPageReturnsItemsAndTotal(t *testing.T) {
 	})
 
 	t.Run("offset past end", func(t *testing.T) {
-		items, total, err := repo.ListPage(
+		items, total, err := repo.ListWithTotal(
 			t.Context(), userID, ListInput{Limit: 2, Offset: 100},
 		)
 
@@ -156,6 +156,56 @@ func TestRepositoryListPageReturnsItemsAndTotal(t *testing.T) {
 		assert.Empty(t, items)
 		assert.Equal(t, 3, total)
 	})
+}
+
+func TestRepositoryListWithTotalReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
+	pool := newPackTestDB(t)
+	writerRepo := NewRepository(pool)
+	_, userID, folderID := seedPackOwner(t, pool, "pagination snapshot org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	_, err := writerRepo.Create(t.Context(), userID, CreateInput{
+		Title: "first", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+
+	gate := testutil.NewQueryGate()
+	readerPoolConfig := pool.Config()
+	readerPoolConfig.ConnConfig.Tracer = gate
+	readerPool, err := pgxpool.NewWithConfig(t.Context(), readerPoolConfig)
+	require.NoError(t, err)
+	defer readerPool.Close()
+	readerRepo := NewRepository(readerPool)
+
+	type listPageResult struct {
+		items []*ListItem
+		total int
+		err   error
+	}
+	resultCh := make(chan listPageResult, 1)
+	go func() {
+		items, total, listErr := readerRepo.ListWithTotal(
+			t.Context(), userID, ListInput{Limit: 50},
+		)
+		resultCh <- listPageResult{items: items, total: total, err: listErr}
+	}()
+	defer gate.Release()
+	gate.Wait(t, 5*time.Second)
+
+	_, err = writerRepo.Create(t.Context(), userID, CreateInput{
+		Title: "second", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+	gate.Release()
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.NotEmpty(t, result.items)
+		assert.Equal(t, len(result.items), result.total)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListWithTotal did not return after the second query was released")
+	}
 }
 
 func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
@@ -182,7 +232,7 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	require.NoError(t, err)
 
 	age := 5
-	listed, _, err := repo.ListPage(t.Context(), userID, ListInput{Query: "sPeEcH", Age: &age, Limit: 50})
+	listed, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Query: "sPeEcH", Age: &age, Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, listed, 2)
 	items := listItemsByID(listed)
@@ -197,21 +247,21 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	assert.NotContains(t, items, privateColleague.ID)
 	assert.NotContains(t, items, foreignPack.ID)
 
-	easy, _, err := repo.ListPage(t.Context(), userID, ListInput{Difficulty: "easy", Limit: 50})
+	easy, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Difficulty: "easy", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, easy, 1)
 	assert.Equal(t, ownPack.ID, easy[0].ID)
-	medium, _, err := repo.ListPage(t.Context(), userID, ListInput{Difficulty: "medium", Limit: 50})
+	medium, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Difficulty: "medium", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, medium, 1)
 	assert.Equal(t, publishedColleague.ID, medium[0].ID)
-	hard, _, err := repo.ListPage(t.Context(), userID, ListInput{Difficulty: "hard", Limit: 50})
+	hard, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Difficulty: "hard", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, hard, 1)
 	assert.Equal(t, studentPack.ID, hard[0].ID)
 
 	for _, boundaryAge := range []int{4, 6} {
-		boundary, _, boundaryErr := repo.ListPage(t.Context(), userID, ListInput{
+		boundary, _, boundaryErr := repo.ListWithTotal(t.Context(), userID, ListInput{
 			Query: "Speech Easy", Age: &boundaryAge, Limit: 50,
 		})
 		require.NoError(t, boundaryErr)
@@ -219,17 +269,17 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 		assert.Equal(t, ownPack.ID, boundary[0].ID)
 	}
 
-	my, _, err := repo.ListPage(t.Context(), userID, ListInput{Section: "my", Limit: 50})
+	my, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Section: "my", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, my, 1)
 	assert.Equal(t, ownPack.ID, my[0].ID)
 
-	library, _, err := repo.ListPage(t.Context(), userID, ListInput{Section: "library", Limit: 50})
+	library, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Section: "library", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, library, 1)
 	assert.Equal(t, publishedColleague.ID, library[0].ID)
 
-	students, _, err := repo.ListPage(t.Context(), userID, ListInput{Section: "students", Limit: 50})
+	students, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Section: "students", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, students, 1)
 	assert.Equal(t, studentPack.ID, students[0].ID)
@@ -256,7 +306,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	require.NoError(t, err)
 
 	age := 5
-	listed, _, err := repo.ListPage(t.Context(), userID, ListInput{
+	listed, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		Query: "pLaCeMeNt", Age: &age, Difficulty: "easy", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -276,7 +326,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	}
 	assert.Empty(t, expectedSections)
 
-	students, _, err := repo.ListPage(t.Context(), userID, ListInput{
+	students, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		Query: "Placement Speech", Section: "students", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -291,7 +341,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	)
 	_, err = repo.Assign(t.Context(), userID, direct.ID, []uuid.UUID{studentOneID})
 	require.NoError(t, err)
-	directPlacements, _, err := repo.ListPage(t.Context(), userID, ListInput{
+	directPlacements, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		Query: "Direct Student Pack", Section: "students", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -827,7 +877,7 @@ func TestRepositoryListFiltersByStudent(t *testing.T) {
 	_, err = repo.Assign(t.Context(), userID, mine.ID, []uuid.UUID{studentA})
 	require.NoError(t, err)
 
-	listed, _, err := repo.ListPage(t.Context(), userID, ListInput{StudentID: &studentA, Limit: 50})
+	listed, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{StudentID: &studentA, Limit: 50})
 	require.NoError(t, err)
 	items := listItemsByID(listed)
 	assert.Contains(t, items, direct.ID)
@@ -835,7 +885,7 @@ func TestRepositoryListFiltersByStudent(t *testing.T) {
 	assert.Contains(t, items, mine.ID, "адаптация из «Моих наборов» тоже относится к ученику")
 	assert.NotContains(t, items, other.ID)
 
-	forB, _, err := repo.ListPage(t.Context(), userID, ListInput{StudentID: &studentB, Limit: 50})
+	forB, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{StudentID: &studentB, Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, forB, 1)
 	assert.Equal(t, other.ID, forB[0].ID)
@@ -843,7 +893,7 @@ func TestRepositoryListFiltersByStudent(t *testing.T) {
 	// Фильтр складывается с разделом. Адаптация числится в разделе
 	// students по папке ученика, хотя сам набор лежит в «Моих наборах»,
 	// поэтому из выдачи она не выпадает.
-	scoped, _, err := repo.ListPage(t.Context(), userID, ListInput{
+	scoped, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		StudentID: &studentA, Section: "students", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -853,14 +903,14 @@ func TestRepositoryListFiltersByStudent(t *testing.T) {
 	require.Contains(t, scopedItems, mine.ID)
 	assert.Equal(t, "students", scopedItems[mine.ID].Section)
 
-	inMy, _, err := repo.ListPage(t.Context(), userID, ListInput{
+	inMy, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		StudentID: &studentA, Section: "my", Limit: 50,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, inMy, "в «Моих наборах» у набора нет ученика")
 
 	unknown := uuid.New()
-	empty, _, err := repo.ListPage(t.Context(), userID, ListInput{StudentID: &unknown, Limit: 50})
+	empty, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{StudentID: &unknown, Limit: 50})
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 }
@@ -883,7 +933,7 @@ func TestRepositoryListSorts(t *testing.T) {
 		created = append(created, pack)
 	}
 
-	byTitle, _, err := repo.ListPage(t.Context(), userID, ListInput{
+	byTitle, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		SortBy: "title", Order: "asc", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -891,14 +941,14 @@ func TestRepositoryListSorts(t *testing.T) {
 	assert.Equal(t, []string{"азбука", "Мячик", "Собака"},
 		[]string{byTitle[0].Title, byTitle[1].Title, byTitle[2].Title})
 
-	desc, _, err := repo.ListPage(t.Context(), userID, ListInput{
+	desc, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		SortBy: "title", Order: "desc", Limit: 50,
 	})
 	require.NoError(t, err)
 	require.Len(t, desc, 3)
 	assert.Equal(t, "Собака", desc[0].Title)
 
-	byCreated, _, err := repo.ListPage(t.Context(), userID, ListInput{
+	byCreated, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		SortBy: "created_at", Order: "asc", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -906,7 +956,7 @@ func TestRepositoryListSorts(t *testing.T) {
 	assert.Equal(t, created[0].ID, byCreated[0].ID)
 
 	// По умолчанию — свежие сверху, как было до появления сортировок.
-	byDefault, _, err := repo.ListPage(t.Context(), userID, ListInput{Limit: 50})
+	byDefault, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, byDefault, 3)
 	assert.Equal(t, created[2].ID, byDefault[0].ID)

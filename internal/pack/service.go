@@ -20,7 +20,7 @@ type packRepository interface {
 	Duplicate(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	GetForPublication(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	ListPage(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
+	ListWithTotal(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -91,7 +91,7 @@ func (s *Service) List(ctx context.Context, input ListInput) (*ListPage, error) 
 	if err != nil {
 		return nil, err
 	}
-	items, total, err := s.repo.ListPage(ctx, userID, input)
+	items, total, err := s.repo.ListWithTotal(ctx, userID, input)
 	if err != nil {
 		return nil, packError(err)
 	}

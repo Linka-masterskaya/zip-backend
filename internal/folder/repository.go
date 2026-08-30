@@ -365,12 +365,6 @@ func (r *Repository) Contents(
 		return nil, err
 	}
 
-	countQuery, countArgs := contentsCountQuery(userID, input)
-	var total int
-	if err = tx.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, fmt.Errorf("folder contents count: %w", err)
-	}
-
 	query, args := contentsQuery(userID, input)
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
@@ -391,6 +385,12 @@ func (r *Repository) Contents(
 	}
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("folder contents rows: %w", err)
+	}
+
+	countQuery, countArgs := contentsCountQuery(userID, input)
+	var total int
+	if err = tx.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("folder contents count: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("folder contents commit: %w", err)
