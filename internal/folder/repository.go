@@ -480,6 +480,8 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       false, p.updated_at, p.age_min, p.age_max, p.difficulty
 			FROM folders student_folder
+			JOIN students s ON s.id = student_folder.student_id
+			               AND s.deleted_at IS NULL
 			JOIN pack_adaptations pa ON pa.student_id = student_folder.student_id
 			JOIN packs p ON p.id = pa.pack_id
 			WHERE student_folder.id = $1
