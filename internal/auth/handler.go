@@ -105,16 +105,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("marshal login response: %w", err)
 	}
 
-	//nolint:gosec // Secure is configured separately for local and production environments.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    result.RefreshToken,
-		Path:     "/api/v1/auth",
-		MaxAge:   int(h.refreshTokenTTL.Seconds()),
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteStrictMode,
-	})
+	setRefreshCookie(w, result.RefreshToken, h.refreshTokenTTL, h.cookieSecure)
 
 	w.Header().Set("Content-Type", "application/json")
 
@@ -222,16 +213,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("marshal refresh response: %w", err)
 	}
 
-	//nolint:gosec // Secure is configured separately for local and production environments.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    result.RefreshToken,
-		Path:     "/api/v1/auth",
-		MaxAge:   int(h.refreshTokenTTL.Seconds()),
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteStrictMode,
-	})
+	setRefreshCookie(w, result.RefreshToken, h.refreshTokenTTL, h.cookieSecure)
 
 	w.Header().Set("Content-Type", "application/json")
 
@@ -329,4 +311,19 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
 	w.WriteHeader(http.StatusAccepted)
 
 	return nil
+}
+
+// setRefreshCookie — единственное место, где описана политика refresh-cookie.
+// Вход по паролю и вход через провайдера обязаны ставить её одинаково.
+func setRefreshCookie(w http.ResponseWriter, token string, ttl time.Duration, secure bool) {
+	//nolint:gosec // Secure is configured separately for local and production environments.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    token,
+		Path:     "/api/v1/auth",
+		MaxAge:   int(ttl.Seconds()),
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+	})
 }
