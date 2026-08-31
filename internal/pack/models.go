@@ -92,6 +92,8 @@ type ListPage struct {
 type ListInput struct {
 	Query      string
 	Age        *int
+	AgeFrom    *int
+	AgeTo      *int
 	Difficulty string
 	Section    string
 	// StudentID сужает выдачу до наборов одного ученика: его собственной

@@ -178,12 +178,38 @@ func TestHandlerListRejectsInvalidPagination(t *testing.T) {
 	}
 }
 
-func TestHandlerListRejectsInvalidAge(t *testing.T) {
+func TestHandlerListPacksReadsAgeRange(t *testing.T) {
+	service := &fakePackService{}
+	ageFrom, ageTo := 5, 8
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
+		require.NotNil(t, input.AgeFrom)
+		require.NotNil(t, input.AgeTo)
+		assert.Equal(t, ageFrom, *input.AgeFrom)
+		assert.Equal(t, ageTo, *input.AgeTo)
+		return &ListPage{}, nil
+	}
+
+	rec := performPackRequest(t, NewHandler(service).ListPacks, http.MethodGet,
+		"/api/v1/packs?age_from=5&age_to=8", nil, "")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHandlerListRejectsInvalidAgeFilters(t *testing.T) {
 	handler := NewHandler(&fakePackService{})
-
-	rec := performPackRequest(t, handler.ListPacks, http.MethodGet, "/api/v1/packs?age=invalid", nil, "")
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	for _, query := range []string{
+		"age=invalid",
+		"age_from=invalid",
+		"age_to=invalid",
+		"age=5&age_from=5",
+		"age_from=8&age_to=5",
+	} {
+		t.Run(query, func(t *testing.T) {
+			rec := performPackRequest(t, handler.ListPacks, http.MethodGet,
+				"/api/v1/packs?"+query, nil, "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
 }
 
 func TestHandlerDeletePack(t *testing.T) {

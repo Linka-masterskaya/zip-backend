@@ -142,9 +142,11 @@ const listPacksBaseQuery = `
 		FROM placements
 		WHERE ($2::text = '' OR title ILIKE '%' || $2::text || '%')
 		  AND ($3::int IS NULL OR age = $3::int)
-		  AND ($4::text = '' OR difficulty = $4::text)
-		  AND ($5::text = '' OR section = $5::text)
-		  AND ($6::uuid IS NULL OR student_id = $6::uuid)
+		  AND ($4::int IS NULL OR age >= $4::int)
+		  AND ($5::int IS NULL OR age <= $5::int)
+		  AND ($6::text = '' OR difficulty = $6::text)
+		  AND ($7::text = '' OR section = $7::text)
+		  AND ($8::uuid IS NULL OR student_id = $8::uuid)
 	)`
 
 // listPacksQuery подставляет сортировку из белого списка: значения
@@ -167,7 +169,7 @@ func listPacksQuery(sortBy, order string) string {
 	       goals, notes, config, is_favorite, section, created_at, updated_at
 	FROM filtered
 	ORDER BY ` + column + ` ` + direction + `, id, section, result_folder_id
-	LIMIT $7 OFFSET $8`
+	LIMIT $9 OFFSET $10`
 }
 
 const countPacksQuery = listPacksBaseQuery + `

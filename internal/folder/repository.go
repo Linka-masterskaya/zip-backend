@@ -524,13 +524,17 @@ func appendContentsFilters(query string, args []any, input ContentsInput) (strin
 		WHERE ($%d::text = '' OR name ILIKE '%%' || $%d::text || '%%')
 		  AND ($%d::text = '' OR type = $%d::text)
 		  AND ($%d::int IS NULL OR age = $%d::int)
+		  AND ($%d::int IS NULL OR age >= $%d::int)
+		  AND ($%d::int IS NULL OR age <= $%d::int)
 		  AND ($%d::text = '' OR difficulty = $%d::text)`,
 		first, first,
 		first+1, first+1,
 		first+2, first+2,
-		first+3, first+3)
+		first+3, first+3,
+		first+4, first+4,
+		first+5, first+5)
 
-	args = append(args, input.Query, input.Type, input.Age, input.Difficulty)
+	args = append(args, input.Query, input.Type, input.Age, input.AgeFrom, input.AgeTo, input.Difficulty)
 	return query + filters, args
 }
 

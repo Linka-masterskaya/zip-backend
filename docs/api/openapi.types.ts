@@ -540,8 +540,12 @@ export interface paths {
                     query?: string;
                     /** @description Оставить только папки или только наборы */
                     type?: "folder" | "pack";
-                    /** @description Точное совпадение с рекомендуемым возрастом набора. У папок возраста нет, поэтому фильтр оставляет только наборы */
+                    /** @description Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to. У папок возраста нет, поэтому фильтр оставляет только наборы */
                     age?: number;
+                    /** @description Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age */
+                    age_from?: number;
+                    /** @description Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age */
+                    age_to?: number;
                     /** @description Свойство набора: папки отсеиваются */
                     difficulty?: "easy" | "medium" | "hard";
                     limit?: number;
@@ -960,8 +964,12 @@ export interface paths {
                 query?: {
                     /** @description Подстрока title без учёта регистра */
                     query?: string;
-                    /** @description Точное совпадение с рекомендуемым возрастом набора */
+                    /** @description Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to */
                     age?: number;
+                    /** @description Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age */
+                    age_from?: number;
+                    /** @description Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age */
+                    age_to?: number;
                     difficulty?: "easy" | "medium" | "hard";
                     section?: "library" | "my" | "students";
                     /** @description Только наборы одного ученика: лежащие в его папке, во вложенных в неё папках и выданные ему адаптации. */

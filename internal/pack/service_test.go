@@ -107,12 +107,19 @@ func TestServiceListRejectsInvalidPagination(t *testing.T) {
 func TestServiceListRejectsInvalidFilters(t *testing.T) {
 	ageTooLow := 2
 	ageTooHigh := 19
+	age := 5
+	ageFrom := 8
+	ageTo := 5
 	tests := []struct {
 		name  string
 		input ListInput
 	}{
 		{name: "age too low", input: ListInput{Age: &ageTooLow}},
 		{name: "age too high", input: ListInput{Age: &ageTooHigh}},
+		{name: "age_from too low", input: ListInput{AgeFrom: &ageTooLow}},
+		{name: "age_to too high", input: ListInput{AgeTo: &ageTooHigh}},
+		{name: "exact age with range", input: ListInput{Age: &age, AgeFrom: &ageFrom}},
+		{name: "reversed range", input: ListInput{AgeFrom: &ageFrom, AgeTo: &ageTo}},
 		{name: "difficulty", input: ListInput{Difficulty: "expert"}},
 		{name: "section", input: ListInput{Section: "shared"}},
 	}

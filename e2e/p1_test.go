@@ -213,6 +213,21 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	require.NotNil(t, contents.Items[0].Difficulty)
 	assert.Equal(t, "medium", *contents.Items[0].Difficulty)
 
+	rangedContents := e2eJSON[folder.ContentsPage](
+		t,
+		e2eRequest(
+			t,
+			server,
+			ownerToken,
+			http.MethodGet,
+			"/api/v1/sections/my/contents?parent_id="+child.ID.String()+"&age_from=4&age_to=6",
+			nil,
+		),
+		http.StatusOK,
+	)
+	require.Len(t, rangedContents.Items, 1)
+	assert.Equal(t, createdPack.ID, rangedContents.Items[0].ID)
+
 	t.Run("section root is addressable without a folder id", func(t *testing.T) {
 		// «Мои наборы» — пункт меню, а не папка: id для корня не существует.
 		root := e2eJSON[folder.ContentsPage](

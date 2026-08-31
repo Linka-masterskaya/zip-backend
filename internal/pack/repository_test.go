@@ -206,6 +206,29 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, notMatched)
+
+	ageFrom, ageTo := 6, 7
+	inRange, err := repo.List(t.Context(), userID, ListInput{
+		AgeFrom: &ageFrom, AgeTo: &ageTo, Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, inRange, 1)
+	assert.Equal(t, studentPack.ID, inRange[0].ID)
+	inRangeTotal, err := repo.Count(t.Context(), userID, ListInput{
+		AgeFrom: &ageFrom, AgeTo: &ageTo,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, inRangeTotal)
+
+	fromOnly, err := repo.List(t.Context(), userID, ListInput{AgeFrom: &ageFrom, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, fromOnly, 1)
+	assert.Equal(t, studentPack.ID, fromOnly[0].ID)
+	toOnly := 5
+	upToAge, err := repo.List(t.Context(), userID, ListInput{AgeTo: &toOnly, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, upToAge, 2)
+
 	my, err := repo.List(t.Context(), userID, ListInput{Section: "my", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, my, 1)

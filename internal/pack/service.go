@@ -235,7 +235,7 @@ func validateListInput(input ListInput) (ListInput, error) {
 }
 
 func validateListFilters(input ListInput) error {
-	if err := packfilter.ValidateAge(input.Age); err != nil {
+	if err := packfilter.ValidateAgeFilters(input.Age, input.AgeFrom, input.AgeTo); err != nil {
 		return err
 	}
 	if err := packfilter.ValidateDifficulty(input.Difficulty); err != nil {

@@ -131,7 +131,7 @@ func (h *Handler) GetPack(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, http.StatusOK, result)
 }
 
-// ListPacks handles GET /api/v1/packs?query=&age=&difficulty=&section=.
+// ListPacks handles GET /api/v1/packs with search and metadata filters.
 func (h *Handler) ListPacks(w http.ResponseWriter, r *http.Request) error {
 	input, err := listInputFromRequest(r)
 	if err != nil {
@@ -252,6 +252,14 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 	if err != nil {
 		return ListInput{}, err
 	}
+	ageFrom, err := httpquery.OptionalInt(r, "age_from")
+	if err != nil {
+		return ListInput{}, err
+	}
+	ageTo, err := httpquery.OptionalInt(r, "age_to")
+	if err != nil {
+		return ListInput{}, err
+	}
 	limit, err := httpquery.Int(r, "limit")
 	if err != nil {
 		return ListInput{}, err
@@ -264,6 +272,8 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 		return ListInput{}, err
 	}
 	input.Age = age
+	input.AgeFrom = ageFrom
+	input.AgeTo = ageTo
 	input.Limit = limit
 	input.Offset = offset
 	return validateListInput(input)

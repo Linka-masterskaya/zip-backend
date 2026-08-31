@@ -497,6 +497,29 @@ func TestContentsFilters(t *testing.T) {
 	require.NotNil(t, byAge.Items[0].Difficulty)
 	assert.Equal(t, "easy", *byAge.Items[0].Difficulty)
 
+	ageFrom, ageTo := 6, 8
+	byRange, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeFrom: &ageFrom, AgeTo: &ageTo,
+	})
+	require.NoError(t, err)
+	require.Len(t, byRange.Items, 1)
+	assert.Equal(t, "Счёт набор", byRange.Items[0].Name)
+	assert.Equal(t, 1, byRange.Total)
+
+	fromOnly, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeFrom: &ageFrom,
+	})
+	require.NoError(t, err)
+	require.Len(t, fromOnly.Items, 1)
+	assert.Equal(t, "Счёт набор", fromOnly.Items[0].Name)
+	toOnly := 5
+	upToAge, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeTo: &toOnly,
+	})
+	require.NoError(t, err)
+	require.Len(t, upToAge.Items, 1)
+	assert.Equal(t, "Азбука набор", upToAge.Items[0].Name)
+
 	byDifficulty, err := service.Contents(ctx, ContentsInput{
 		Section: SectionMy, ParentID: &root.ID, Difficulty: "hard",
 	})

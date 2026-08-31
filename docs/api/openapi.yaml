@@ -1108,7 +1108,9 @@ paths:
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
         - { name: query, in: query, schema: { type: string }, description: "Подстрока названия папки или набора без учёта регистра" }
         - { name: type, in: query, schema: { type: string, enum: [folder, pack] }, description: "Оставить только папки или только наборы" }
-        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Точное совпадение с рекомендуемым возрастом набора. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: age_from, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age" }
+        - { name: age_to, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age" }
         - { name: difficulty, in: query, schema: { type: string, enum: [easy, medium, hard] }, description: "Свойство набора: папки отсеиваются" }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
@@ -1376,7 +1378,19 @@ paths:
             name: age,
             in: query,
             schema: { type: integer, minimum: 3, maximum: 18 },
-            description: Точное совпадение с рекомендуемым возрастом набора,
+            description: Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to,
+          }
+        - {
+            name: age_from,
+            in: query,
+            schema: { type: integer, minimum: 3, maximum: 18 },
+            description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age",
+          }
+        - {
+            name: age_to,
+            in: query,
+            schema: { type: integer, minimum: 3, maximum: 18 },
+            description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age",
           }
         - {
             name: difficulty,
