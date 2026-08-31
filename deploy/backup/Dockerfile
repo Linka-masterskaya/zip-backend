@@ -12,8 +12,8 @@ FROM postgres:17-alpine
 COPY --from=minio/mc:RELEASE.2025-08-13T08-35-41Z /usr/bin/mc /usr/local/bin/mc
 
 # restic - шифрование, дедупликация и retention; curl - отправка метрик;
-# tzdata - чтобы расписание можно было привязать к местному времени.
-RUN apk add --no-cache restic curl tzdata
+# jq - manifest MinIO; flock из util-linux - защита от пересечения задач.
+RUN apk add --no-cache restic curl jq util-linux
 
 COPY scripts/backup/ /scripts/
 COPY deploy/backup/crontab /etc/crontabs/root

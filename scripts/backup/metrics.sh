@@ -3,6 +3,7 @@
 # и сам ничего не делает.
 
 set -eu
+set -o pipefail
 
 # Адрес Pushgateway внутри docker-сети. Если он недоступен, отправка метрик
 # тихо пропускается и на сам backup это не влияет.
@@ -37,7 +38,8 @@ backup_push_metrics() {
 
     # Свободное место на диске с копиями - чтобы Grafana предупредила
     # заранее, а не когда копии уже перестали делаться.
-    free_kb=$(df -Pk "$RESTIC_REPOSITORY" 2>/dev/null | awk 'NR==2 {print $4}')
+    repository_path=${RESTIC_REPOSITORY:-/backup-repo}
+    free_kb=$(df -Pk "$repository_path" 2>/dev/null | awk 'NR==2 {print $4}')
     if [ -n "$free_kb" ]; then
       echo "linka_backup_disk_free_bytes{target=\"$target\"} $((free_kb * 1024))"
     fi
@@ -50,11 +52,12 @@ backup_push_metrics() {
 # Проверяем место ДО того, как начать писать.
 
 backup_require_free_space() {
-  free_kb=$(df -Pk "$RESTIC_REPOSITORY" | awk 'NR==2 {print $4}')
+  repository_path=${RESTIC_REPOSITORY:-/backup-repo}
+  free_kb=$(df -Pk "$repository_path" | awk 'NR==2 {print $4}')
   free_mb=$((free_kb / 1024))
 
   if [ "$free_mb" -lt "$BACKUP_MIN_FREE_MB" ]; then
-    echo "недостаточно места в $RESTIC_REPOSITORY: свободно ${free_mb} МБ, нужно минимум ${BACKUP_MIN_FREE_MB} МБ" >&2
+    echo "недостаточно места в $repository_path: свободно ${free_mb} МБ, нужно минимум ${BACKUP_MIN_FREE_MB} МБ" >&2
     return 1
   fi
 

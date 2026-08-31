@@ -179,6 +179,7 @@ services:
     volumes:
       - prometheus_data:/prometheus
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus/rules:/etc/prometheus/rules:ro
     depends_on:
       zip-backend:
         condition: service_started

@@ -32,9 +32,9 @@ docker compose -f docker-compose.server.yaml --profile backup logs --tail=50 bac
 ## Как это работает
 
 ```
-postgres ──pg_dump──┐
-                    ├──> контейнер backup ──зашифровано──> /var/backups/linka
-minio ────mc mirror─┘      (планировщик + restic)
+postgres ──pg_dump────────────┐
+                              ├──> контейнер backup ──зашифровано──> /var/backups/linka
+minio ──mc mirror + manifest──┘      (планировщик + restic)
                     └──метрики──> pushgateway ──> prometheus ──> grafana
 ```
 
@@ -68,6 +68,12 @@ root-доступом.
   быть **не старше** снимка базы. Иначе в `media_files` окажутся строки без
   объектов, то есть битые картинки и звуки. Потеря - до шести часов.
 
+**Зачем MinIO manifest.** При выгрузке объекта в обычный файл сохраняются его
+байты, но теряется S3-метадата. Поэтому вместе с зеркалом сохраняется JSONL-
+manifest с ключом, размером и `Content-Type` каждого объекта. При restore
+объекты загружаются по manifest, а не обычным `mc mirror`, и картинки, аудио и
+аватары получают исходный MIME-тип.
+
 **Диск.** На сервере один раздел ~29 ГБ на всё: Docker, база, MinIO, логи и
 копии. Копия медиа занимает примерно двойной объём бакета, поэтому потолок -
 около 5 ГБ медиа. Скрипты отказываются работать, если свободно меньше 3 ГБ.
@@ -80,6 +86,7 @@ root-доступом.
 | `deploy/backup/crontab` | расписание |
 | `scripts/backup/postgres.sh` | копия базы |
 | `scripts/backup/minio.sh` | копия объектов |
+| `scripts/backup/restore-minio.sh` | восстановление объектов и `Content-Type` |
 | `scripts/backup/retention.sh` | чистка и проверка репозитория |
 | `scripts/backup/metrics.sh` | общие функции, подключается в остальные |
 | `scripts/backup/mc.sh` | обёртка над `mc` с настроенным доступом |
@@ -173,20 +180,22 @@ docker compose -f docker-compose.server.yaml --profile backup exec backup restic
 чтения env-файла. Если забыть `restic init`, ручной backup и cron будут
 падать до инициализации repository.
 
-### 5. Два алерта в Grafana
+### 5. Проверить алерты
 
-Alerting → New alert rule, источник Prometheus.
+Alert rules хранятся в `deploy/prometheus/rules/backup.yml` и загружаются
+Prometheus автоматически. Вручную создавать их в UI Grafana не нужно.
 
-Копии не делаются - упали, давно не было или контейнер не подняли:
-```promql
-(time() - linka_backup_last_success_timestamp_seconds > 25200)
-  or absent(linka_backup_last_success_timestamp_seconds)
-```
+Настроены отдельные проверки:
 
-Кончается место:
-```promql
-min(linka_backup_disk_free_bytes) < 5e9
-```
+- PostgreSQL: успешной копии нет больше 2 часов;
+- MinIO: успешной копии нет больше 7 часов;
+- retention: успешного запуска нет больше 26 часов;
+- последняя backup-задача завершилась ошибкой;
+- на разделе с backup осталось меньше 5 ГБ.
+
+После первого запуска откройте Grafana → Alerting и убедитесь, что правила
+видны. Правила определяют состояние alert, но для активных уведомлений ещё
+нужно назначить командный contact point (email или webhook).
 
 ### 6. Проверка через час
 
@@ -286,14 +295,14 @@ docker compose -f docker-compose.server.yaml --profile backup exec backup rm -rf
 docker compose -f docker-compose.server.yaml --profile backup exec backup \
   restic restore <SNAPSHOT_ID> --target /backup-tmp/restore
 
-# 3. залить обратно
+# 3. залить обратно вместе с исходными Content-Type
 docker compose -f docker-compose.server.yaml --profile backup exec backup \
-  /scripts/mc.sh mirror --overwrite \
-    /backup-tmp/restore/backup-mirror/<MINIO_BUCKET> \
-    linka/<MINIO_BUCKET>
+  /scripts/restore-minio.sh /backup-tmp/restore
 ```
 
-Без `--remove`: восстановление не должно удалять то, что уже есть в бакете.
+Скрипт не удаляет дополнительные объекты, которые уже есть в бакете. Для
+каждого объекта он сначала сверяет размер локального файла с manifest, затем
+загружает файл и явно выставляет сохранённый `Content-Type`.
 
 ## Проверка после восстановления
 
@@ -301,9 +310,11 @@ docker compose -f docker-compose.server.yaml --profile backup exec backup \
 docker compose -f docker-compose.server.yaml --profile backup exec backup /scripts/verify-restore.sh
 ```
 
-Скрипт сверяет каждую запись `media_files` с объектами в MinIO. Код возврата
-`0` - целостность в порядке. Если жалуется на недостающие объекты, значит
-копия медиа старше копии базы: возьмите более свежую.
+Скрипт проверяет размер и `Content-Type` каждого объекта из manifest, а также
+ссылки `media_files.minio_key`, `users.avatar_key`, `audio_bank.minio_key` и
+`tts_jobs.minio_key`. Код возврата `0` означает, что проверка пройдена. Если
+объекта из БД нет в manifest, копия MinIO, вероятно, старше выбранной копии
+базы: возьмите более свежий snapshot MinIO.
 
 Если скрипт падает с `relation "users" does not exist`, значит проверяется не
 восстановленная рабочая база, а пустая база без схемы приложения.
@@ -315,6 +326,12 @@ docker compose -f docker-compose.server.yaml --profile backup exec backup /scrip
 - [ ] список наборов открывается
 - [ ] карточка с картинкой открывается
 - [ ] карточка со звуком воспроизводится
+
+После успешной проверки удалите временные восстановленные файлы:
+
+```sh
+docker compose -f docker-compose.server.yaml --profile backup exec backup rm -rf /backup-tmp/restore
+```
 
 ## Что стоит знать
 

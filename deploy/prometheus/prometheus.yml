@@ -1,6 +1,9 @@
 global:
   scrape_interval: 5s
 
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
 scrape_configs:
   - job_name: "zip-backend-metrics"
     static_configs:

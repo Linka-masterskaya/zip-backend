@@ -4,6 +4,7 @@
 # Запускается раз в сутки, отдельно от самих бэкапов: чистка не должна
 # удлинять окно, в котором делается копия.
 set -eu
+set -o pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=scripts/backup/metrics.sh
@@ -11,9 +12,6 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 target="retention"
 started_at=$(backup_now)
-
-: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
-: "${RESTIC_PASSWORD:?RESTIC_PASSWORD is required}"
 
 finish() {
   status=$1
@@ -28,6 +26,23 @@ finish() {
     echo "retention FAILED after ${duration}s" >&2
   fi
 }
+
+on_exit() {
+  exit_code=$?
+  trap - EXIT
+
+  if [ "$exit_code" -eq 0 ]; then
+    finish 0 || true
+  else
+    finish 1 || true
+  fi
+
+  exit "$exit_code"
+}
+trap on_exit EXIT
+
+: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
+: "${RESTIC_PASSWORD:?RESTIC_PASSWORD is required}"
 
 # --group-by host,tags: политика применяется к postgres и minio раздельно,
 # поэтому "14 daily" считаются для каждого типа копии свои. Без группировки
@@ -48,7 +63,6 @@ if ! restic forget --prune \
   --keep-weekly 4 \
   --keep-monthly 3; then
   echo "restic forget failed" >&2
-  finish 1
   exit 1
 fi
 
@@ -56,8 +70,5 @@ fi
 # Это быстрая проверка метаданных.
 if ! restic check; then
   echo "restic check failed: repository integrity problem" >&2
-  finish 1
   exit 1
 fi
-
-finish 0

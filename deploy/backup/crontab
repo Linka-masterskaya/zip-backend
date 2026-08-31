@@ -9,6 +9,7 @@
 # берёт репозиторий в монопольную блокировку и упал бы, начнись он во время
 # работающего backup.
 
-0  *    * * * /scripts/postgres.sh  >> /proc/1/fd/1 2>&1
-30 */6  * * * /scripts/minio.sh     >> /proc/1/fd/1 2>&1
-40 3    * * * /scripts/retention.sh >> /proc/1/fd/1 2>&1
+# Один lock не даёт пересекаться ни одинаковым задачам, ни backup с prune.
+0  *    * * * flock -n /tmp/linka-backup.lock /scripts/postgres.sh  >> /proc/1/fd/1 2>&1
+30 */6  * * * flock -n /tmp/linka-backup.lock /scripts/minio.sh     >> /proc/1/fd/1 2>&1
+40 3    * * * flock -n /tmp/linka-backup.lock /scripts/retention.sh >> /proc/1/fd/1 2>&1

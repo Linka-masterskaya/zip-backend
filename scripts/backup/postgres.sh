@@ -6,6 +6,7 @@
 # Запускается по расписанию из контейнера `backup` (см. deploy/backup/crontab).
 #
 set -eu
+set -o pipefail
 
 # определяет папку, где лежит скрипт
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -16,19 +17,9 @@ target="postgres"
 started_at=$(backup_now)
 bytes=0
 
-# Проверяем конфигурацию до того, как что-то делать: понятная ошибка лучше,
 POSTGRES_HOST=${POSTGRES_HOST:-postgres}
 POSTGRES_PORT=${POSTGRES_PORT:-5432}
-
-: "${POSTGRES_USER:?POSTGRES_USER is required}"
-: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
-: "${POSTGRES_DB:?POSTGRES_DB is required}"
-: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
-: "${RESTIC_PASSWORD:?RESTIC_PASSWORD is required}"
-
 tmp_dir=/backup-tmp
-
-
 # `restic forget` группирует снапшоты по (host, paths). Если имя дампа будет
 # меняться от запуска к запуску, каждый снапшот попадёт в собственную группу,
 # политика вида --keep-daily 7 применится к группе из одного снапшота, и
@@ -55,13 +46,36 @@ finish() {
 cleanup() {
   rm -f "$dump_file"
 }
-trap cleanup EXIT
+
+# Единый EXIT-обработчик отправляет ровно один итоговый статус даже при
+# неожиданной ошибке из-за set -e (например, mkdir, wc или отсутствующей env).
+on_exit() {
+  exit_code=$?
+  trap - EXIT
+  cleanup || true
+
+  if [ "$exit_code" -eq 0 ]; then
+    finish 0 || true
+  else
+    finish 1 || true
+  fi
+
+  exit "$exit_code"
+}
+trap on_exit EXIT
+
+# Проверяем конфигурацию после установки trap, чтобы ошибка конфигурации тоже
+# попала в метрики.
+: "${POSTGRES_USER:?POSTGRES_USER is required}"
+: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+: "${POSTGRES_DB:?POSTGRES_DB is required}"
+: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
+: "${RESTIC_PASSWORD:?RESTIC_PASSWORD is required}"
 
 mkdir -p "$tmp_dir"
 
 # Копии лежат на одном диске с базой: не начинаем, если места впритык.
 if ! backup_require_free_space; then
-  finish 1
   exit 1
 fi
 
@@ -82,7 +96,6 @@ if ! PGPASSWORD="$POSTGRES_PASSWORD" pg_dump \
   --no-privileges \
   -f "$dump_file"; then
   echo "pg_dump failed" >&2
-  finish 1
   exit 1
 fi
 
@@ -92,7 +105,6 @@ bytes=$(wc -c < "$dump_file" | tr -d ' ')
 # вытеснит по retention последнюю хорошую копию
 if ! pg_restore --list "$dump_file" >/dev/null 2>&1; then
   echo "dump verification failed: pg_restore cannot read the dump" >&2
-  finish 1
   exit 1
 fi
 
@@ -102,8 +114,5 @@ if ! restic backup "$dump_file" \
   --tag postgres \
   --host linka-production; then
   echo "restic backup failed" >&2
-  finish 1
   exit 1
 fi
-
-finish 0
