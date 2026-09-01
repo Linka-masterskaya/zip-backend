@@ -319,23 +319,17 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 	if published {
 		return ErrPackPublished
 	}
-	adaptationIDs := make([]uuid.UUID, 0)
-	rows, queryErr := tx.Query(ctx, adaptationIDsForPackQuery, packID)
-	if queryErr != nil {
-		return fmt.Errorf("pack repository delete adaptations: %w", queryErr)
+	adaptRows, err := tx.Query(ctx, adaptationIDsForPackQuery, packID)
+	if err != nil {
+		return fmt.Errorf("pack repository delete adaptations: %w", err)
 	}
-	for rows.Next() {
-		var adaptationID uuid.UUID
-		if queryErr = rows.Scan(&adaptationID); queryErr != nil {
-			rows.Close()
-			return fmt.Errorf("pack repository delete adaptation scan: %w", queryErr)
-		}
-		adaptationIDs = append(adaptationIDs, adaptationID)
+	adaptationIDs, err := pgx.CollectRows(adaptRows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("pack repository delete adaptations: %w", err)
 	}
-	queryErr = rows.Err()
-	rows.Close()
-	if queryErr != nil {
-		return fmt.Errorf("pack repository delete adaptation rows: %w", queryErr)
+	mediaIDs, err := collectPackMedia(ctx, tx, packID, adaptationIDs)
+	if err != nil {
+		return fmt.Errorf("pack repository delete collect media: %w", err)
 	}
 	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, packID); err != nil {
 		return fmt.Errorf("pack repository delete media usages: %w", err)
@@ -347,6 +341,9 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 	}
 	if _, err = tx.Exec(ctx, deletePackQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete: %w", err)
+	}
+	if err = deleteOrphanedMedia(ctx, tx, mediaIDs); err != nil {
+		return fmt.Errorf("pack repository delete orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pack repository delete commit: %w", err)
@@ -512,4 +509,22 @@ func scanListItem(row rowScanner) (*ListItem, error) {
 		return nil, err
 	}
 	return &result, nil
+}
+
+func deleteOrphanedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []uuid.UUID) error {
+	if len(mediaIDs) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, deleteOrphanedMediaQuery, mediaIDs); err != nil {
+		return fmt.Errorf("delete orphaned media: %w", err)
+	}
+	return nil
+}
+
+func collectPackMedia(ctx context.Context, tx pgx.Tx, packID uuid.UUID, adaptationIDs []uuid.UUID) ([]uuid.UUID, error) {
+	mediaRows, err := tx.Query(ctx, collectPackMediaQuery, packID, adaptationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("pack collect media: %w", err)
+	}
+	return pgx.CollectRows(mediaRows, pgx.RowTo[uuid.UUID])
 }

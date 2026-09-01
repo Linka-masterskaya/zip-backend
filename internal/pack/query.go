@@ -526,3 +526,22 @@ const qualifiedPackColumns = `
 	p.published_at, p.title, p.status,
 	p.age, p.difficulty, p.goals, p.notes, p.config,
 	p.created_at, p.updated_at`
+
+const collectPackMediaQuery = `
+		SELECT media_id FROM media_usages WHERE source_id = $1
+		UNION ALL
+		SELECT media_id FROM media_usages WHERE source_id = ANY($2::uuid[])`
+
+const deleteOrphanedMediaQuery = `
+		WITH deleted AS (
+			DELETE FROM media_files
+			WHERE id = ANY($1)
+				AND NOT EXISTS (
+					SELECT 1 FROM media_usages WHERE media_id = media_files.id
+				)
+			RETURNING org_id, size_bytes
+		)
+		UPDATE organizations o
+		SET storage_used_bytes = GREATEST(o.storage_used_bytes - d.total, 0)
+		FROM (SELECT org_id, SUM(size_bytes) AS total FROM deleted GROUP BY org_id) d
+		WHERE o.id = d.org_id`
