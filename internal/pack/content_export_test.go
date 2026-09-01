@@ -8,6 +8,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/media"
+	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +27,7 @@ func TestContentServiceExportValidatesConfigBeforeArchive(t *testing.T) {
 	}
 	service := NewContentService(repo, nil, nil, nil)
 
-	_, err := service.Export(packContext(uuid.New()), repo.pack.ID)
+	_, err := service.Export(packContext(uuid.New()), repo.pack.ID, linka.FormatLinka2)
 
 	assertAppErrorStatus(t, err, http.StatusBadRequest)
 }
@@ -40,7 +41,7 @@ func TestContentServiceExportReturnsConflictForMissingMedia(t *testing.T) {
 	}
 	service := NewContentService(repo, fakeArchiveStorage{}, nil, nil)
 
-	_, err := service.Export(packContext(uuid.New()), repo.pack.ID)
+	_, err := service.Export(packContext(uuid.New()), repo.pack.ID, linka.FormatLinka2)
 
 	var appErr *apperr.AppError
 	require.ErrorAs(t, err, &appErr)
@@ -68,7 +69,7 @@ func TestContentServiceExportReturnsConflictForMissingPicture(t *testing.T) {
 		},
 	)
 
-	_, err := service.Export(packContext(uuid.New()), repo.pack.ID)
+	_, err := service.Export(packContext(uuid.New()), repo.pack.ID, linka.FormatLinka2)
 
 	var appErr *apperr.AppError
 	require.ErrorAs(t, err, &appErr)
@@ -92,7 +93,7 @@ func TestContentServiceExportAdaptationUsesSnapshotAndSafeFilename(t *testing.T)
 		nil,
 	)
 
-	archive, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New())
+	archive, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New(), linka.FormatLinka2)
 
 	require.NoError(t, err)
 	require.NotNil(t, archive)
@@ -105,7 +106,7 @@ func TestContentServiceExportAdaptationReturnsNotFound(t *testing.T) {
 	repo := &exportContentRepository{err: ErrAdaptationNotFound}
 	service := NewContentService(repo, nil, nil, nil)
 
-	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New())
+	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New(), linka.FormatLinka2)
 
 	assertAppErrorStatus(t, err, http.StatusNotFound)
 }
@@ -119,7 +120,7 @@ func TestContentServiceExportAdaptationReturnsConflictForMissingMedia(t *testing
 	}
 	service := NewContentService(repo, fakeArchiveStorage{}, nil, nil)
 
-	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New())
+	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New(), linka.FormatLinka2)
 
 	assertAppErrorStatus(t, err, http.StatusConflict)
 }
@@ -137,7 +138,7 @@ func TestContentServiceExportAdaptationValidatesConfig(t *testing.T) {
 	}
 	service := NewContentService(repo, nil, nil, nil)
 
-	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New())
+	_, err := service.ExportAdaptation(packContext(uuid.New()), uuid.New(), linka.FormatLinka2)
 
 	assertAppErrorStatus(t, err, http.StatusBadRequest)
 }
@@ -156,7 +157,7 @@ func TestContentServiceExportReturnsStreamAndSafeFilename(t *testing.T) {
 		repo, fakeArchiveStorage{objects: map[string][]byte{"object": {1, 2, 3}}}, nil, nil,
 	)
 
-	archive, err := service.Export(packContext(uuid.New()), repo.pack.ID)
+	archive, err := service.Export(packContext(uuid.New()), repo.pack.ID, linka.FormatLinka2)
 
 	require.NoError(t, err)
 	require.NotNil(t, archive)
@@ -227,20 +228,8 @@ func (r *exportContentRepository) CreateVersion(
 	return nil, nil
 }
 
-func (r *exportContentRepository) ListVersions(
-	context.Context, uuid.UUID, uuid.UUID, ListInput,
-) ([]*VersionSummary, error) {
-	return nil, nil
-}
-
 func (r *exportContentRepository) GetVersion(
 	context.Context, uuid.UUID, uuid.UUID, int,
 ) (*Version, error) {
-	return nil, nil
-}
-
-func (r *exportContentRepository) RestoreVersion(
-	context.Context, uuid.UUID, uuid.UUID, int,
-) (*RestoreResult, error) {
 	return nil, nil
 }

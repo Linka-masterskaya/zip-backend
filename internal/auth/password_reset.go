@@ -41,6 +41,11 @@ func (au *authService) ForgotPassword(ctx context.Context, email string) error {
 
 	token, err := au.repo.CreatePasswordResetToken(ctx, user.ID, au.cfg.ResetPasswordTokenTTL)
 	if err != nil {
+		// The account may have been soft-deleted after the lookup above. Keep
+		// the endpoint indistinguishable from a missing address.
+		if errors.Is(err, apperr.ErrUserNotFound) {
+			return nil
+		}
 		return err
 	}
 

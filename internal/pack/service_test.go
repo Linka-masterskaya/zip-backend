@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
@@ -51,6 +52,10 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		}, input)
 		return []*ListItem{{ID: packID}}, nil
 	}
+	repo.countFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) (int, error) {
+		assert.Equal(t, userID, gotUserID)
+		return 1, nil
+	}
 	repo.deleteFn = func(_ context.Context, gotUserID, gotPackID uuid.UUID) error {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, packID, gotPackID)
@@ -71,7 +76,9 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		Query: "  Speech  ", Age: &age, Difficulty: "easy", Section: "my",
 	})
 	require.NoError(t, err)
-	require.Len(t, listed, 1)
+	require.Len(t, listed.Items, 1)
+	assert.Equal(t, 1, listed.Total)
+	assert.Equal(t, 50, listed.Limit)
 	require.NoError(t, service.Delete(ctx, packID))
 	moved, err := service.Move(ctx, packID, folderID)
 	require.NoError(t, err)
@@ -235,11 +242,62 @@ func TestServiceMapsRepositoryErrors(t *testing.T) {
 	}
 }
 
-func TestServiceRequiresAuthenticatedUser(t *testing.T) {
-	_, err := NewService(&fakePackRepository{}, nil).Get(context.Background(), uuid.New())
-	assert.ErrorIs(t, err, apperr.ErrUnauthorized)
+func TestServiceDuplicateContract(t *testing.T) {
+	userID, packID, folderID := uuid.New(), uuid.New(), uuid.New()
+	repo := &fakePackRepository{}
+	repo.duplicateFn = func(
+		_ context.Context,
+		gotUserID, gotPackID uuid.UUID,
+		input DuplicateInput,
+	) (*Pack, error) {
+		assert.Equal(t, userID, gotUserID)
+		assert.Equal(t, packID, gotPackID)
+		require.NotNil(t, input.FolderID)
+		assert.Equal(t, folderID, *input.FolderID)
+		return &Pack{ID: uuid.New(), FolderID: folderID}, nil
+	}
+
+	result, err := NewService(repo, nil).Duplicate(
+		packContext(userID), packID, DuplicateInput{FolderID: &folderID},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, folderID, result.FolderID)
 }
 
+func TestServiceDuplicateMapsDestinationRequired(t *testing.T) {
+	repo := &fakePackRepository{duplicateFn: func(
+		context.Context, uuid.UUID, uuid.UUID, DuplicateInput,
+	) (*Pack, error) {
+		return nil, ErrDuplicateDestinationRequired
+	}}
+	_, err := NewService(repo, nil).Duplicate(
+		packContext(uuid.New()), uuid.New(), DuplicateInput{},
+	)
+	assertAppErrorStatus(t, err, http.StatusBadRequest)
+}
+
+func TestServiceRequiresAuthenticatedUser(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Service) error
+	}{
+		{name: "get", call: func(service *Service) error {
+			_, err := service.Get(context.Background(), uuid.New())
+			return err
+		}},
+		{name: "duplicate", call: func(service *Service) error {
+			_, err := service.Duplicate(context.Background(), uuid.New(), DuplicateInput{})
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.call(NewService(&fakePackRepository{}, nil))
+			require.ErrorIs(t, err, apperr.ErrUnauthorized)
+		})
+	}
+}
 func packContext(userID uuid.UUID) context.Context {
 	return authctx.SetUserIDToCtx(context.Background(), userID)
 }
@@ -254,15 +312,27 @@ func assertAppErrorStatus(t *testing.T, err error, status int) {
 
 type fakePackRepository struct {
 	createFn            func(context.Context, uuid.UUID, CreateInput) (*Pack, error)
+	duplicateFn         func(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	getFn               func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
 	listFn              func(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
+	countFn             func(context.Context, uuid.UUID, ListInput) (int, error)
 	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
 	moveFn              func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
 	publishFn           func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, bool) (*Pack, error)
 }
 
+func (f *fakePackRepository) Duplicate(
+	ctx context.Context,
+	userID, packID uuid.UUID,
+	input DuplicateInput,
+) (*Pack, error) {
+	if f.duplicateFn != nil {
+		return f.duplicateFn(ctx, userID, packID, input)
+	}
+	return &Pack{}, nil
+}
 func (f *fakePackRepository) GetForPublication(
 	ctx context.Context,
 	userID, packID uuid.UUID,
@@ -297,6 +367,17 @@ func (f *fakePackRepository) List(
 		return f.listFn(ctx, userID, input)
 	}
 	return []*ListItem{}, nil
+}
+
+func (f *fakePackRepository) Count(
+	ctx context.Context,
+	userID uuid.UUID,
+	input ListInput,
+) (int, error) {
+	if f.countFn != nil {
+		return f.countFn(ctx, userID, input)
+	}
+	return 0, nil
 }
 
 func (f *fakePackRepository) Update(ctx context.Context, userID, packID uuid.UUID, input UpdateInput) (*Pack, error) {

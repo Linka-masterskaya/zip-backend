@@ -16,9 +16,11 @@ import (
 
 type packRepository interface {
 	Create(context.Context, uuid.UUID, CreateInput) (*Pack, error)
+	Duplicate(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	GetForPublication(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
 	List(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
+	Count(context.Context, uuid.UUID, ListInput) (int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -55,6 +57,20 @@ func (s *Service) Create(ctx context.Context, title string, folderID uuid.UUID) 
 	return result, packError(err)
 }
 
+// Duplicate creates an independent draft copy of an accessible pack.
+func (s *Service) Duplicate(
+	ctx context.Context,
+	packID uuid.UUID,
+	input DuplicateInput,
+) (*Pack, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.repo.Duplicate(ctx, userID, packID, input)
+	return result, packError(err)
+}
+
 // Get returns an accessible pack.
 func (s *Service) Get(ctx context.Context, packID uuid.UUID) (*Pack, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
@@ -66,7 +82,7 @@ func (s *Service) Get(ctx context.Context, packID uuid.UUID) (*Pack, error) {
 }
 
 // List returns a bounded page of packs from all accessible folders.
-func (s *Service) List(ctx context.Context, input ListInput) ([]*ListItem, error) {
+func (s *Service) List(ctx context.Context, input ListInput) (*ListPage, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -75,8 +91,15 @@ func (s *Service) List(ctx context.Context, input ListInput) ([]*ListItem, error
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.repo.List(ctx, userID, input)
-	return result, packError(err)
+	items, err := s.repo.List(ctx, userID, input)
+	if err != nil {
+		return nil, packError(err)
+	}
+	total, err := s.repo.Count(ctx, userID, input)
+	if err != nil {
+		return nil, packError(err)
+	}
+	return &ListPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
 }
 
 // Update updates editable metadata and never changes config.
@@ -271,6 +294,9 @@ func packError(err error) error {
 	}
 	if errors.Is(err, ErrFolderNotAllowed) {
 		return apperr.ErrForbidden.WithMessage("folder is not accessible")
+	}
+	if errors.Is(err, ErrDuplicateDestinationRequired) {
+		return apperr.ErrBadRequest.WithMessage("folder_id is required when duplicating a pack owned by another user")
 	}
 	if errors.Is(err, ErrInvalidPackMetadata) {
 		return apperr.ErrBadRequest.WithMessage("invalid pack metadata")

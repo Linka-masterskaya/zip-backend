@@ -155,6 +155,7 @@ type JWTConfig struct {
 	RefreshTTL time.Duration `mapstructure:"refresh_ttl"`
 }
 
+// RateLimitConfig describes rate-limit configuration.
 type RateLimitConfig struct {
 	Resend RateLimitRule `mapstructure:"resend"`
 }
@@ -207,6 +208,7 @@ type SMTPConfig struct {
 	TLS              bool          `mapstructure:"tls"`
 	Timeout          time.Duration `mapstructure:"timeout"`
 	RequireFromMatch bool          `mapstructure:"require_from_match"`
+	DailyLimit       int           `mapstructure:"daily_limit_alert"`
 }
 
 // AuthConfig contains authentication and security settings.
@@ -242,12 +244,12 @@ type ProfileConfig struct {
 
 // CORSConfig contains CORS settings.
 type CORSConfig struct {
-	AllowOrigins     []string `mapstructure:"allow_origins"`
-	AllowMethods     []string `mapstructure:"allow_methods"`
-	AllowHeaders     []string `mapstructure:"allow_headers"`
-	ExposeHeaders    []string `mapstructure:"expose_headers"`
-	AllowCredentials bool     `mapstructure:"allow_credentials"`
-	MaxAge           int      `mapstructure:"max_age"`
+	AllowOrigins     []string      `mapstructure:"allow_origins"`
+	AllowMethods     []string      `mapstructure:"allow_methods"`
+	AllowHeaders     []string      `mapstructure:"allow_headers"`
+	ExposeHeaders    []string      `mapstructure:"expose_headers"`
+	AllowCredentials bool          `mapstructure:"allow_credentials"`
+	MaxAge           time.Duration `mapstructure:"max_age"`
 }
 
 // TTSConfig contains TTS settings.
@@ -301,6 +303,10 @@ func Load(path string) (*Config, error) {
 	if envOrigins := os.Getenv("CORS_ALLOW_ORIGINS"); envOrigins != "" {
 		cfg.CORS.AllowOrigins = strings.Split(envOrigins, ",")
 	}
+	cfg.CORS.AllowOrigins = normalizeStringSlice(cfg.CORS.AllowOrigins)
+	cfg.CORS.AllowMethods = normalizeStringSlice(cfg.CORS.AllowMethods)
+	cfg.CORS.AllowHeaders = normalizeStringSlice(cfg.CORS.AllowHeaders)
+	cfg.CORS.ExposeHeaders = normalizeStringSlice(cfg.CORS.ExposeHeaders)
 
 	// Validate required fields
 	if err := validateConfig(&cfg); err != nil {
@@ -356,13 +362,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.env", "dev")
 	v.SetDefault("app.port", "8080")
 	v.SetDefault("app.public_url", "http://localhost:8080")
-	v.SetDefault("app.frontend_url", "http://localhost:3000")
+	v.SetDefault("app.frontend_url", "http://localhost:5173")
 	v.SetDefault("app.migrations_dir", "./migrations")
 	v.SetDefault("app.trusted_proxies", []string{})
 	v.SetDefault("app.docs_enabled", false)
 
 	// Server defaults
-	v.SetDefault("server.metrics_port", "9090")
+	v.SetDefault("server.metrics_port", "9091")
 	v.SetDefault("server.read_timeout", "10s")
 	v.SetDefault("server.write_timeout", "30s")
 	v.SetDefault("server.idle_timeout", "60s")
@@ -441,7 +447,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pictures_bank.max_metadata_bytes", 2097152)
 	v.SetDefault("pictures_bank.max_image_bytes", 10485760)
 
-	// The adapter is intentionally disabled until its implementation lands.
+	// External Pictures Bank remains the default; local mode is file-owned.
 	v.SetDefault("feature_flags.local_bank", false)
 
 	// SMTP defaults
@@ -452,7 +458,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("smtp.from_email", "")
 	v.SetDefault("smtp.tls", true)
 	v.SetDefault("smtp.timeout", "10s")
-	v.SetDefault("smtp.require_from_match", false)
+	v.SetDefault("smtp.require_from_match", true)
+	v.SetDefault("smtp.daily_limit_alert", 300)
 
 	// Crypto defaults
 	v.SetDefault("crypto.aes_key", "")
@@ -499,23 +506,14 @@ func setDefaults(v *viper.Viper) {
 	})
 	v.SetDefault("cors.allow_headers", []string{
 		"Content-Type",
-		"Content-Length",
-		"Accept-Encoding",
-		"X-CSRF-Token",
 		"Authorization",
-		"Accept",
-		"Origin",
-		"Cache-Control",
-		"X-Requested-With",
+		"X-Request-Id",
 	})
 	v.SetDefault("cors.expose_headers", []string{
-		"Content-Length",
-		"Content-Type",
-		"Date",
-		"X-Total-Count",
+		"X-Request-Id",
 	})
 	v.SetDefault("cors.allow_credentials", true)
-	v.SetDefault("cors.max_age", 86400)
+	v.SetDefault("cors.max_age", "24h")
 
 	// Cron defaults
 	v.SetDefault("cron.voice_refresh.interval", "1h")
@@ -575,6 +573,11 @@ func validateConfig(cfg *Config) error {
 	if cfg.TTS.MaxConcurrent <= 0 {
 		return fmt.Errorf("ttsapi.max_concurrent must be > 0")
 	}
+
+	// CORS validation
+	if err := validateCORSConfig(&cfg.CORS); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -628,4 +631,33 @@ func validateCryptoCongig(cfg *CryptoConfig) error {
 	}
 
 	return nil
+}
+
+func validateCORSConfig(cfg *CORSConfig) error {
+	if len(cfg.AllowOrigins) == 0 {
+		return fmt.Errorf("cors.allow_origins is required")
+	}
+	if len(cfg.AllowMethods) == 0 {
+		return fmt.Errorf("cors.allow_methods is required")
+	}
+	if len(cfg.AllowHeaders) == 0 {
+		return fmt.Errorf("cors.allow_headers is required")
+	}
+	if cfg.MaxAge < 0 {
+		return fmt.Errorf("cors.max_age must be non-negative")
+	}
+	if cfg.MaxAge > 0 && cfg.MaxAge < time.Second {
+		return fmt.Errorf("cors.max_age is %s, which looks like a raw number misparsed as nanoseconds — use a duration string with a unit (e.g. \"24h\")", cfg.MaxAge)
+	}
+	return nil
+}
+
+func normalizeStringSlice(items []string) []string {
+	result := make([]string, 0, len(items))
+	for _, s := range items {
+		if s = strings.TrimSpace(s); s != "" {
+			result = append(result, s)
+		}
+	}
+	return result
 }

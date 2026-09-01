@@ -1,3 +1,4 @@
+// internal/profile/repository_test.go
 package profile
 
 import (
@@ -11,13 +12,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 )
 
 // ============ Test Helpers for Repository Tests ============
 
-// insertTestUserRepo inserts a test user for repository tests.
 func insertTestUserRepo(ctx context.Context, db *sql.DB, id uuid.UUID, email string) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO users (id, email_verified, display_name, created_at, updated_at)
@@ -27,8 +25,6 @@ func insertTestUserRepo(ctx context.Context, db *sql.DB, id uuid.UUID, email str
 		return err
 	}
 
-	// В репозитории мы не дешифруем email через cryptox,
-	// поэтому можно сохранять как есть
 	emailHash := sha256.Sum256([]byte(email))
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO auth_cred (user_id, email_hash, email_encrypted, role)
@@ -53,6 +49,18 @@ func insertTestUserRepo(ctx context.Context, db *sql.DB, id uuid.UUID, email str
 	return err
 }
 
+func setupTestUser(ctx context.Context, t *testing.T, userID uuid.UUID, email string) func() {
+	db := getTestDB()
+	err := insertTestUserRepo(ctx, db, userID, email)
+	require.NoError(t, err)
+
+	return func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM verify_tokens WHERE user_id = $1", userID.String())
+		_, _ = db.ExecContext(ctx, "DELETE FROM auth_cred WHERE user_id = $1", userID.String())
+		_, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID.String())
+	}
+}
+
 // ============ Repository Tests ============
 
 func TestRepository_CreateToken(t *testing.T) {
@@ -60,22 +68,14 @@ func TestRepository_CreateToken(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	token := &Token{
 		ID:        uuid.New().String(),
@@ -89,7 +89,7 @@ func TestRepository_CreateToken(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	err = repo.CreateToken(ctx, token)
+	err := repo.CreateToken(ctx, token)
 	assert.NoError(t, err)
 }
 
@@ -98,22 +98,14 @@ func TestRepository_FindTokenByHash(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	token := &Token{
 		ID:        uuid.New().String(),
@@ -127,7 +119,7 @@ func TestRepository_FindTokenByHash(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	err = repo.CreateToken(ctx, token)
+	err := repo.CreateToken(ctx, token)
 	require.NoError(t, err)
 
 	found, err := repo.FindTokenByHash(ctx, token.TokenHash)
@@ -144,22 +136,14 @@ func TestRepository_MarkTokenUsed(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	token := &Token{
 		ID:        uuid.New().String(),
@@ -173,7 +157,7 @@ func TestRepository_MarkTokenUsed(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	err = repo.CreateToken(ctx, token)
+	err := repo.CreateToken(ctx, token)
 	require.NoError(t, err)
 
 	err = repo.MarkTokenUsed(ctx, token.ID)
@@ -189,22 +173,14 @@ func TestRepository_DeleteToken(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	token := &Token{
 		ID:        uuid.New().String(),
@@ -218,7 +194,7 @@ func TestRepository_DeleteToken(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	err = repo.CreateToken(ctx, token)
+	err := repo.CreateToken(ctx, token)
 	require.NoError(t, err)
 
 	err = repo.DeleteToken(ctx, token.ID)
@@ -234,22 +210,14 @@ func TestRepository_DeleteExpiredTokens(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	expiredToken := &Token{
 		ID:        uuid.New().String(),
@@ -263,7 +231,7 @@ func TestRepository_DeleteExpiredTokens(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	err = repo.CreateToken(ctx, expiredToken)
+	err := repo.CreateToken(ctx, expiredToken)
 	require.NoError(t, err)
 
 	validToken := &Token{
@@ -299,22 +267,14 @@ func TestRepository_FindByID(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	user, err := repo.FindByID(ctx, userID)
 	assert.NoError(t, err)
@@ -328,22 +288,14 @@ func TestRepository_FindByEmailHash(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	emailHash := sha256.Sum256([]byte(email))
 	user, err := repo.FindByEmailHash(ctx, emailHash[:])
@@ -358,23 +310,15 @@ func TestRepository_UpdateEmailWithTx(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	oldEmail := "old@example.com"
 	newEmail := "new@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, oldEmail))
+	cleanup := setupTestUser(ctx, t, userID, oldEmail)
+	defer cleanup()
 
 	tx, err := repo.BeginTx(ctx)
 	require.NoError(t, err)
@@ -402,22 +346,14 @@ func TestRepository_BeginTx(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	tx, err := repo.BeginTx(ctx)
 	assert.NoError(t, err)
@@ -431,22 +367,14 @@ func TestRepository_FindByIDWithTx(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	tx, err := repo.BeginTx(ctx)
 	require.NoError(t, err)
@@ -468,22 +396,14 @@ func TestRepository_FindByEmailHashWithTx(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	tx, err := repo.BeginTx(ctx)
 	require.NoError(t, err)
@@ -506,22 +426,14 @@ func TestRepository_MarkTokenUsedWithTx(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	dbPool, cleanup := testutil.NewPostgres(t)
-	defer cleanup()
+	repo := NewRepository(getTestPool())
+	ctx := getTestContext()
 
-	db, err := sql.Open("pgx", dbPool.Config().ConnString())
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, runMigrations(db))
-
-	repo := NewRepository(dbPool)
-
-	ctx := context.Background()
 	userID := uuid.New()
 	email := "test@example.com"
 
-	require.NoError(t, insertTestUserRepo(ctx, db, userID, email))
+	cleanup := setupTestUser(ctx, t, userID, email)
+	defer cleanup()
 
 	token := &Token{
 		ID:        uuid.New().String(),
@@ -535,7 +447,7 @@ func TestRepository_MarkTokenUsedWithTx(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	err = repo.CreateToken(ctx, token)
+	err := repo.CreateToken(ctx, token)
 	require.NoError(t, err)
 
 	tx, err := repo.BeginTx(ctx)

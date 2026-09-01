@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sync/errgroup"
@@ -28,6 +29,7 @@ type App struct {
 	closer          *Closer
 	apiSrv          *http.Server
 	metricsSrv      *http.Server
+	backgrounds     []func(context.Context) error
 	ttsRun          func(context.Context) error
 	voiceRefreshRun func(context.Context)
 	ttsCleanupRun   func(context.Context)
@@ -87,10 +89,11 @@ func Bootstrap(cfgPath string) (*App, error) {
 	})
 
 	return &App{
-		cfg:        cfg,
-		closer:     closer,
-		apiSrv:     newAPIServer(cfg, mods, rl, in.redis),
-		metricsSrv: newMetricsServer(cfg, mods.checker),
+		cfg:         cfg,
+		closer:      closer,
+		apiSrv:      newAPIServer(cfg, mods, rl, in.redis, in.db),
+		metricsSrv:  newMetricsServer(cfg, mods.checker),
+		backgrounds: mods.backgrounds,
 		ttsRun: func(ctx context.Context) error {
 			return mods.ttsConsumer.ConsumeTTSJobs(ctx, mods.ttsWorker.Handle)
 		},
@@ -123,13 +126,41 @@ func (a *App) Run(ctx context.Context) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return serveHTTP(gctx, a.apiSrv) })
 	g.Go(func() error { return serveHTTP(gctx, a.metricsSrv) })
+
+	var backgroundWG sync.WaitGroup
+	startBackground := func(run func(context.Context) error) {
+		backgroundWG.Add(1)
+		g.Go(func() error {
+			defer backgroundWG.Done()
+			return run(gctx)
+		})
+	}
+
+	for _, run := range a.backgrounds {
+		startBackground(run)
+	}
+
+	startBackground(a.ttsRun)
+
+	startBackground(func(ctx context.Context) error {
+		a.voiceRefreshRun(ctx)
+		return nil
+	})
+
+	startBackground(func(ctx context.Context) error {
+		a.ttsCleanupRun(ctx)
+		return nil
+	})
+
 	g.Go(func() error {
 		<-gctx.Done()
+
+		// Background workers share DB/Redis/NATS/MinIO with the HTTP server.
+		// Let them observe cancellation before infrastructure is closed underneath them.
+		backgroundWG.Wait()
+
 		return a.shutdown()
 	})
-	g.Go(func() error { return a.ttsRun(gctx) })
-	g.Go(func() error { a.voiceRefreshRun(gctx); return nil })
-	g.Go(func() error { a.ttsCleanupRun(gctx); return nil })
 
 	return g.Wait()
 }
@@ -137,7 +168,10 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) shutdown() error {
 	slog.Info("shutting down...")
 
-	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
+	httpCtx, cancelHTTP := context.WithTimeout(
+		context.Background(),
+		a.cfg.Server.ShutdownTimeout,
+	)
 
 	var firstErr error
 	if err := a.metricsSrv.Shutdown(httpCtx); err != nil {
@@ -154,8 +188,12 @@ func (a *App) shutdown() error {
 
 	// Infrastructure gets its own deadline: a slow HTTP drain must never skip
 	// closing database, Redis and NATS connections.
-	infraCtx, cancelInfra := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
+	infraCtx, cancelInfra := context.WithTimeout(
+		context.Background(),
+		a.cfg.Server.ShutdownTimeout,
+	)
 	defer cancelInfra()
+
 	if err := a.closer.Close(infraCtx); err != nil && firstErr == nil {
 		firstErr = err
 	}

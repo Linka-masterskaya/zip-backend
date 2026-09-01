@@ -337,3 +337,45 @@ func TestContentsRejectsFolderFromAnotherSection(t *testing.T) {
 	})
 	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
+
+func TestContentsTotalIgnoresPaginationAndVisibility(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "total owner")
+	foreignID := seedFolderUser(t, pool, "total foreign")
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	for _, name := range []string{"Альфа", "Бета", "Гамма"} {
+		_, err := service.Create(ctx, CreateInput{
+			Section: SectionMy, Kind: KindFolder, Name: name,
+		})
+		require.NoError(t, err)
+	}
+	_, err := service.Create(folderContext(foreignID), CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Чужая",
+	})
+	require.NoError(t, err)
+
+	first, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Items, 1)
+	assert.Equal(t, 3, first.Total)
+	assert.Equal(t, 1, first.Limit)
+	assert.Zero(t, first.Offset)
+
+	second, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, Limit: 1, Offset: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Items, 1)
+	assert.Equal(t, 3, second.Total)
+
+	pastEnd, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, Limit: 1, Offset: 100,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, pastEnd.Items)
+	assert.Equal(t, 3, pastEnd.Total)
+}

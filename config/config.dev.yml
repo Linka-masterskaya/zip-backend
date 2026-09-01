@@ -2,12 +2,21 @@ app:
   env: dev
   port: "8080"
   public_url: "http://localhost:8080"
-  frontend_url: "http://localhost:3000"
+  frontend_url: "http://localhost:5173"
   migrations_dir: "./migrations"
   docs_enabled: true
   trusted_proxies:
     - "127.0.0.1"
     - "10.0.0.0/8"
+
+server:
+  metrics_port: "9091"
+  read_timeout: "10s"
+  write_timeout: "30s"
+  idle_timeout: "60s"
+  metrics_read_timeout: "5s"
+  metrics_write_timeout: "5s"
+  shutdown_timeout: "30s"
 
 db:
   url: "postgres://linka:linka@localhost:5432/linka?sslmode=disable"
@@ -111,6 +120,7 @@ smtp:
   tls: false
   timeout: "10s"
   require_from_match: false
+  daily_limit_alert: 300
 
 auth:
   access_token_ttl: 15m
@@ -147,7 +157,7 @@ rate_limit:
 
 cors:
   allow_origins:
-    - "http://localhost:8080"
+    - "http://localhost:5173"
   allow_methods:
     - "GET"
     - "POST"
@@ -157,21 +167,12 @@ cors:
     - "PATCH"
   allow_headers:
     - "Content-Type"
-    - "Content-Length"
-    - "Accept-Encoding"
-    - "X-CSRF-Token"
     - "Authorization"
-    - "Accept"
-    - "Origin"
-    - "Cache-Control"
-    - "X-Requested-With"
+    - "X-Request-Id"
   expose_headers:
-    - "Content-Length"
-    - "Content-Type"
-    - "Date"
-    - "X-Total-Count"
+    - "X-Request-Id"
   allow_credentials: true
-  max_age: 86400
+  max_age: 24h
 
 ttsapi:
   service_url: "https://tts.linka.su"

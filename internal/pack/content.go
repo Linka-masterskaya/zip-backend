@@ -34,75 +34,6 @@ type contentRepository interface {
 	ListAdaptations(context.Context, uuid.UUID, uuid.UUID) ([]Adaptation, error)
 	GetAdaptation(context.Context, uuid.UUID, uuid.UUID) (*Adaptation, error)
 	UpdateAdaptationConfig(context.Context, uuid.UUID, uuid.UUID, json.RawMessage, []uuid.UUID) (*Adaptation, error)
-	CreateVersion(context.Context, uuid.UUID, uuid.UUID) (*Version, error)
-	ListVersions(context.Context, uuid.UUID, uuid.UUID, ListInput) ([]*VersionSummary, error)
-	GetVersion(context.Context, uuid.UUID, uuid.UUID, int) (*Version, error)
-	RestoreVersion(context.Context, uuid.UUID, uuid.UUID, int) (*RestoreResult, error)
-}
-
-func (s *ContentService) CreateVersion(ctx context.Context, packID uuid.UUID) (*Version, error) {
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result, err := s.repo.CreateVersion(ctx, userID, packID)
-	return result, contentError(err)
-}
-
-func (s *ContentService) ListVersions(
-	ctx context.Context,
-	packID uuid.UUID,
-	input ListInput,
-) ([]*VersionSummary, error) {
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	input, err = validateListInput(input)
-	if err != nil {
-		return nil, err
-	}
-	result, err := s.repo.ListVersions(ctx, userID, packID, input)
-	return result, contentError(err)
-}
-
-func (s *ContentService) GetVersion(
-	ctx context.Context,
-	packID uuid.UUID,
-	versionNumber int,
-) (*Version, error) {
-	if versionNumber < 1 {
-		return nil, apperr.ErrBadRequest.WithMessage("version must be a positive integer")
-	}
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result, err := s.repo.GetVersion(ctx, userID, packID, versionNumber)
-	return result, contentError(err)
-}
-
-func (s *ContentService) RestoreVersion(
-	ctx context.Context,
-	packID uuid.UUID,
-	versionNumber int,
-) (*RestoreResult, error) {
-	if versionNumber < 1 {
-		return nil, apperr.ErrBadRequest.WithMessage("version must be a positive integer")
-	}
-	userID, err := authctx.UserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	target, err := s.repo.GetVersion(ctx, userID, packID, versionNumber)
-	if err != nil {
-		return nil, contentError(err)
-	}
-	if _, err = validateAndMediaIDs(ctx, target.Config, false); err != nil {
-		return nil, err
-	}
-	result, err := s.repo.RestoreVersion(ctx, userID, packID, versionNumber)
-	return result, contentError(err)
 }
 
 type mediaUploader interface {
@@ -231,7 +162,11 @@ func (s *ContentService) UpdateAdaptationConfig(
 	return result, contentError(err)
 }
 
-func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) (*ExportArchive, error) {
+func (s *ContentService) Export(
+	ctx context.Context,
+	packID uuid.UUID,
+	format linka.Format,
+) (*ExportArchive, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -240,12 +175,13 @@ func (s *ContentService) Export(ctx context.Context, packID uuid.UUID) (*ExportA
 	if err != nil {
 		return nil, contentError(err)
 	}
-	return s.exportConfig(ctx, packData.Config, packData.Title, files)
+	return s.exportConfig(ctx, packData.Config, packData.Title, files, format)
 }
 
 func (s *ContentService) ExportAdaptation(
 	ctx context.Context,
 	adaptationID uuid.UUID,
+	format linka.Format,
 ) (*ExportArchive, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
@@ -255,7 +191,7 @@ func (s *ContentService) ExportAdaptation(
 	if err != nil {
 		return nil, contentError(err)
 	}
-	return s.exportConfig(ctx, data.Config, data.Title+"-adaptation", files)
+	return s.exportConfig(ctx, data.Config, data.Title+"-adaptation", files, format)
 }
 
 func (s *ContentService) exportConfig(
@@ -263,11 +199,12 @@ func (s *ContentService) exportConfig(
 	config json.RawMessage,
 	title string,
 	files []*media.File,
+	format linka.Format,
 ) (*ExportArchive, error) {
 	if _, err := validateAndMediaIDs(ctx, config, false); err != nil {
 		return nil, err
 	}
-	stream, err := buildArchive(ctx, config, files, s.storage, s.pictures)
+	stream, err := buildArchive(ctx, config, files, s.storage, format, s.pictures)
 	if err != nil {
 		return nil, contentError(err)
 	}
@@ -435,8 +372,6 @@ func contentError(err error) error {
 		return nil
 	case errors.Is(err, ErrPackNotFound):
 		return apperr.ErrNotFound
-	case errors.Is(err, ErrVersionNotFound):
-		return apperr.ErrNotFound.WithMessage("pack version not found")
 	case errors.Is(err, ErrAdaptationNotFound):
 		return apperr.ErrNotFound.WithMessage("pack adaptation not found")
 	case errors.Is(err, ErrFolderNotAllowed):
@@ -451,6 +386,12 @@ func contentError(err error) error {
 		return apperr.ErrPayloadTooLarge
 	case errors.Is(err, ErrMissingMediaReference):
 		return apperr.ErrConflict.WithMessage("archive media reference is missing")
+	case errors.Is(err, linka.ErrLooksUnsupportedBlock),
+		errors.Is(err, linka.ErrLooksUnrepresentableMatching),
+		errors.Is(err, linka.ErrLooksMissingMediaPath):
+		// Набор валиден, но не выражается в формате Linka Looks:
+		// это конфликт состояния набора с запрошенным форматом.
+		return apperr.ErrConflict.WithMessage(err.Error())
 	default:
 		return err
 	}

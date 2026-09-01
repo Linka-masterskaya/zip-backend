@@ -40,6 +40,7 @@ func TestRegisterPackRoutesPatterns(t *testing.T) {
 
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/packs",
+		"POST /api/v1/packs/{id}/duplicate",
 		"GET /api/v1/packs/{id}",
 		"GET /api/v1/packs",
 		"PATCH /api/v1/packs/{id}",
@@ -56,10 +57,9 @@ func TestRegisterPackRoutesPatterns(t *testing.T) {
 		"GET /api/v1/packs/{id}/adaptations",
 		"GET /api/v1/adaptations/{id}",
 		"PUT /api/v1/adaptations/{id}/config",
-		"POST /api/v1/packs/{id}/versions",
-		"GET /api/v1/packs/{id}/versions",
-		"GET /api/v1/packs/{id}/versions/{version}",
-		"POST /api/v1/packs/{id}/versions/{version}/restore",
+		"PUT /api/v1/packs/{id}/favorite",
+		"DELETE /api/v1/packs/{id}/favorite",
+		"GET /api/v1/favorites/packs",
 	})
 }
 
@@ -149,10 +149,24 @@ func TestRegisterProfileRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"GET /api/v1/profile/me",
 		"PATCH /api/v1/profile/me",
+		"DELETE /api/v1/profile/me",
 		"PUT /api/v1/profile/me/avatar",
 		"DELETE /api/v1/profile/me/avatar",
 		"POST /api/v1/profile/me/email",
 		"POST /api/v1/profile/me/email/confirm",
 		"POST /api/v1/profile/me/password",
+	})
+}
+
+func TestRegisterSettingsRoutesPatterns(t *testing.T) {
+	m := &recordingMux{}
+	RegisterSettingsRoutes(m, middleware.NewAuthMW([]byte("test-secret")), SettingsHandlers{})
+
+	assertPatterns(t, m.patterns, []string{
+		"GET /api/v1/settings",
+		"PUT /api/v1/settings",
+		"GET /api/v1/settings/templates",
+		"POST /api/v1/settings/templates",
+		"DELETE /api/v1/settings/templates/{id}",
 	})
 }

@@ -103,17 +103,21 @@ if ! "$SCRIPT_DIR/mc.sh" find "linka/$MINIO_BUCKET" --print "{}" |
     local_file="$mirror_dir/$key"
 
     if [ ! -f "$local_file" ]; then
-      echo "manifest failed: mirrored file is missing for $key" >&2
-      exit 1
+      echo "manifest warning: object appeared after mirror and will be backed up next time: $key" >&2
+      continue
     fi
 
-    stat_json=$("$SCRIPT_DIR/mc.sh" stat --json "$object_path")
+    if ! stat_json=$("$SCRIPT_DIR/mc.sh" stat --json "$object_path"); then
+      echo "manifest warning: object disappeared after mirror and will be skipped: $key" >&2
+      continue
+    fi
+
     source_size=$(printf '%s\n' "$stat_json" | jq -er '.size')
     local_size=$(wc -c < "$local_file" | tr -d ' ')
 
     if [ "$source_size" -ne "$local_size" ]; then
-      echo "manifest failed: size changed while copying $key" >&2
-      exit 1
+      echo "manifest warning: object changed after mirror and will be backed up next time: $key" >&2
+      continue
     fi
 
     printf '%s\n' "$stat_json" | jq -ce --arg key "$key" '{
@@ -130,6 +134,18 @@ if ! "$SCRIPT_DIR/mc.sh" find "linka/$MINIO_BUCKET" --print "{}" |
   echo "MinIO metadata manifest creation failed" >&2
   exit 1
 fi
+
+# Объект мог быть удалён из MinIO после mirror: тогда файл останется в
+# локальном зеркале, но получить актуальные метаданные для него уже нельзя.
+# Restore работает по манифесту, поэтому явно предупреждаем, что такой файл
+# сохранится в restic snapshot, но не будет загружен обратно автоматически.
+find "$mirror_dir" -type f -print |
+  while IFS= read -r local_file; do
+    key=${local_file#"$mirror_dir/"}
+    if ! jq -e --arg key "$key" 'select(.key == $key)' "$manifest_file" >/dev/null; then
+      echo "manifest warning: mirrored file has no metadata and will not be restored automatically: $key" >&2
+    fi
+  done
 
 kbytes=$(du -sk "$mirror_dir" | cut -f1)
 bytes=$((kbytes * 1024))

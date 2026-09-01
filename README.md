@@ -1,3 +1,30 @@
+## Миграции БД
+
+Goose определяет миграцию по числовому префиксу имени файла и по умолчанию
+отказывается применять версию меньше уже применённой. Отсюда два правила:
+
+* **Timestamp новой миграции должен быть больше всех, что уже есть в `main`.**
+  Если ветка живёт долго, перед PR обновитесь от `main` и при необходимости
+  переименуйте свои файлы.
+* **Имя файла неизменяемо после мержа.** Смена префикса создаёт для goose новую
+  версию, и там, где старая уже применена, миграция уедет повторно.
+
+Порядок проверяется в PR-пайплайне и локально:
+
+```bash
+bash scripts/check-migration-order.sh
+```
+
+Дважды — в июле (AB-40 и AB-43) и в августе (AB-51 и AB-23) — параллельные ветки
+добавили миграции с пересекающимися timestamp'ами, и деплой падал с
+`found N missing migrations`.
+
+Уже смерженные расхождения применяются: `migrations.Run` вызывает goose с
+`WithAllowMissing`, поэтому пропущенная версия накатывается, а не блокирует
+деплой.
+
+---
+
 ## TTS (Text-to-Speech)
 
 Озвучка текста через внешний сервис [tts.linka.su](https://tts.linka.su). Доступно только авторизованным пользователям.
@@ -80,3 +107,11 @@ cron:
 ### Известные ограничения
 
 Английские аббревиатуры (`IBM`, `USA`, `HTML`) произносятся как слова, а не по буквам. Если такое произношение критично — обратитесь к разработчикам, потребуется поддержка SSML-разметки.
+
+---
+
+## Local Pictures Bank
+
+N11 supports a PostgreSQL + MinIO Pictures Bank adapter selected by `feature_flags.local_bank`. System images use the private `system/pictures-bank/` MinIO namespace and are managed with the supported `cmd/picturebank-seed` operator command; the public frontend contract remains unchanged.
+
+See `docs/picturebank/local-bank.md` and `docs/picturebank/ADR-001-local-ingestion.md`.

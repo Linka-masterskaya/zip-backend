@@ -70,3 +70,34 @@ docs/compatibility/linka-looks/publish-follow-up-and-close-n5.sh
 The script is idempotent with respect to the follow-up title: it reuses an existing matching issue,
 otherwise creates it from `FOLLOW-UP-ISSUE.md`, best-effort applies `archive`/`pack` labels and the
 assignee, comments the resulting issue number on #110, and closes #110 as completed.
+
+## 3. Проверить конвертер looks-3
+
+Собрать архив в формате Linka Looks через реальный обработчик экспорта:
+
+```bash
+UPDATE_LINKA_LOOKS_FIXTURE=1 go test ./internal/pack \
+  -run '^TestExportLooks3ProducesLooksSet$' -count=1
+```
+
+Прогнать его официальным парсером клиента и round-trip-гарнессом:
+
+```bash
+node docs/compatibility/linka-looks/verify-official-parser.mjs \
+  /path/to/linka.looks-electron/src/common/interfaces/ConfigFile.ts \
+  docs/compatibility/linka-looks/testdata/backend-looks3-export.linka
+```
+
+```bash
+node docs/compatibility/linka-looks/looks-v3.2.10-harness.mjs \
+  docs/compatibility/linka-looks/testdata/backend-looks3-export.linka
+```
+
+Клиент: `git clone https://github.com/linkasu/linka.looks-electron` и
+`git checkout v3.2.10`. Нужны Node, `unzip` и `tsc` версии 5.x — в TypeScript 7
+удалён `moduleResolution=node10`, который использует harness.
+
+Захваченные результаты: `testdata/looks-v3.2.10-looks3-export-run.json` и
+`testdata/looks-v3.2.10-looks3-roundtrip.json`. Критерий приёмки — не «открылось»,
+а сохранность: идентификаторы, пути медиа и кириллица должны дожить и до
+открытия, и до обратного сохранения.

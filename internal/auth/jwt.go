@@ -15,7 +15,8 @@ const (
 )
 
 type AccessClaims struct {
-	Role string `json:"role"`
+	Role           string `json:"role"`
+	SessionVersion int64  `json:"sess_ver"`
 	jwt.RegisteredClaims
 }
 
@@ -23,11 +24,12 @@ type RefreshClaims struct {
 	jwt.RegisteredClaims
 }
 
-func (au *authService) generateAccessToken(user *User) (string, error) {
+func (au *authService) generateAccessToken(user *User, sessionVersion int64) (string, error) {
 	now := time.Now()
 
 	claims := AccessClaims{
-		Role: user.Role,
+		Role:           user.Role,
+		SessionVersion: sessionVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.ID,
 			Issuer:    jwtIssuer,

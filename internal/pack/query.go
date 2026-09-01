@@ -13,15 +13,51 @@ const createPackQuery = `
 	  AND u.deleted_at IS NULL
 	RETURNING ` + packColumns
 
+const lockDuplicateSourceQuery = `
+	SELECT ` + qualifiedPackColumns + `
+	FROM packs p
+	JOIN users u ON u.id = $1
+	WHERE p.id = $2
+	  AND u.org_id IS NOT NULL
+	  AND u.deleted_at IS NULL
+	  AND p.org_id = u.org_id
+	  AND (p.owner_id = u.id OR p.published_at IS NOT NULL)
+	FOR SHARE OF p`
+
+const lockDuplicateFolderQuery = `
+	SELECT f.id
+	FROM folders f
+	JOIN users u ON u.id = $1
+	WHERE f.id = $2
+	  AND f.owner_id = u.id
+	  AND f.org_id = u.org_id
+	  AND f.org_id = $3
+	  AND f.section IN ('my', 'students')
+	  AND u.org_id IS NOT NULL
+	  AND u.deleted_at IS NULL
+	FOR SHARE OF f`
+
+const insertDuplicatePackQuery = `
+	INSERT INTO packs (
+		org_id, owner_id, folder_id, title,
+		age_min, age_max, difficulty, goals, notes, config
+	)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	RETURNING ` + packColumns
+
+const copyDuplicateMediaUsagesQuery = `
+	INSERT INTO media_usages (media_id, source_type, source_id)
+	SELECT media_id, 'pack', $2
+	FROM media_usages
+	WHERE source_type = 'pack' AND source_id = $1`
+
 const getPackQuery = `
 	SELECT ` + qualifiedPackColumns + `
 	FROM packs p
 	JOIN users u ON u.id = $1
 	WHERE p.id = $2
-	  AND (
-		(p.owner_id = u.id AND p.org_id = u.org_id)
-		OR p.published_at IS NOT NULL
-	  )
+	  AND p.org_id = u.org_id
+	  AND (p.owner_id = u.id OR p.published_at IS NOT NULL)
 	  AND u.deleted_at IS NULL`
 
 const getPackForPublicationQuery = `
@@ -34,7 +70,7 @@ const getPackForPublicationQuery = `
 	  AND u.deleted_at IS NULL
 	  AND (p.owner_id = u.id OR $3)`
 
-const listPacksQuery = `
+const listPacksBaseQuery = `
 	WITH active_user AS (
 		SELECT id, org_id
 		FROM users
@@ -94,13 +130,18 @@ const listPacksQuery = `
 		  AND ($3::int IS NULL OR (age_min <= $3::int AND $3::int <= age_max))
 		  AND ($4::text = '' OR difficulty = $4::text)
 		  AND ($5::text = '' OR section = $5::text)
-	)
+	)`
+
+const listPacksQuery = listPacksBaseQuery + `
 	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
 	       published_at, title, status, age_min, age_max, difficulty,
 	       goals, notes, config, is_favorite, section, created_at, updated_at
 	FROM filtered
 	ORDER BY updated_at DESC, id, section, result_folder_id
 	LIMIT $6 OFFSET $7`
+
+const countPacksQuery = listPacksBaseQuery + `
+	SELECT count(*) FROM filtered`
 
 const lockPackForUpdateQuery = `
 	SELECT p.org_id
@@ -393,57 +434,56 @@ const deleteAdaptationUsagesForIDsQuery = `
 	DELETE FROM media_usages
 	WHERE source_type = 'pack_adaptation' AND source_id = ANY($1::uuid[])`
 
-const createVersionQuery = `
-	INSERT INTO pack_versions (pack_id, version, config, created_by)
-	SELECT $1, COALESCE(MAX(version), 0) + 1, $2, $3
-	FROM pack_versions
-	WHERE pack_id = $1
-	RETURNING id, pack_id, version, config, created_by, created_at`
+const putFavoriteQuery = `
+	WITH accessible AS (
+		SELECT p.id
+		FROM packs p
+		JOIN users u ON u.id = $1
+		WHERE p.id = $2
+		  AND p.org_id = u.org_id
+		  AND (p.owner_id = u.id OR p.published_at IS NOT NULL)
+		  AND u.deleted_at IS NULL
+	)
+	INSERT INTO favorite_packs (user_id, pack_id)
+	SELECT $1, id FROM accessible
+	ON CONFLICT (user_id, pack_id) DO UPDATE SET pack_id = EXCLUDED.pack_id
+	RETURNING pack_id`
 
-const insertVersionMediaUsagesQuery = `
-	INSERT INTO media_usages (media_id, source_type, source_id)
-	SELECT media_id, 'pack_version', $2
-	FROM media_usages
-	WHERE source_type = 'pack' AND source_id = $1`
+const deleteFavoriteQuery = `
+	DELETE FROM favorite_packs WHERE user_id = $1 AND pack_id = $2`
 
-const listVersionsQuery = `
-	SELECT pv.id, pv.pack_id, pv.version, pv.created_by, pv.created_at
-	FROM pack_versions pv
-	JOIN packs p ON p.id = pv.pack_id
-	JOIN users u ON u.id = $1
-	WHERE pv.pack_id = $2
-	  AND p.owner_id = u.id
-	  AND p.org_id = u.org_id
-	  AND u.deleted_at IS NULL
-	ORDER BY pv.version DESC
-	LIMIT $3 OFFSET $4`
+const listFavoritePacksBaseQuery = `
+	WITH active_user AS (
+		SELECT id, org_id
+		FROM users
+		WHERE id = $1
+		  AND org_id IS NOT NULL
+		  AND deleted_at IS NULL
+	), favorites AS (
+		SELECT p.id, p.org_id, p.owner_id,
+		       CASE WHEN p.owner_id = u.id THEN p.folder_id ELSE p.library_folder_id
+		       END AS result_folder_id,
+		       p.library_folder_id, p.published_at, p.title, p.status,
+		       p.age_min, p.age_max, p.difficulty, p.goals, p.notes, p.config,
+		       p.created_at, p.updated_at, f.section, fp.created_at AS favorited_at
+		FROM active_user u
+		JOIN favorite_packs fp ON fp.user_id = u.id
+		JOIN packs p ON p.id = fp.pack_id AND p.org_id = u.org_id
+		JOIN folders f ON f.id = CASE WHEN p.owner_id = u.id THEN p.folder_id ELSE p.library_folder_id END
+		              AND f.org_id = u.org_id
+		WHERE p.owner_id = u.id OR p.published_at IS NOT NULL
+	)`
 
-const getVersionQuery = `
-	SELECT pv.id, pv.pack_id, pv.version, pv.config, pv.created_by, pv.created_at
-	FROM pack_versions pv
-	WHERE pv.pack_id = $1 AND pv.version = $2`
+const listFavoritePacksQuery = listFavoritePacksBaseQuery + `
+	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
+	       published_at, title, status, age_min, age_max, difficulty,
+	       goals, notes, config, true AS is_favorite, section, created_at, updated_at
+	FROM favorites
+	ORDER BY favorited_at DESC, id
+	LIMIT $2 OFFSET $3`
 
-const getAccessibleVersionQuery = `
-	SELECT pv.id, pv.pack_id, pv.version, pv.config, pv.created_by, pv.created_at
-	FROM pack_versions pv
-	JOIN packs p ON p.id = pv.pack_id
-	JOIN users u ON u.id = $1
-	WHERE pv.pack_id = $2
-	  AND pv.version = $3
-	  AND p.owner_id = u.id
-	  AND p.org_id = u.org_id
-	  AND u.deleted_at IS NULL`
-
-const replacePackUsagesFromVersionQuery = `
-	INSERT INTO media_usages (media_id, source_type, source_id)
-	SELECT media_id, 'pack', $1
-	FROM media_usages
-	WHERE source_type = 'pack_version' AND source_id = $2`
-
-const deleteVersionMediaUsagesForPackQuery = `
-	DELETE FROM media_usages
-	WHERE source_type = 'pack_version'
-	  AND source_id IN (SELECT id FROM pack_versions WHERE pack_id = $1)`
+const countFavoritePacksQuery = listFavoritePacksBaseQuery + `
+	SELECT count(*) FROM favorites`
 
 const packColumns = `
 	id, org_id, owner_id, folder_id, library_folder_id, published_at,

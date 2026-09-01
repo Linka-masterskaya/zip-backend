@@ -2,6 +2,7 @@
 package middleware
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -19,16 +20,18 @@ import (
 const testSecret = "test-only-jwt-secret-aaaaaaaaaaaaaaaa"
 
 type testJWT struct {
-	sign    string
-	role    string
-	subject string
-	expAt   time.Time
-	issueAt time.Time
+	sign           string
+	role           string
+	subject        string
+	sessionVersion int64
+	expAt          time.Time
+	issueAt        time.Time
 }
 
 func (tj *testJWT) helperJWT() (string, error) {
 	claims := AccessClaims{
-		Role: tj.role,
+		Role:           tj.role,
+		SessionVersion: tj.sessionVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    JWTIssuer,
 			Audience:  jwt.ClaimStrings{JWTAudience},
@@ -45,6 +48,24 @@ func (tj *testJWT) helperJWT() (string, error) {
 		return "", fmt.Errorf("generate access token: %w", err)
 	}
 	return tokenString, nil
+}
+
+type fakeSessionVersionStore struct {
+	version int64
+	err     error
+}
+
+func (s *fakeSessionVersionStore) GetUserSessionVersion(_ context.Context, _ string) (int64, error) {
+	return s.version, s.err
+}
+
+type fakeActiveUserStore struct {
+	active bool
+	err    error
+}
+
+func (s *fakeActiveUserStore) IsUserActive(_ context.Context, _ uuid.UUID) (bool, error) {
+	return s.active, s.err
 }
 
 func captureCtxHandler() (AppHandler, *uuid.UUID, *string) {
@@ -98,6 +119,126 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, userID, gotUserID.String())
 	assert.Equal(t, "defectologist", *gotRole)
+}
+
+func TestAuthMiddleware_SessionVersionRevokesAccessToken(t *testing.T) {
+	now := time.Now()
+	userID := uuid.NewString()
+	token, err := (&testJWT{
+		sign:           testSecret,
+		role:           "defectologist",
+		subject:        userID,
+		sessionVersion: 3,
+		expAt:          now.Add(15 * time.Minute),
+		issueAt:        now,
+	}).helperJWT()
+	assert.NoError(t, err)
+
+	req := newTestRequest(t, http.MethodGet, "/test")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler, _, _ := captureCtxHandler()
+	authMW := NewAuthMW([]byte(testSecret), &fakeSessionVersionStore{version: 4})
+
+	ErrorMiddleware(authMW.AuthMiddleware(handler)).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestAuthMiddleware_CurrentSessionVersionAllowsAccessToken(t *testing.T) {
+	now := time.Now()
+	userID := uuid.NewString()
+	token, err := (&testJWT{
+		sign:           testSecret,
+		role:           "defectologist",
+		subject:        userID,
+		sessionVersion: 4,
+		expAt:          now.Add(15 * time.Minute),
+		issueAt:        now,
+	}).helperJWT()
+	assert.NoError(t, err)
+
+	req := newTestRequest(t, http.MethodGet, "/test")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler, gotUserID, _ := captureCtxHandler()
+	authMW := NewAuthMW([]byte(testSecret), &fakeSessionVersionStore{version: 4})
+
+	ErrorMiddleware(authMW.AuthMiddleware(handler)).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, userID, gotUserID.String())
+}
+
+func TestAuthMiddleware_SessionVersionStoreFailureFailsClosed(t *testing.T) {
+	now := time.Now()
+	token, err := (&testJWT{
+		sign:           testSecret,
+		role:           "defectologist",
+		subject:        uuid.NewString(),
+		sessionVersion: 1,
+		expAt:          now.Add(15 * time.Minute),
+		issueAt:        now,
+	}).helperJWT()
+	assert.NoError(t, err)
+
+	req := newTestRequest(t, http.MethodGet, "/test")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler, _, _ := captureCtxHandler()
+	authMW := NewAuthMW([]byte(testSecret), &fakeSessionVersionStore{err: fmt.Errorf("redis unavailable")})
+
+	ErrorMiddleware(authMW.AuthMiddleware(handler)).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestAuthMiddleware_SoftDeletedUserRejectedByAuthoritativeStore(t *testing.T) {
+	now := time.Now()
+	token, err := (&testJWT{
+		sign:           testSecret,
+		role:           "defectologist",
+		subject:        uuid.NewString(),
+		sessionVersion: 0,
+		expAt:          now.Add(15 * time.Minute),
+		issueAt:        now,
+	}).helperJWT()
+	assert.NoError(t, err)
+
+	req := newTestRequest(t, http.MethodGet, "/test")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler, _, _ := captureCtxHandler()
+	authMW := NewAuthMW([]byte(testSecret), &fakeSessionVersionStore{version: 0}).
+		WithActiveUserStore(&fakeActiveUserStore{active: false})
+
+	ErrorMiddleware(authMW.AuthMiddleware(handler)).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestAuthMiddleware_ActiveUserStoreFailureFailsClosed(t *testing.T) {
+	now := time.Now()
+	token, err := (&testJWT{
+		sign:           testSecret,
+		role:           "defectologist",
+		subject:        uuid.NewString(),
+		sessionVersion: 0,
+		expAt:          now.Add(15 * time.Minute),
+		issueAt:        now,
+	}).helperJWT()
+	assert.NoError(t, err)
+
+	req := newTestRequest(t, http.MethodGet, "/test")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler, _, _ := captureCtxHandler()
+	authMW := NewAuthMW([]byte(testSecret)).
+		WithActiveUserStore(&fakeActiveUserStore{err: fmt.Errorf("postgres unavailable")})
+
+	ErrorMiddleware(authMW.AuthMiddleware(handler)).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
 func TestAuthMiddleware_ExpiredToken(t *testing.T) {

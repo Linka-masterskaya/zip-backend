@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 )
 
@@ -22,18 +23,14 @@ const (
 
 type contentService interface {
 	SaveConfig(context.Context, uuid.UUID, json.RawMessage) (*Pack, error)
-	Export(context.Context, uuid.UUID) (*ExportArchive, error)
-	ExportAdaptation(context.Context, uuid.UUID) (*ExportArchive, error)
+	Export(context.Context, uuid.UUID, linka.Format) (*ExportArchive, error)
+	ExportAdaptation(context.Context, uuid.UUID, linka.Format) (*ExportArchive, error)
 	Import(context.Context, string, uuid.UUID, []byte) (*Pack, error)
 	Assign(context.Context, uuid.UUID, []uuid.UUID) ([]Adaptation, error)
 	Unassign(context.Context, uuid.UUID, uuid.UUID) error
 	ListAdaptations(context.Context, uuid.UUID) ([]Adaptation, error)
 	GetAdaptation(context.Context, uuid.UUID) (*Adaptation, error)
 	UpdateAdaptationConfig(context.Context, uuid.UUID, json.RawMessage) (*Adaptation, error)
-	CreateVersion(context.Context, uuid.UUID) (*Version, error)
-	ListVersions(context.Context, uuid.UUID, ListInput) ([]*VersionSummary, error)
-	GetVersion(context.Context, uuid.UUID, int) (*Version, error)
-	RestoreVersion(context.Context, uuid.UUID, int) (*RestoreResult, error)
 }
 
 type ContentHandler struct {
@@ -77,12 +74,27 @@ func (h *ContentHandler) SaveConfig(w http.ResponseWriter, r *http.Request) erro
 	return writeJSON(w, http.StatusOK, result)
 }
 
+// parseExportFormat читает query-параметр format. Список допустимых
+// значений держит реестр pkg/linka, поэтому здесь нет перечисления
+// форматов.
+func parseExportFormat(r *http.Request) (linka.Format, error) {
+	format, err := linka.ParseFormat(r.URL.Query().Get("format"))
+	if err != nil {
+		return "", apperr.ErrBadRequest.WithMessage(err.Error())
+	}
+	return format, nil
+}
+
 func (h *ContentHandler) Export(w http.ResponseWriter, r *http.Request) error {
 	packID, err := pathUUID(r)
 	if err != nil {
 		return err
 	}
-	archive, err := h.service.Export(r.Context(), packID)
+	format, err := parseExportFormat(r)
+	if err != nil {
+		return err
+	}
+	archive, err := h.service.Export(r.Context(), packID, format)
 	if err != nil {
 		return err
 	}
@@ -94,7 +106,11 @@ func (h *ContentHandler) ExportAdaptation(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return err
 	}
-	archive, err := h.service.ExportAdaptation(r.Context(), adaptationID)
+	format, err := parseExportFormat(r)
+	if err != nil {
+		return err
+	}
+	archive, err := h.service.ExportAdaptation(r.Context(), adaptationID, format)
 	if err != nil {
 		return err
 	}
@@ -224,78 +240,4 @@ func (h *ContentHandler) UpdateAdaptationConfig(w http.ResponseWriter, r *http.R
 		return err
 	}
 	return writeJSON(w, http.StatusOK, result)
-}
-
-func (h *ContentHandler) CreateVersion(w http.ResponseWriter, r *http.Request) error {
-	packID, err := pathUUID(r)
-	if err != nil {
-		return err
-	}
-	result, err := h.service.CreateVersion(r.Context(), packID)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusCreated, result)
-}
-
-func (h *ContentHandler) ListVersions(w http.ResponseWriter, r *http.Request) error {
-	packID, err := pathUUID(r)
-	if err != nil {
-		return err
-	}
-	limit, err := optionalQueryInt(r, "limit")
-	if err != nil {
-		return err
-	}
-	offset, err := optionalQueryInt(r, "offset")
-	if err != nil {
-		return err
-	}
-	result, err := h.service.ListVersions(
-		r.Context(), packID, ListInput{Limit: limit, Offset: offset},
-	)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusOK, result)
-}
-
-func (h *ContentHandler) RestoreVersion(w http.ResponseWriter, r *http.Request) error {
-	packID, err := pathUUID(r)
-	if err != nil {
-		return err
-	}
-	versionNumber, err := versionPathValue(r)
-	if err != nil {
-		return err
-	}
-	result, err := h.service.RestoreVersion(r.Context(), packID, versionNumber)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusOK, result)
-}
-
-func (h *ContentHandler) GetVersion(w http.ResponseWriter, r *http.Request) error {
-	packID, err := pathUUID(r)
-	if err != nil {
-		return err
-	}
-	versionNumber, err := versionPathValue(r)
-	if err != nil {
-		return err
-	}
-	result, err := h.service.GetVersion(r.Context(), packID, versionNumber)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusOK, result)
-}
-
-func versionPathValue(r *http.Request) (int, error) {
-	versionNumber, err := strconv.Atoi(r.PathValue("version"))
-	if err != nil || versionNumber < 1 {
-		return 0, apperr.ErrBadRequest.WithMessage("version must be a positive integer")
-	}
-	return versionNumber, nil
 }
