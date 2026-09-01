@@ -39,18 +39,11 @@ type LLMChunk struct {
 
 // TTSJob is a text-to-speech synthesis job.
 type TTSJob struct {
-	JobId string `json:"job_id"`
-	Text  string `json:"text"`
-	Voice string `json:"voice"`
-}
-
-// TTSResult is the result of a TTS job. Currently unused: the worker writes
-// the result directly to the database instead of publishing a response.
-type TTSResult struct {
-	PackID   string `json:"pack_id"`
-	CardID   string `json:"card_id"`
-	AudioURL string `json:"audio_url"`
-	Error    string `json:"error,omitempty"`
+	JobId  string `json:"job_id"`
+	OrgID  string `json:"org_id"`
+	UserID string `json:"user_id"`
+	Text   string `json:"text"`
+	Voice  string `json:"voice"`
 }
 
 // ClamAVJob is a request to scan a file for malware.

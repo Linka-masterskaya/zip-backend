@@ -186,12 +186,9 @@ func (s *Service) Delete(ctx context.Context, mediaID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	file, err := s.repo.Delete(ctx, userID, mediaID)
+	_, err = s.repo.Delete(ctx, userID, mediaID)
 	if err != nil {
 		return mediaError(err)
-	}
-	if err = s.storage.RemoveObject(ctx, file.MinIOKey); err != nil {
-		return fmt.Errorf("remove media object: %w", err)
 	}
 	return nil
 }
