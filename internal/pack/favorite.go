@@ -10,8 +10,7 @@ import (
 type favoriteRepository interface {
 	PutFavorite(context.Context, uuid.UUID, uuid.UUID) error
 	DeleteFavorite(context.Context, uuid.UUID, uuid.UUID) error
-	ListFavorites(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
-	CountFavorites(context.Context, uuid.UUID) (int, error)
+	ListWithTotal(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 }
 
 // FavoriteService manages per-user pack bookmarks.
@@ -51,14 +50,9 @@ func (s *FavoriteService) ListFavorites(ctx context.Context, input ListInput) (*
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.repo.ListFavorites(ctx, userID, input)
+	items, total, err := s.repo.ListWithTotal(ctx, userID, input)
 	if err != nil {
 		return nil, packError(err)
 	}
-	total, err := s.repo.CountFavorites(ctx, userID)
-	if err != nil {
-		return nil, packError(err)
-	}
-
 	return &ListPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
 }

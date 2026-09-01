@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// PutFavorite bookmarks. Repeated calls are idempotent.
+// Добавляйте любимые закладки. Повторные вызовы являются идемпотентными.
 func (r *Repository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) error {
 	var id uuid.UUID
 	err := r.pool.QueryRow(ctx, putFavoriteQuery, userID, packID).Scan(&id)
@@ -22,7 +22,7 @@ func (r *Repository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) 
 	return nil
 }
 
-// DeleteFavorite removes a pack bookmark for the user. Repeated calls are idempotent.
+// DeleteFavorite удаляет закладку pack для пользователя. Повторные вызовы являются идемпотентными.
 func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUID) error {
 	if _, err := r.pool.Exec(ctx, deleteFavoriteQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete favorite: %w", err)
@@ -30,10 +30,16 @@ func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUI
 	return nil
 }
 
-// ListFavorites returns a bounded page of the user's currently accessible favorited packs.
-func (r *Repository) ListFavorites(ctx context.Context, userID uuid.UUID, input ListInput) ([]*ListItem, error) {
+// listFavorites возвращает ограниченную страницу с избранными пакетами, доступными пользователю в данный момент.
+// Он должен запускаться в tx, что и countFavorites (см. ListWithTotal), чтобы оба видели один снимок.
+func (r *Repository) listFavorites(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+	input ListInput,
+) ([]*ListItem, error) {
 	limit, offset := repositoryListBounds(input)
-	rows, err := r.pool.Query(ctx, listFavoritePacksQuery, userID, limit, offset)
+	rows, err := tx.Query(ctx, listFavoritePacksQuery, userID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("pack repository list favorites: %w", err)
 	}
@@ -53,12 +59,50 @@ func (r *Repository) ListFavorites(ctx context.Context, userID uuid.UUID, input 
 	return packs, nil
 }
 
-// CountFavorites returns the total number of currently accessible favorited packs.
-func (r *Repository) CountFavorites(ctx context.Context, userID uuid.UUID) (int, error) {
+// countFavorites возвращает общее количество доступных в данный момент избранных пакетов без изменений с разбивкой по страницам.
+// Вводимые данные принимаются для проверки соответствия подписей с помощью listFavorites и будущих фильтров;
+// Он должен запускаться в том же tx, что и listFavorites (см. ListWithTotal), чтобы оба видели один снимок.
+func (r *Repository) countFavorites(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+	_ ListInput,
+) (int, error) {
 	var total int
-	if err := r.pool.QueryRow(ctx, countFavoritePacksQuery, userID).Scan(&total); err != nil {
+	if err := tx.QueryRow(ctx, countFavoritePacksQuery, userID).Scan(&total); err != nil {
 		return 0, fmt.Errorf("pack repository count favorites: %w", err)
 	}
 
 	return total, nil
+}
+
+// ListWithTotal возвращает ограниченную страницу избранных пакетов вместе с общим количеством,
+// оба вычисляются в рамках одного REPEATABLE READ, поэтому они всегда отображают один и тот же снимок
+// независимо от одновременных избранных / не избранных пакетов.
+func (r *Repository) ListWithTotal(
+	ctx context.Context,
+	userID uuid.UUID,
+	input ListInput,
+) ([]*ListItem, int, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("favorites list page begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	items, err := r.listFavorites(ctx, tx, userID, input)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := r.countFavorites(ctx, tx, userID, input)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("favorite list page commit: %w", err)
+	}
+	return items, total, nil
 }
