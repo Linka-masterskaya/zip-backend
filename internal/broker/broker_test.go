@@ -94,7 +94,7 @@ func TestPublishAndConsumeTTS(t *testing.T) {
 	publisher := broker.NewPublisher(js)
 	consumer := broker.NewConsumer(js, natsCfg.Stream.Name, natsCfg.Consumers)
 
-	job := broker.TTSJob{JobId: "j1", Text: "hello", Voice: "alena"}
+	job := broker.TTSJob{JobId: "j1", OrgID: "org1", UserID: "u1", Text: "hello", Voice: "alena"}
 	require.NoError(t, publisher.PublishTTSJob(context.Background(), job))
 
 	ctx, cancel := context.WithCancel(context.Background())

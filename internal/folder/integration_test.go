@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -428,6 +429,55 @@ func TestContentsTotalIgnoresPaginationAndVisibility(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, pastEnd.Items)
 	assert.Equal(t, 3, pastEnd.Total)
+}
+
+func TestContentsReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
+	pool := folderTestDB(t)
+	writerRepo := NewRepository(pool)
+	ownerID := seedFolderUser(t, pool, "contents snapshot owner")
+
+	_, err := writerRepo.Create(t.Context(), ownerID, "defectologist", CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "first",
+	})
+	require.NoError(t, err)
+
+	gate := testutil.NewQueryGate()
+	readerPoolConfig := pool.Config()
+	readerPoolConfig.ConnConfig.Tracer = gate
+	readerPool, err := pgxpool.NewWithConfig(t.Context(), readerPoolConfig)
+	require.NoError(t, err)
+	defer readerPool.Close()
+	readerRepo := NewRepository(readerPool)
+
+	type contentsResult struct {
+		page *ContentsPage
+		err  error
+	}
+	resultCh := make(chan contentsResult, 1)
+	go func() {
+		page, contentsErr := readerRepo.Contents(t.Context(), ownerID, ContentsInput{
+			Section: SectionMy, Limit: 50,
+		})
+		resultCh <- contentsResult{page: page, err: contentsErr}
+	}()
+	defer gate.Release()
+	gate.Wait(t, 5*time.Second)
+
+	_, err = writerRepo.Create(t.Context(), ownerID, "defectologist", CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "second",
+	})
+	require.NoError(t, err)
+	gate.Release()
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.page)
+		require.NotEmpty(t, result.page.Items)
+		assert.Equal(t, len(result.page.Items), result.page.Total)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Contents did not return after the second query was released")
+	}
 }
 
 // TestContentsFilters: поиск и фильтры работают на общем списке папок и
