@@ -126,6 +126,29 @@ services:
       retries: 5
       start_period: 5s
 
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: local-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - linka-net
+    environment:      
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+      MP_UI_AUTH: "${UI_USERNAME:-admin}:${UI_PASSWORD:-webpass}"
+      MP_MAX_MESSAGES: 1000
+    volumes:
+      - local-mailpit-volume:/data
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8025/livez" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
 volumes:
   local-postgres-volume:
   local-minio-volume:
@@ -133,7 +156,7 @@ volumes:
   local-loki-volume:
   local-alloy-volume:
   local-redis-volume:
-
+  local-mailpit-volume:
 
 networks:
   linka-net:
