@@ -58,13 +58,55 @@ func (r *Repository) Create(
 }
 
 func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInput) ([]storedStudent, int, error) {
+	query, args := studentListQuery(ownerID, input)
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("student list begin: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil &&
+			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.WarnContext(ctx, "student list rollback", "err", rollbackErr)
+		}
+	}()
+
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("student list: %w", err)
+	}
+	defer rows.Close()
+
+	var result []storedStudent
+	for rows.Next() {
+		item, err := scanStudent(rows)
+		if err != nil {
+			return nil, 0, fmt.Errorf("student list scan: %w", err)
+		}
+		result = append(result, *item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("student list rows: %w", err)
+	}
+
 	var totalCount int
-	if err := r.pool.QueryRow(ctx, `
+	if err = tx.QueryRow(ctx, `
 		SELECT COUNT(*) FROM students
 		WHERE defectologist_id = $1 AND deleted_at IS NULL
 	`, ownerID).Scan(&totalCount); err != nil {
 		return nil, 0, fmt.Errorf("student count: %w", err)
 	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("student list commit: %w", err)
+	}
+	return result, totalCount, nil
+}
+
+func studentListQuery(ownerID uuid.UUID, input ListInput) (string, []any) {
 	query := `
 		SELECT ` + studentColumnsWithAvatar + `
 		FROM students s
@@ -72,7 +114,6 @@ func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInpu
 		WHERE s.defectologist_id = $1 AND s.deleted_at IS NULL
 	`
 	args := []any{ownerID}
-	argIdx := 2
 
 	sortBy := "name"
 	if input.SortBy != "" {
@@ -99,29 +140,12 @@ func (r *Repository) List(ctx context.Context, ownerID uuid.UUID, input ListInpu
 	}
 
 	query += " ORDER BY " + orderByClause
-
-	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	limitIndex := len(args) + 1
+	offsetIndex := limitIndex + 1
+	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", limitIndex, offsetIndex)
 	args = append(args, input.Limit, input.Offset)
 
-	rows, err := r.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("student list: %w", err)
-	}
-	defer rows.Close()
-
-	var result []storedStudent
-	for rows.Next() {
-		item, err := scanStudent(rows)
-		if err != nil {
-			return nil, 0, fmt.Errorf("student list scan: %w", err)
-		}
-		result = append(result, *item)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("student list rows: %w", err)
-	}
-	return result, totalCount, nil
+	return query, args
 }
 
 func (r *Repository) Update(

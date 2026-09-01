@@ -44,17 +44,17 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		return &Pack{ID: packID}, nil
 	}
 	age := 5
-	repo.listFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) ([]*ListItem, error) {
+	repo.listWithTotalFn = func(
+		_ context.Context,
+		gotUserID uuid.UUID,
+		input ListInput,
+	) ([]*ListItem, int, error) {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, ListInput{
 			Query: "Speech", Age: &age, Difficulty: "easy",
 			Section: "my", Limit: 50,
 		}, input)
-		return []*ListItem{{ID: packID}}, nil
-	}
-	repo.countFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) (int, error) {
-		assert.Equal(t, userID, gotUserID)
-		return 1, nil
+		return []*ListItem{{ID: packID}}, 1, nil
 	}
 	repo.deleteFn = func(_ context.Context, gotUserID, gotPackID uuid.UUID) error {
 		assert.Equal(t, userID, gotUserID)
@@ -315,8 +315,7 @@ type fakePackRepository struct {
 	duplicateFn         func(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	getFn               func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	listFn              func(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
-	countFn             func(context.Context, uuid.UUID, ListInput) (int, error)
+	listWithTotalFn     func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
 	moveFn              func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -358,26 +357,15 @@ func (f *fakePackRepository) Get(ctx context.Context, userID, packID uuid.UUID) 
 	return &Pack{}, nil
 }
 
-func (f *fakePackRepository) List(
+func (f *fakePackRepository) ListWithTotal(
 	ctx context.Context,
 	userID uuid.UUID,
 	input ListInput,
-) ([]*ListItem, error) {
-	if f.listFn != nil {
-		return f.listFn(ctx, userID, input)
+) ([]*ListItem, int, error) {
+	if f.listWithTotalFn != nil {
+		return f.listWithTotalFn(ctx, userID, input)
 	}
-	return []*ListItem{}, nil
-}
-
-func (f *fakePackRepository) Count(
-	ctx context.Context,
-	userID uuid.UUID,
-	input ListInput,
-) (int, error) {
-	if f.countFn != nil {
-		return f.countFn(ctx, userID, input)
-	}
-	return 0, nil
+	return []*ListItem{}, 0, nil
 }
 
 func (f *fakePackRepository) Update(ctx context.Context, userID, packID uuid.UUID, input UpdateInput) (*Pack, error) {
