@@ -211,6 +211,14 @@ func (r *Repository) UpdateAdaptationConfig(
 			return nil, ErrMediaNotAllowed
 		}
 	}
+	mediaRows, err := tx.Query(ctx, `SELECT media_id FROM media_usages WHERE source_id = $1`, adaptationID)
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptation config collect media: %w", err)
+	}
+	oldMediaIDs, err := pgx.CollectRows(mediaRows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptation config collect media: %w", err)
+	}
 	if _, err = tx.Exec(ctx, deleteAdaptationUsagesQuery, adaptationID); err != nil {
 		return nil, fmt.Errorf("pack adaptation config clear media usages: %w", err)
 	}
@@ -222,6 +230,9 @@ func (r *Repository) UpdateAdaptationConfig(
 	result, err := scanAdaptation(tx.QueryRow(ctx, updateAdaptationConfigQuery, adaptationID, config))
 	if err != nil {
 		return nil, fmt.Errorf("pack adaptation config update: %w", err)
+	}
+	if err = deleteOrphanedMedia(ctx, tx, oldMediaIDs); err != nil {
+		return nil, fmt.Errorf("pack adaptation config orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("pack adaptation config commit: %w", err)
