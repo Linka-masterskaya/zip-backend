@@ -292,11 +292,24 @@ func (r *Repository) Unassign(
 	if err != nil {
 		return fmt.Errorf("pack unassign lock: %w", err)
 	}
+	mediaRows, err := tx.Query(ctx, `
+    SELECT media_id FROM media_usages
+    WHERE source_type = 'pack_adaptation' AND source_id = $1`, adaptationID)
+	if err != nil {
+		return fmt.Errorf("pack unassign collect media: %w", err)
+	}
+	mediaIDs, err := pgx.CollectRows(mediaRows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("pack unassign collect media: %w", err)
+	}
 	if _, err = tx.Exec(ctx, deleteAdaptationUsagesQuery, adaptationID); err != nil {
 		return fmt.Errorf("pack unassign media usages: %w", err)
 	}
 	if _, err = tx.Exec(ctx, deleteAdaptationQuery, adaptationID); err != nil {
 		return fmt.Errorf("pack unassign delete: %w", err)
+	}
+	if err = deleteOrphanedMedia(ctx, tx, mediaIDs); err != nil {
+		return fmt.Errorf("pack unassign orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pack unassign commit: %w", err)

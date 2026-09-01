@@ -512,11 +512,6 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 	assert.Empty(t, e2eFolderContents(t, server, token, "library", libraryFolder.ID).Items)
 	for _, mediaID := range []uuid.UUID{first.ID, replacement.ID} {
 		response = e2eRequest(
-			t, server, token, http.MethodDelete, "/api/v1/media/"+mediaID.String(), nil,
-		)
-		assert.Equal(t, http.StatusNoContent, response.StatusCode)
-		e2eClose(t, response)
-		response = e2eRequest(
 			t, server, token, http.MethodGet, "/api/v1/media/"+mediaID.String(), nil,
 		)
 		assert.Equal(t, http.StatusNotFound, response.StatusCode)

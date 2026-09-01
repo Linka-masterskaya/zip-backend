@@ -637,14 +637,23 @@ func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) 
 	).Scan(&adaptationCount))
 	assert.Equal(t, 2, adaptationCount)
 
+	_, err = pool.Exec(context.Background(),
+		`UPDATE organizations SET storage_used_bytes = 4 WHERE id = $1`, orgID)
+	require.NoError(t, err)
 	require.NoError(t, repo.Unassign(context.Background(), ownerID, created.ID, studentIDs[0]))
 	require.NoError(t, repo.Delete(context.Background(), ownerID, created.ID))
 	require.NoError(t, pool.QueryRow(context.Background(), `
 		SELECT count(*) FROM pack_adaptations WHERE pack_id = $1`, created.ID,
 	).Scan(&adaptationCount))
 	assert.Zero(t, adaptationCount)
-	_, err = pool.Exec(t.Context(), `DELETE FROM media_files WHERE id = $1`, mediaID)
-	require.NoError(t, err)
+	var count int
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
+	assert.Zero(t, count)
+	var used int64
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
+	assert.Equal(t, int64(0), used)
 }
 
 func TestRepositoryAdaptationArchiveUsesSnapshotMediaAndChecksAccess(t *testing.T) {
@@ -1122,4 +1131,102 @@ func TestRepositoryPackShareOutboxDoesNotResendAfterSMTPWasAccepted(t *testing.T
 	stored, err := repo.GetShareJob(t.Context(), job.ID)
 	require.NoError(t, err)
 	assert.Equal(t, ShareTaskSent, stored.Status)
+}
+
+func TestRepositoryDeleteKeepsSharedMedia(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "shared media org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	packA, err := repo.Create(context.Background(), ownerID, CreateInput{
+		Title: "Pack A", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+	packB, err := repo.Create(context.Background(), ownerID, CreateInput{
+		Title: "Pack B", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+
+	mediaID := uuid.New()
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
+		)
+		VALUES ($1, $2, $3, 'shared.png', $4, 'image/png', 'image', 8, $5)`,
+		mediaID, orgID, ownerID, "shared-sha", "media/"+mediaID.String())
+	require.NoError(t, err)
+
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack', $2), ($1, 'pack', $3)`, mediaID, packA.ID, packB.ID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(context.Background(),
+		`UPDATE organizations SET storage_used_bytes = 8 WHERE id = $1`, orgID)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Delete(context.Background(), ownerID, packA.ID))
+
+	var count int
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
+	assert.Equal(t, 1, count)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
+	assert.Equal(t, int64(8), used)
+}
+
+// TestRepositoryUnassignCleansOrphanedMedia: при отвязке адаптации
+// медиа, которая больше нигде не используется, удаляется с возвратом квоты.
+func TestRepositoryUnassignCleansOrphanedMedia(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "unassign org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+	created, err := repo.Create(context.Background(), ownerID, CreateInput{
+		Title: "Unassign Pack", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+
+	studentID := uuid.New()
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO students (id, defectologist_id, email_encrypted, name, status)
+		VALUES ($1, $2, '\x00', 'Student', 'active')`, studentID, ownerID)
+	require.NoError(t, err)
+
+	assigned, err := repo.Assign(context.Background(), ownerID, created.ID, []uuid.UUID{studentID})
+	require.NoError(t, err)
+	require.Len(t, assigned, 1)
+
+	mediaID := uuid.New()
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
+		)
+		VALUES ($1, $2, $3, 'adapt.png', $4, 'image/png', 'image', 5, $5)`,
+		mediaID, orgID, ownerID, "adapt-sha", "media/"+mediaID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack_adaptation', $2)`, mediaID, assigned[0].ID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(context.Background(),
+		`UPDATE organizations SET storage_used_bytes = 5 WHERE id = $1`, orgID)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Unassign(context.Background(), ownerID, created.ID, studentID))
+
+	var count int
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
+	assert.Zero(t, count)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
+	assert.Equal(t, int64(0), used)
 }
