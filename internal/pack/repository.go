@@ -95,8 +95,7 @@ func (r *Repository) Duplicate(
 		userID,
 		lockedFolderID,
 		title,
-		source.AgeMin,
-		source.AgeMax,
+		source.Age,
 		source.Difficulty,
 		source.Goals,
 		source.Notes,
@@ -154,19 +153,51 @@ func (r *Repository) GetForPublication(
 	return result, nil
 }
 
-// List returns a bounded page of packs from all folders accessible to the user.
-func (r *Repository) List(
+// ListWithTotal returns items and their total from one consistent database snapshot.
+func (r *Repository) ListWithTotal(
 	ctx context.Context,
+	userID uuid.UUID,
+	input ListInput,
+) ([]*ListItem, int, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("pack repository list page begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	items, err := r.list(ctx, tx, userID, input)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := r.count(ctx, tx, userID, input)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("pack repository list page commit: %w", err)
+	}
+	return items, total, nil
+}
+
+// list returns a bounded page of packs using the caller's transaction.
+func (r *Repository) list(
+	ctx context.Context,
+	tx pgx.Tx,
 	userID uuid.UUID,
 	input ListInput,
 ) ([]*ListItem, error) {
 	limit, offset := repositoryListBounds(input)
-	rows, err := r.pool.Query(
+	rows, err := tx.Query(
 		ctx,
 		listPacksQuery(input.SortBy, input.Order),
 		userID,
 		input.Query,
 		input.Age,
+		input.AgeFrom,
+		input.AgeTo,
 		input.Difficulty,
 		input.Section,
 		input.StudentID,
@@ -192,19 +223,22 @@ func (r *Repository) List(
 	return packs, nil
 }
 
-// Count returns the total number of pack placements matching the same filters as List.
-func (r *Repository) Count(
+// count returns the total number of placements using the caller's transaction.
+func (r *Repository) count(
 	ctx context.Context,
+	tx pgx.Tx,
 	userID uuid.UUID,
 	input ListInput,
 ) (int, error) {
 	var total int
-	err := r.pool.QueryRow(
+	err := tx.QueryRow(
 		ctx,
 		countPacksQuery,
 		userID,
 		input.Query,
 		input.Age,
+		input.AgeFrom,
+		input.AgeTo,
 		input.Difficulty,
 		input.Section,
 		input.StudentID,
@@ -248,8 +282,7 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 	metadata := filterPatch(input.FilterMetadata)
 	result, err := scanPack(tx.QueryRow(ctx, updatePackQuery,
 		userID, packID, input.Title, input.FolderID,
-		metadata.ageMin.Set, metadata.ageMin.Value,
-		metadata.ageMax.Set, metadata.ageMax.Value,
+		metadata.age.Set, metadata.age.Value,
 		metadata.difficulty.Set, metadata.difficulty.Value, metadata.goals,
 		input.Notes.Set, input.Notes.Value,
 	))
@@ -414,8 +447,7 @@ func rollbackPackTx(ctx context.Context, tx pgx.Tx) {
 }
 
 type patchValues struct {
-	ageMin     NullablePatch[int]
-	ageMax     NullablePatch[int]
+	age        NullablePatch[int]
 	difficulty NullablePatch[string]
 	goals      []string
 }
@@ -425,7 +457,7 @@ func filterPatch(metadata *FilterMetadataPatch) patchValues {
 		return patchValues{}
 	}
 	values := patchValues{
-		ageMin: metadata.AgeMin, ageMax: metadata.AgeMax,
+		age:        metadata.Age,
 		difficulty: metadata.Difficulty,
 	}
 	if metadata.Goals != nil {
@@ -440,8 +472,7 @@ func isMetadataConstraintError(err error) bool {
 		return false
 	}
 	switch pgErr.ConstraintName {
-	case "packs_age_min_chk", "packs_age_max_chk",
-		"packs_age_range_chk", "packs_difficulty_chk":
+	case "packs_age_chk", "packs_difficulty_chk":
 		return true
 	default:
 		return false
@@ -457,7 +488,7 @@ func scanPack(row rowScanner) (*Pack, error) {
 	err := row.Scan(
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
 		&result.LibraryFolderID, &result.PublishedAt,
-		&result.Title, &result.Status, &result.AgeMin, &result.AgeMax,
+		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.CreatedAt, &result.UpdatedAt,
 	)
@@ -472,7 +503,7 @@ func scanListItem(row rowScanner) (*ListItem, error) {
 	err := row.Scan(
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
 		&result.LibraryFolderID, &result.PublishedAt,
-		&result.Title, &result.Status, &result.AgeMin, &result.AgeMax,
+		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.IsFavorite, &result.Section,
 		&result.CreatedAt, &result.UpdatedAt,
