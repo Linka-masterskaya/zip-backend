@@ -45,6 +45,7 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 
 func TestLoadMigrationDoesNotValidateRuntimeSecrets(t *testing.T) {
 	t.Setenv("APP_ENV", "prod")
+	t.Setenv("DB_URL", "postgres://migration:secret@postgres:5432/linka")
 	t.Setenv("DB_MIGRATE_URL", "postgres://migration:secret@postgres:5432/linka")
 
 	cfg, err := LoadMigration("../../config/config.prod.yml")
@@ -55,6 +56,7 @@ func TestLoadMigrationDoesNotValidateRuntimeSecrets(t *testing.T) {
 
 func TestLoadMigrationRejectsUnsafeProductionDatabaseURL(t *testing.T) {
 	t.Setenv("APP_ENV", "prod")
+	t.Setenv("DB_URL", "postgres://linka:linka@postgres:5432/linka")
 	t.Setenv("DB_MIGRATE_URL", "postgres://linka:linka@postgres:5432/linka")
 
 	_, err := LoadMigration("../../config/config.prod.yml")
@@ -64,6 +66,7 @@ func TestLoadMigrationRejectsUnsafeProductionDatabaseURL(t *testing.T) {
 
 func TestLoadMigrationTreatsWhitespacePaddedProdAsProduction(t *testing.T) {
 	t.Setenv("APP_ENV", "  PROD  ")
+	t.Setenv("DB_URL", "postgres://linka:linka@postgres:5432/linka")
 	t.Setenv("DB_MIGRATE_URL", "postgres://linka:linka@postgres:5432/linka")
 
 	_, err := LoadMigration("../../config/config.prod.yml")
