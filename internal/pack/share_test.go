@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,6 +189,7 @@ func TestShareServiceShutdownRejectsInFlightEnqueue(t *testing.T) {
 		nil,
 		ShareConfig{Workers: 1, SendRetries: 1, RetryBackoff: time.Millisecond},
 	)
+	service.Start()
 
 	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
 	shareDone := make(chan error, 1)
@@ -260,8 +263,96 @@ func TestShareServiceRejectsInvalidTarget(t *testing.T) {
 	assertAppErrorStatus(t, err, 400)
 }
 
+func TestShareServiceRequiresExplicitStartForStudentWorker(t *testing.T) {
+	userID, packID, studentID := uuid.New(), uuid.New(), uuid.New()
+	service := NewShareService(
+		&sharePackFake{pack: &Pack{ID: packID, OwnerID: userID, Title: "Pack"}},
+		&shareContentFake{archive: testArchive("Pack.linka", []byte("archive"))},
+		&shareStudentFake{student: &student.Student{ID: studentID, Email: "student@example.com"}},
+		&shareMailerFake{},
+	)
+	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	_, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
+	assertAppErrorStatus(t, err, 503)
+
+	service.Start()
+	shutdownShareService(t, service)
+	_, err = service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
+	require.NoError(t, err)
+}
+
+func TestShareServiceStopsRequeueAfterMaxAttemptsOnSMTPTimeout(t *testing.T) {
+	userID, packID, studentID := uuid.New(), uuid.New(), uuid.New()
+	mailerFake := &deadlineShareMailer{}
+	service := NewShareServiceWithConfig(
+		&sharePackFake{pack: &Pack{ID: packID, OwnerID: userID, Title: "Pack"}},
+		&shareContentFake{archive: testArchive("Pack.linka", []byte("archive"))},
+		&shareStudentFake{student: &student.Student{ID: studentID, Email: "student@example.com"}},
+		mailerFake,
+		nil,
+		ShareConfig{
+			Workers: 1, PollInterval: time.Millisecond, JobTimeout: time.Minute,
+			SendRetries: 1, MaxAttempts: 2, SendTimeout: time.Second, RetryBackoff: time.Millisecond,
+		},
+	)
+	shutdownShareService(t, service)
+
+	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		task, getErr := service.GetTask(ctx, result.Task.ID)
+		return getErr == nil && task.Status == ShareTaskFailed &&
+			strings.Contains(task.Message, "maximum attempts reached")
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.Equal(t, int32(2), mailerFake.calls.Load())
+}
+
+func TestShareServiceStopsRequeueAfterMaxAttemptsOnExportTimeout(t *testing.T) {
+	userID, packID, studentID := uuid.New(), uuid.New(), uuid.New()
+	var exports atomic.Int32
+	content := &shareContentFake{exportFn: func(context.Context, uuid.UUID, linka.Format) (*ExportArchive, error) {
+		exports.Add(1)
+		return nil, context.DeadlineExceeded
+	}}
+	service := NewShareServiceWithConfig(
+		&sharePackFake{pack: &Pack{ID: packID, OwnerID: userID, Title: "Pack"}},
+		content,
+		&shareStudentFake{student: &student.Student{ID: studentID, Email: "student@example.com"}},
+		&shareMailerFake{},
+		nil,
+		ShareConfig{
+			Workers: 1, PollInterval: time.Millisecond, JobTimeout: time.Minute,
+			SendRetries: 1, MaxAttempts: 2, SendTimeout: time.Second, RetryBackoff: time.Millisecond,
+		},
+	)
+	shutdownShareService(t, service)
+
+	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		task, getErr := service.GetTask(ctx, result.Task.ID)
+		return getErr == nil && task.Status == ShareTaskFailed &&
+			strings.Contains(task.Message, "maximum attempts reached")
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.Equal(t, int32(2), exports.Load())
+}
+
+type deadlineShareMailer struct {
+	calls atomic.Int32
+}
+
+func (m *deadlineShareMailer) Send(context.Context, string, mailer.Template, mailer.EmailData) error {
+	m.calls.Add(1)
+	return context.DeadlineExceeded
+}
+
 func shutdownShareService(t *testing.T, service *ShareService) {
 	t.Helper()
+	service.Start()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -434,6 +525,7 @@ func TestShareServiceShutdownRequeuesInterruptedOutboxJob(t *testing.T) {
 		nil,
 		ShareConfig{Workers: 1, PollInterval: time.Millisecond, JobTimeout: time.Minute, SendRetries: 1, SendTimeout: time.Minute, RetryBackoff: time.Millisecond},
 	)
+	service.Start()
 
 	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
@@ -569,6 +661,6 @@ func (f *shareQuotaFake) ReserveSend(context.Context, uuid.UUID) (bool, error) {
 	return f.sendAllowed, f.err
 }
 
-func (f *shareQuotaFake) ReserveBytes(context.Context, uuid.UUID, int64) (bool, error) {
+func (f *shareQuotaFake) ReserveBytesForJob(context.Context, uuid.UUID, uuid.UUID, int64) (bool, error) {
 	return f.bytesAllowed, f.err
 }

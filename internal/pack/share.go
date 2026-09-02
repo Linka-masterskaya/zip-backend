@@ -21,13 +21,15 @@ import (
 )
 
 const (
-	shareTaskTTL              = 24 * time.Hour
-	shareDefaultPollInterval  = 500 * time.Millisecond
-	shareDefaultJobTimeout    = 10 * time.Minute
-	shareJobLeaseGrace        = time.Minute
-	shareOutboxStoreTimeout   = 2 * time.Second
-	shareOutboxPruneInterval  = time.Hour
-	shareInterruptedRetryWait = time.Second
+	shareTaskTTL                 = 24 * time.Hour
+	shareDefaultPollInterval     = 500 * time.Millisecond
+	shareDefaultJobTimeout       = 10 * time.Minute
+	shareJobLeaseGrace           = time.Minute
+	shareOutboxStoreTimeout      = 2 * time.Second
+	shareOutboxPruneInterval     = time.Hour
+	shareInterruptedRetryWait    = time.Second
+	shareEmailSentPersistRetries = 3
+	shareEmailSentPersistBackoff = 100 * time.Millisecond
 )
 
 type ShareTargetType string
@@ -76,6 +78,7 @@ type ShareConfig struct {
 	DailyBytesPerUser  int64
 	MaxAttachmentBytes int64
 	SendRetries        int
+	MaxAttempts        int
 	SendTimeout        time.Duration
 	RetryBackoff       time.Duration
 }
@@ -99,7 +102,7 @@ type shareMailer interface {
 
 type shareQuota interface {
 	ReserveSend(context.Context, uuid.UUID) (bool, error)
-	ReserveBytes(context.Context, uuid.UUID, int64) (bool, error)
+	ReserveBytesForJob(context.Context, uuid.UUID, uuid.UUID, int64) (bool, error)
 }
 
 type redisShareQuota struct {
@@ -123,8 +126,22 @@ func (q *redisShareQuota) ReserveSend(ctx context.Context, userID uuid.UUID) (bo
 	return q.reserve(ctx, "send", userID, 1, q.sendLimit)
 }
 
-func (q *redisShareQuota) ReserveBytes(ctx context.Context, userID uuid.UUID, size int64) (bool, error) {
-	return q.reserve(ctx, "bytes", userID, size, q.bytesLimit)
+func (q *redisShareQuota) ReserveBytesForJob(
+	ctx context.Context,
+	userID, jobID uuid.UUID,
+	size int64,
+) (bool, error) {
+	now := q.now().UTC()
+	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
+	ttl := tomorrow.Sub(now)
+	if ttl <= 0 {
+		ttl = time.Second
+	}
+	date := now.Format("2006-01-02")
+	counterKey := fmt.Sprintf("pack_share:bytes:%s:%s", date, userID)
+	reservationKey := fmt.Sprintf("pack_share:bytes-reservation:%s:%s:%s", date, userID, jobID)
+	allowed, _, err := q.cache.ReserveCounterOnce(ctx, counterKey, reservationKey, size, q.bytesLimit, ttl)
+	return allowed, err
 }
 
 func (q *redisShareQuota) reserve(
@@ -158,8 +175,10 @@ type ShareService struct {
 	cfg      ShareConfig
 
 	workersWG sync.WaitGroup
+	startOnce sync.Once
 	stopOnce  sync.Once
 	accepting atomic.Bool
+	started   atomic.Bool
 	stopping  atomic.Bool
 	workerCtx context.Context
 	cancel    context.CancelFunc
@@ -199,6 +218,7 @@ func NewShareServiceWithConfig(
 }
 
 // NewShareServiceWithOutbox creates a share service backed by a durable job repository.
+// Call Start after construction and pair it with Shutdown in the owning lifecycle.
 func NewShareServiceWithOutbox(
 	packs sharePackService,
 	content shareContentService,
@@ -222,6 +242,9 @@ func NewShareServiceWithOutbox(
 	}
 	if cfg.SendRetries <= 0 {
 		cfg.SendRetries = 3
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = 5
 	}
 	if cfg.SendTimeout <= 0 {
 		cfg.SendTimeout = 30 * time.Second
@@ -248,11 +271,25 @@ func NewShareServiceWithOutbox(
 		wake:      make(chan struct{}, 1),
 	}
 	s.accepting.Store(true)
-	for i := 0; i < cfg.Workers; i++ {
-		s.workersWG.Add(1)
-		go s.worker(i + 1)
-	}
 	return s
+}
+
+// Start begins the worker pool and maintenance loop. Constructors deliberately
+// do not start goroutines: every caller that starts background work must also own
+// the corresponding Shutdown lifecycle.
+func (s *ShareService) Start() {
+	s.startOnce.Do(func() {
+		if s.stopping.Load() {
+			return
+		}
+		s.started.Store(true)
+		for i := 0; i < s.cfg.Workers; i++ {
+			s.workersWG.Add(1)
+			go s.worker(i + 1)
+		}
+		s.workersWG.Add(1)
+		go s.maintenance()
+	})
 }
 
 // Share shares one accessible pack with the selected target.
@@ -290,6 +327,9 @@ func (s *ShareService) shareWithStudent(
 ) (*ShareResult, error) {
 	if !s.studentShareReady() {
 		return nil, fmt.Errorf("pack share dependencies are not configured")
+	}
+	if !s.started.Load() {
+		return nil, apperr.ErrServiceUnavailable.WithMessage("pack share worker is not started")
 	}
 	if !s.accepting.Load() {
 		return nil, apperr.ErrServiceUnavailable.WithMessage("pack share service is shutting down")
@@ -384,18 +424,13 @@ func (s *ShareService) signalWork() {
 
 func (s *ShareService) worker(workerID int) {
 	defer s.workersWG.Done()
-	nextPrune := time.Now()
 
 	for {
 		if s.stopping.Load() {
 			return
 		}
-		if workerID == 1 && time.Now().After(nextPrune) {
-			s.pruneOutbox()
-			nextPrune = time.Now().Add(shareOutboxPruneInterval)
-		}
 
-		job, err := s.jobs.ClaimShareJob(s.workerCtx, s.jobLease())
+		job, err := s.jobs.ClaimShareJob(s.workerCtx, s.jobLease(), s.cfg.MaxAttempts)
 		if err != nil {
 			if s.workerCtx.Err() != nil {
 				return
@@ -415,11 +450,28 @@ func (s *ShareService) worker(workerID int) {
 		if s.stopping.Load() {
 			// Shutdown raced with the DB claim. Return the durable lease instead
 			// of starting new expensive work after drain has begun.
-			s.requeueInterrupted(job, context.Canceled)
+			s.requeueInterrupted(job, "service shutdown interrupted delivery; retrying", context.Canceled)
 			return
 		}
 
 		s.processJobSafely(workerID, job)
+	}
+}
+
+func (s *ShareService) maintenance() {
+	defer s.workersWG.Done()
+	s.pruneOutbox()
+	ticker := time.NewTicker(shareOutboxPruneInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopClaim:
+			return
+		case <-s.workerCtx.Done():
+			return
+		case <-ticker.C:
+			s.pruneOutbox()
+		}
 	}
 }
 
@@ -458,7 +510,12 @@ func (s *ShareService) pruneOutbox() {
 func (s *ShareService) processJobSafely(workerID int, job *shareJobRecord) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			s.failJob(job, "delivery failed")
+			cause := fmt.Errorf("worker panic: %v", recovered)
+			if job.EmailSentAt != nil {
+				s.requeueFinalization(job, cause)
+			} else {
+				s.failJob(job, "delivery failed", cause)
+			}
 			slog.Error("pack share worker panic recovered",
 				"worker", workerID,
 				"task_id", job.ID,
@@ -473,6 +530,15 @@ func (s *ShareService) processJobSafely(workerID int, job *shareJobRecord) {
 }
 
 func (s *ShareService) processJob(job *shareJobRecord) {
+	// SMTP already accepted this delivery on a previous lease. Only finalize
+	// durable state; never rebuild the archive or send the email twice.
+	if job.EmailSentAt != nil {
+		if err := s.completeJob(job); err != nil {
+			slog.Error("finalize previously sent pack share job", "task_id", job.ID, "err", err)
+		}
+		return
+	}
+
 	baseCtx := authctx.SetUserIDToCtx(s.workerCtx, job.OwnerID)
 	if job.RequestID != "" {
 		baseCtx = authctx.SetRequestIDToCtx(baseCtx, job.RequestID)
@@ -503,8 +569,16 @@ func (s *ShareService) processJob(job *shareJobRecord) {
 		s.handleJobError(ctx, job, "email delivery failed after retries", err)
 		return
 	}
+	if err := s.markEmailSent(job); err != nil {
+		// The SMTP side effect happened, but durable confirmation could not be
+		// stored. Keep the lease alive for recovery; do not intentionally requeue
+		// and create a duplicate delivery here.
+		slog.ErrorContext(ctx, "persist SMTP acceptance for pack share job", "task_id", job.ID, "err", err)
+		return
+	}
 	if err := s.completeJob(job); err != nil {
 		slog.ErrorContext(ctx, "persist sent pack share job", "task_id", job.ID, "err", err)
+		s.requeueFinalization(job, err)
 	}
 }
 
@@ -571,7 +645,7 @@ func (s *ShareService) prepareShareArchive(
 		)
 	}
 	if s.quota != nil {
-		allowed, err := s.quota.ReserveBytes(ctx, job.OwnerID, archive.Size)
+		allowed, err := s.quota.ReserveBytesForJob(ctx, job.OwnerID, job.ID, archive.Size)
 		if err != nil {
 			return nil, "delivery quota check failed", err
 		}
@@ -646,10 +720,21 @@ func waitShareRetry(ctx context.Context, delay time.Duration) error {
 
 func (s *ShareService) handleJobError(ctx context.Context, job *shareJobRecord, message string, err error) {
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		s.requeueInterrupted(job, err)
+		if job.Attempts >= s.cfg.MaxAttempts {
+			s.failJob(job, message+"; maximum attempts reached", err)
+			slog.ErrorContext(ctx, "pack share job exhausted retry budget",
+				"task_id", job.ID,
+				"pack_id", job.PackID,
+				"student_id", job.StudentID,
+				"attempts", job.Attempts,
+				"err", err,
+			)
+			return
+		}
+		s.requeueInterrupted(job, message+"; retrying", err)
 		return
 	}
-	s.failJob(job, message)
+	s.failJob(job, message, err)
 	slog.ErrorContext(ctx, "pack share job failed",
 		"task_id", job.ID,
 		"pack_id", job.PackID,
@@ -658,34 +743,94 @@ func (s *ShareService) handleJobError(ctx context.Context, job *shareJobRecord, 
 	)
 }
 
+func (s *ShareService) markEmailSent(job *shareJobRecord) error {
+	var lastErr error
+	for attempt := 1; attempt <= shareEmailSentPersistRetries; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), shareOutboxStoreTimeout)
+		lastErr = s.jobs.MarkShareJobEmailSent(ctx, job.ID, job.LeaseToken)
+		cancel()
+		if lastErr == nil {
+			now := time.Now().UTC()
+			job.EmailSentAt = &now
+			return nil
+		}
+		if errors.Is(lastErr, errShareJobLeaseLost) {
+			return lastErr
+		}
+		if attempt < shareEmailSentPersistRetries {
+			time.Sleep(shareEmailSentPersistBackoff * time.Duration(attempt))
+		}
+	}
+	return lastErr
+}
+
 func (s *ShareService) completeJob(job *shareJobRecord) error {
 	ctx, cancel := context.WithTimeout(context.Background(), shareOutboxStoreTimeout)
 	defer cancel()
 	return s.jobs.CompleteShareJob(ctx, job.ID, job.LeaseToken)
 }
 
-func (s *ShareService) failJob(job *shareJobRecord, message string) {
+func (s *ShareService) failJob(job *shareJobRecord, message string, cause error) {
+	lastError := ""
+	if cause != nil {
+		lastError = cause.Error()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), shareOutboxStoreTimeout)
 	defer cancel()
-	if err := s.jobs.FailShareJob(ctx, job.ID, job.LeaseToken, message); err != nil {
-		slog.Error("persist failed pack share job", "task_id", job.ID, "message", message, "err", err)
+	if err := s.jobs.FailShareJob(ctx, job.ID, job.LeaseToken, message, lastError); err != nil {
+		slog.Error("persist failed pack share job", "task_id", job.ID, "message", message, "cause", cause, "err", err)
 	}
 }
 
-func (s *ShareService) requeueInterrupted(job *shareJobRecord, cause error) {
+func (s *ShareService) requeueFinalization(job *shareJobRecord, cause error) {
+	ctx, cancel := context.WithTimeout(context.Background(), shareOutboxStoreTimeout)
+	defer cancel()
+	lastError := ""
+	if cause != nil {
+		lastError = cause.Error()
+	}
+	if err := s.jobs.RequeueShareJob(
+		ctx, job.ID, job.LeaseToken,
+		"email sent; delivery status finalization will retry",
+		lastError, s.cfg.RetryBackoff,
+	); err != nil {
+		slog.Error("requeue pack share finalization", "task_id", job.ID, "cause", cause, "err", err)
+	}
+}
+
+func (s *ShareService) interruptedRetryDelay(attempts int) time.Duration {
+	if attempts < 1 {
+		attempts = 1
+	}
+	delay := s.cfg.RetryBackoff
+	for step := 1; step < attempts && delay < time.Minute; step++ {
+		delay *= 2
+	}
+	if delay > time.Minute {
+		return time.Minute
+	}
+	return delay
+}
+
+func (s *ShareService) requeueInterrupted(job *shareJobRecord, message string, cause error) {
+	lastError := ""
+	if cause != nil {
+		lastError = cause.Error()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), shareOutboxStoreTimeout)
 	defer cancel()
 	if err := s.jobs.RequeueShareJob(
 		ctx,
 		job.ID,
 		job.LeaseToken,
-		"delivery interrupted; retrying",
-		shareInterruptedRetryWait,
+		message,
+		lastError,
+		s.interruptedRetryDelay(job.Attempts),
 	); err != nil {
 		slog.Error("requeue interrupted pack share job", "task_id", job.ID, "cause", cause, "err", err)
 		return
 	}
-	slog.Info("pack share job requeued", "task_id", job.ID, "cause", cause)
+	slog.Info("pack share job requeued", "task_id", job.ID, "attempts", job.Attempts, "cause", cause)
 }
 
 func (s *ShareService) GetTask(ctx context.Context, taskID uuid.UUID) (*ShareTask, error) {

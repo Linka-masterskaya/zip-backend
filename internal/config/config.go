@@ -221,6 +221,7 @@ type PackShareConfig struct {
 	DailyBytesPerUser  int64         `mapstructure:"daily_bytes_per_user"`
 	MaxAttachmentBytes int64         `mapstructure:"max_attachment_bytes"`
 	SendRetries        int           `mapstructure:"send_retries"`
+	MaxAttempts        int           `mapstructure:"max_attempts"`
 	SendTimeout        time.Duration `mapstructure:"send_timeout"`
 	RetryBackoff       time.Duration `mapstructure:"retry_backoff"`
 	ShutdownTimeout    time.Duration `mapstructure:"shutdown_timeout"`
@@ -631,6 +632,8 @@ func validatePackShareConfig(cfg *PackShareConfig) error {
 		return fmt.Errorf("pack_share.max_attachment_bytes must be > 0")
 	case cfg.SendRetries <= 0:
 		return fmt.Errorf("pack_share.send_retries must be > 0")
+	case cfg.MaxAttempts <= 0:
+		return fmt.Errorf("pack_share.max_attempts must be > 0")
 	case cfg.SendTimeout <= 0:
 		return fmt.Errorf("pack_share.send_timeout must be > 0")
 	case cfg.RetryBackoff <= 0:

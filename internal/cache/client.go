@@ -231,6 +231,30 @@ end
 return {1, next}
 `)
 
+var reserveCounterOnceWithTTL = redis.NewScript(`
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+local requested = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+if requested < 0 or limit < 0 or ttl <= 0 then
+  return redis.error_reply("invalid counter arguments")
+end
+local reserved = tonumber(redis.call("GET", KEYS[2]) or "0")
+local delta = requested - reserved
+if delta <= 0 then
+  return {1, current}
+end
+if current + delta > limit then
+  return {0, current}
+end
+local next = redis.call("INCRBY", KEYS[1], delta)
+if next == delta then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+redis.call("SET", KEYS[2], requested, "EX", ttl)
+return {1, next}
+`)
+
 // ReserveCounter atomically adds delta only when the resulting value does not exceed limit.
 func (c *Client) ReserveCounter(ctx context.Context, key string, delta, limit int64, ttl time.Duration) (bool, int64, error) {
 	if delta < 0 || limit < 0 {
@@ -250,6 +274,38 @@ func (c *Client) ReserveCounter(ctx context.Context, key string, delta, limit in
 	value, ok := result[1].(int64)
 	if !ok {
 		return false, 0, fmt.Errorf("redis.ReserveCounter: invalid value result")
+	}
+	return allowed == 1, value, nil
+}
+
+// ReserveCounterOnce atomically reserves a per-reservation amount against a shared counter.
+// Repeating the same reservation key does not charge the same amount twice; if the
+// requested amount grows, only the positive difference is added.
+func (c *Client) ReserveCounterOnce(
+	ctx context.Context,
+	counterKey, reservationKey string,
+	amount, limit int64,
+	ttl time.Duration,
+) (bool, int64, error) {
+	if amount < 0 || limit < 0 || ttl <= 0 {
+		return false, 0, fmt.Errorf("redis.ReserveCounterOnce: invalid counter arguments")
+	}
+	result, err := reserveCounterOnceWithTTL.Run(
+		ctx, c.rdb, []string{counterKey, reservationKey}, amount, limit, int(ttl.Seconds()),
+	).Slice()
+	if err != nil {
+		return false, 0, fmt.Errorf("redis.ReserveCounterOnce: %w", err)
+	}
+	if len(result) != 2 {
+		return false, 0, fmt.Errorf("redis.ReserveCounterOnce: unexpected result")
+	}
+	allowed, ok := result[0].(int64)
+	if !ok {
+		return false, 0, fmt.Errorf("redis.ReserveCounterOnce: invalid allowed result")
+	}
+	value, ok := result[1].(int64)
+	if !ok {
+		return false, 0, fmt.Errorf("redis.ReserveCounterOnce: invalid value result")
 	}
 	return allowed == 1, value, nil
 }

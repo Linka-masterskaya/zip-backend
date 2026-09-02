@@ -115,16 +115,11 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 			DailyBytesPerUser:  cfg.PackShare.DailyBytesPerUser,
 			MaxAttachmentBytes: cfg.PackShare.MaxAttachmentBytes,
 			SendRetries:        cfg.PackShare.SendRetries,
+			MaxAttempts:        cfg.PackShare.MaxAttempts,
 			SendTimeout:        cfg.PackShare.SendTimeout,
 			RetryBackoff:       cfg.PackShare.RetryBackoff,
 		},
 	)
-	closer.Add("pack share worker", func(ctx context.Context) error {
-		shareCtx, cancel := context.WithTimeout(ctx, cfg.PackShare.ShutdownTimeout)
-		defer cancel()
-		return shareService.Shutdown(shareCtx)
-	})
-
 	authCfg := auth.Config{
 		JWTSecret:                cfg.JWT.Secret,
 		FrontendURL:              cfg.App.FrontendURL,
@@ -183,6 +178,13 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 	if err != nil {
 		return nil, fmt.Errorf("health checker init: %w", err)
 	}
+
+	shareService.Start()
+	closer.Add("pack share worker", func(ctx context.Context) error {
+		shareCtx, cancel := context.WithTimeout(ctx, cfg.PackShare.ShutdownTimeout)
+		defer cancel()
+		return shareService.Shutdown(shareCtx)
+	})
 
 	ttsClient := ttsapi.NewClient(
 		cfg.TTS.ServiceURL,

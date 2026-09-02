@@ -128,6 +128,8 @@ pack_share:
   # Keep below common receiver limits after MIME/base64 overhead.
   max_attachment_bytes: 15728640
   send_retries: 3
+  # Total durable claims per task, including timeout/restart retries.
+  max_attempts: 5
   send_timeout: 30s
   retry_backoff: 2s
   # Graceful drain budget. If it expires, the leased DB job is requeued.
