@@ -721,3 +721,35 @@ func TestStudentForceDeleteCleansAdaptationMedia(t *testing.T) {
 		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
 	assert.Equal(t, int64(10), used)
 }
+
+// TestStudentForceDeleteCleansAvatarMedia: при удалении ученика
+// его аватар удаляется из media_files и квота возвращается,
+// если аватар больше нигде не используется.
+func TestStudentForceDeleteCleansAvatarMedia(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	avatarMedia := seedStudentMedia(t, pool, ownerID, "avatars/student.png")
+
+	student, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "a@example.com", Name: "Аня", AvatarMediaID: &avatarMedia,
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(context.Background(),
+		`UPDATE organizations SET storage_used_bytes = 10
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID)
+	require.NoError(t, err)
+
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), student.ID))
+
+	// Аватар удалён — больше не используется.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, avatarMedia, 0)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM organizations
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
+	assert.Equal(t, int64(0), used)
+}

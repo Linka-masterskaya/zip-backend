@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -199,8 +200,16 @@ func (r *Repository) CleanupOldJobs(ctx context.Context, cutoff time.Time) error
 	}
 
 	if len(mediaIDs) > 0 {
-		if _, err = tx.Exec(ctx, deleteOrphanedMediaQuery, mediaIDs); err != nil {
+		var count int64
+		var totalBytes int64
+		if err = tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {
 			return fmt.Errorf("tts.CleanupOldJobs orphaned media: %w", err)
+		}
+		if count > 0 {
+			slog.InfoContext(ctx, "orphaned media deleted",
+				"count", count,
+				"bytes", totalBytes,
+			)
 		}
 	}
 

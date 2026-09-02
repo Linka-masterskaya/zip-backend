@@ -326,18 +326,14 @@ func (r *Repository) ForceDelete(ctx context.Context, ownerID, studentID uuid.UU
 	if err != nil {
 		return fmt.Errorf("student force delete begin: %w", err)
 	}
-	defer func() {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil &&
-			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			slog.WarnContext(ctx, "student force delete rollback", "err", rollbackErr)
-		}
-	}()
+	defer rollbackStudentTx(ctx, tx)
 
 	var locked uuid.UUID
+	var avatarMediaID *uuid.UUID
 	err = tx.QueryRow(ctx, `
-		SELECT id FROM students
+		SELECT id, avatar_media_id FROM students
 		WHERE id = $2 AND defectologist_id = $1
-		FOR UPDATE`, ownerID, studentID).Scan(&locked)
+		FOR UPDATE`, ownerID, studentID).Scan(&locked, &avatarMediaID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -356,6 +352,14 @@ func (r *Repository) ForceDelete(ctx context.Context, ownerID, studentID uuid.UU
 	mediaIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 	if err != nil {
 		return fmt.Errorf("student force delete collect media: %w", err)
+	}
+	if avatarMediaID != nil {
+		mediaIDs = append(mediaIDs, *avatarMediaID)
+		if _, err = tx.Exec(ctx,
+			`UPDATE students SET avatar_media_id = NULL WHERE id = $1`,
+			studentID); err != nil {
+			return fmt.Errorf("student force delete clear avatar: %w", err)
+		}
 	}
 	if err = purgeStudentPacks(ctx, tx, studentID, folderIDs); err != nil {
 		return err
@@ -493,24 +497,27 @@ func purgeStudentPacks(
 }
 
 const deleteOrphanedMediaQuery = `
-WITH deleted AS (
-	DELETE FROM media_files
-	WHERE id = ANY($1)
-		AND NOT EXISTS (
-				SELECT 1 FROM media_usages WHERE media_id = media_files.id
-		)
-		AND NOT EXISTS (
-			SELECT 1 FROM students WHERE avatar_media_id = media_files.id
-		)
-		AND NOT EXISTS (
-			SELECT 1 FROM tts_jobs WHERE media_id = media_files.id
-		)
-	RETURNING org_id, size_bytes
-)
-UPDATE organizations o
-SET storage_used_bytes = GREATEST(o.storage_used_bytes - d.total, 0)
-FROM (SELECT org_id, SUM(size_bytes) AS total FROM deleted GROUP BY org_id) d
-WHERE o.id = d.org_id`
+	WITH deleted AS (
+		DELETE FROM media_files
+		WHERE id = ANY($1)
+				AND NOT EXISTS (
+						SELECT 1 FROM media_usages WHERE media_id = media_files.id
+				)
+				AND NOT EXISTS (
+						SELECT 1 FROM students WHERE avatar_media_id = media_files.id
+				)
+				AND NOT EXISTS (
+						SELECT 1 FROM tts_jobs WHERE media_id = media_files.id
+				)
+		RETURNING org_id, size_bytes
+	),
+	updated AS (
+		UPDATE organizations o
+		SET storage_used_bytes = GREATEST(o.storage_used_bytes - d.total, 0)
+		FROM (SELECT org_id, SUM(size_bytes) AS total FROM deleted GROUP BY org_id) d
+		WHERE o.id = d.org_id
+	)
+	SELECT count(*), COALESCE(SUM(size_bytes), 0) FROM deleted`
 
 // deleteOrphanedMedia удаляет записи media_files без ссылок в media_usages
 // и возвращает квоту организации.
@@ -518,8 +525,22 @@ func deleteOrphanedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []uuid.UUID) e
 	if len(mediaIDs) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, deleteOrphanedMediaQuery, mediaIDs); err != nil {
+	var count int64
+	var totalBytes int64
+	if err := tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {
 		return fmt.Errorf("delete orphaned media: %w", err)
 	}
+	if count > 0 {
+		slog.InfoContext(ctx, "orphaned media deleted",
+			"count", count,
+			"bytes", totalBytes,
+		)
+	}
 	return nil
+}
+
+func rollbackStudentTx(ctx context.Context, tx pgx.Tx) {
+	if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		slog.WarnContext(ctx, "student tx rollback", "err", err)
+	}
 }

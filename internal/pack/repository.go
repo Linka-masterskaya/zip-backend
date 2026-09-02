@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -515,8 +516,16 @@ func deleteOrphanedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []uuid.UUID) e
 	if len(mediaIDs) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, deleteOrphanedMediaQuery, mediaIDs); err != nil {
+	var count int64
+	var totalBytes int64
+	if err := tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {
 		return fmt.Errorf("delete orphaned media: %w", err)
+	}
+	if count > 0 {
+		slog.InfoContext(ctx, "orphaned media deleted",
+			"count", count,
+			"bytes", totalBytes,
+		)
 	}
 	return nil
 }

@@ -533,21 +533,24 @@ const collectPackMediaQuery = `
 		SELECT media_id FROM media_usages WHERE source_id = ANY($2::uuid[])`
 
 const deleteOrphanedMediaQuery = `
-		WITH deleted AS (
-			DELETE FROM media_files
-			WHERE id = ANY($1)
+	WITH deleted AS (
+		DELETE FROM media_files
+		WHERE id = ANY($1)
 				AND NOT EXISTS (
-					SELECT 1 FROM media_usages WHERE media_id = media_files.id
+						SELECT 1 FROM media_usages WHERE media_id = media_files.id
 				)
 				AND NOT EXISTS (
-					SELECT 1 FROM students WHERE avatar_media_id = media_files.id
+						SELECT 1 FROM students WHERE avatar_media_id = media_files.id
 				)
 				AND NOT EXISTS (
-					SELECT 1 FROM tts_jobs WHERE media_id = media_files.id
+						SELECT 1 FROM tts_jobs WHERE media_id = media_files.id
 				)
-			RETURNING org_id, size_bytes
-		)
+		RETURNING org_id, size_bytes
+	),
+	updated AS (
 		UPDATE organizations o
 		SET storage_used_bytes = GREATEST(o.storage_used_bytes - d.total, 0)
 		FROM (SELECT org_id, SUM(size_bytes) AS total FROM deleted GROUP BY org_id) d
-		WHERE o.id = d.org_id`
+		WHERE o.id = d.org_id
+	)
+	SELECT count(*), COALESCE(SUM(size_bytes), 0) FROM deleted`
