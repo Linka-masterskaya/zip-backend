@@ -44,6 +44,7 @@ func (h *ShareHandler) SharePack(w http.ResponseWriter, r *http.Request) error {
 		return apperr.ErrBadRequest.WithMessage("target_id must be a valid UUID")
 	}
 
+	//nolint:staticcheck // Keep explicit field mapping so request/API changes cannot silently alter service input.
 	input := ShareInput{TargetType: req.TargetType, TargetID: req.TargetID}
 	result, err := h.service.Share(r.Context(), packID, input)
 	if err != nil {
