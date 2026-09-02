@@ -84,13 +84,17 @@ func (r *Repository) Duplicate(
 		return nil, fmt.Errorf("pack duplicate lock folder: %w", err)
 	}
 
+	title := source.Title + duplicateTitleSuffix
+	if input.PreserveTitle {
+		title = source.Title
+	}
 	result, err := scanPack(tx.QueryRow(
 		ctx,
 		insertDuplicatePackQuery,
 		source.OrgID,
 		userID,
 		lockedFolderID,
-		source.Title+duplicateTitleSuffix,
+		title,
 		source.AgeMin,
 		source.AgeMax,
 		source.Difficulty,

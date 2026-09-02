@@ -1153,7 +1153,7 @@ export interface paths {
         put?: never;
         /**
          * Поделиться набором с папкой или учеником
-         * @description Для target_type=folder переиспользует общую операцию дублирования и создаёт независимую draft-копию в target_id. Для target_type=student проверяет доступ к ученику, формирует совместимый с Linka Looks 3.2.10 архив .linka в формате looks-3 и асинхронно отправляет его на email ученика через существующий SMTP mailer. PDF-вложение и создание adaptation не являются частью этого v1 endpoint; назначение ученику остаётся доступно через POST /packs/{id}/students.
+         * @description Для target_type=folder переиспользует общую операцию дублирования, создаёт независимую draft-копию в target_id и сохраняет исходное название без суффикса «(копия)». Для target_type=student проверяет владение учеником и паком, затем создаёт durable outbox-задачу в PostgreSQL. Worker забирает queued-задачи с lease через FOR UPDATE SKIP LOCKED, поэтому принятый 202 переживает рестарт/deploy и может быть продолжен другим инстансом. Вложение ограничено 15 MiB по умолчанию; для больших архивов задача завершится failed и клиенту следует использовать прямой GET /packs/{id}/export. Статус доставки доступен по task id.
          */
         post: {
             parameters: {
@@ -1179,12 +1179,14 @@ export interface paths {
                         "application/json": components["schemas"]["Pack"];
                     };
                 };
-                /** @description target_type=student — совместимый .linka принят в асинхронную SMTP-доставку */
+                /** @description target_type=student — задача доставки принята */
                 202: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["PackShareTask"];
+                    };
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
@@ -1196,15 +1198,15 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description Набор нельзя представить в looks-3 либо отсутствует media-файл */
-                409: {
+                /** @description Исчерпан суточный лимит email-отправок */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
-                /** @description Архив превышает 50 MiB */
-                413: {
+                /** @description Durable outbox недоступен или сервис останавливается */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1212,6 +1214,53 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packs/share-tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Получить статус отправки пака ученику */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Текущий статус фоновой доставки */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PackShareTask"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                /** @description Задача не найдена или принадлежит другому пользователю */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2786,6 +2835,17 @@ export interface components {
             target_type: "folder" | "student";
             /** Format: uuid */
             target_id: string;
+        };
+        PackShareTask: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "queued" | "processing" | "sent" | "failed";
+            message?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
         };
         UpdatePackRequest: {
             title?: string;

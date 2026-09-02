@@ -37,14 +37,30 @@ func TestShareHandlerStudentReturnsAccepted(t *testing.T) {
 	) (*ShareResult, error) {
 		assert.Equal(t, ShareTargetStudent, input.TargetType)
 		assert.Equal(t, studentID, input.TargetID)
-		return &ShareResult{Accepted: true}, nil
+		return &ShareResult{Task: &ShareTask{ID: uuid.New(), Status: ShareTaskQueued}}, nil
 	}}
 
 	rec := performShareRequest(t, NewShareHandler(service), packID,
 		[]byte(`{"target_type":"student","target_id":"`+studentID.String()+`"}`))
 
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	assert.Empty(t, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `"status":"queued"`)
+}
+
+func TestShareHandlerGetTaskReturnsStatus(t *testing.T) {
+	taskID := uuid.New()
+	service := &shareHandlerServiceFake{taskFn: func(_ context.Context, gotTaskID uuid.UUID) (*ShareTask, error) {
+		assert.Equal(t, taskID, gotTaskID)
+		return &ShareTask{ID: taskID, Status: ShareTaskSent}, nil
+	}}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/packs/share-tasks/"+taskID.String(), nil)
+	req.SetPathValue("id", taskID.String())
+	rec := httptest.NewRecorder()
+	middleware.ErrorMiddleware(NewShareHandler(service).GetShareTask).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"status":"sent"`)
 }
 
 func TestShareHandlerRejectsUnknownFieldsAndEmptyTarget(t *testing.T) {
@@ -69,6 +85,7 @@ func performShareRequest(t *testing.T, handler *ShareHandler, packID uuid.UUID, 
 
 type shareHandlerServiceFake struct {
 	shareFn func(context.Context, uuid.UUID, ShareInput) (*ShareResult, error)
+	taskFn  func(context.Context, uuid.UUID) (*ShareTask, error)
 }
 
 func (f *shareHandlerServiceFake) Share(ctx context.Context, packID uuid.UUID, input ShareInput) (*ShareResult, error) {
@@ -76,4 +93,11 @@ func (f *shareHandlerServiceFake) Share(ctx context.Context, packID uuid.UUID, i
 		return f.shareFn(ctx, packID, input)
 	}
 	return &ShareResult{}, nil
+}
+
+func (f *shareHandlerServiceFake) GetTask(ctx context.Context, taskID uuid.UUID) (*ShareTask, error) {
+	if f.taskFn != nil {
+		return f.taskFn(ctx, taskID)
+	}
+	return &ShareTask{ID: taskID, Status: ShareTaskQueued}, nil
 }

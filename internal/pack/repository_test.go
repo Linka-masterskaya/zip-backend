@@ -904,3 +904,89 @@ func TestRepositoryListSorts(t *testing.T) {
 	require.Len(t, byDefault, 3)
 	assert.Equal(t, created[2].ID, byDefault[0].ID)
 }
+
+func TestRepositoryPackShareOutboxPersistsAndReclaimsLease(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, _ := seedPackOwner(t, pool, "share outbox org")
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	job := shareJobRecord{
+		ID:            uuid.New(),
+		OwnerID:       ownerID,
+		PackID:        uuid.New(),
+		StudentID:     uuid.New(),
+		RequestID:     "req-1",
+		Status:        ShareTaskQueued,
+		NextAttemptAt: now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+
+	stored, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskQueued, stored.Status)
+	assert.Equal(t, ownerID, stored.OwnerID)
+	assert.Equal(t, "req-1", stored.RequestID)
+
+	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	assert.Equal(t, job.ID, claimed.ID)
+	assert.Equal(t, ShareTaskProcessing, claimed.Status)
+	assert.NotEqual(t, uuid.Nil, claimed.LeaseToken)
+	assert.Equal(t, 1, claimed.Attempts)
+
+	second, err := repo.ClaimShareJob(t.Context(), time.Minute)
+	require.NoError(t, err)
+	assert.Nil(t, second, "an active lease must prevent duplicate processing")
+
+	_, err = pool.Exec(t.Context(), `
+		UPDATE pack_share_jobs
+		SET lease_until = now() - interval '1 second'
+		WHERE id = $1
+	`, job.ID)
+	require.NoError(t, err)
+
+	reclaimed, err := repo.ClaimShareJob(t.Context(), time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, reclaimed)
+	assert.Equal(t, job.ID, reclaimed.ID)
+	assert.NotEqual(t, claimed.LeaseToken, reclaimed.LeaseToken)
+	assert.Equal(t, 2, reclaimed.Attempts)
+
+	require.ErrorIs(t,
+		repo.CompleteShareJob(t.Context(), job.ID, claimed.LeaseToken),
+		errShareJobLeaseLost,
+		"a stale worker must not finalize a job after another worker reclaimed it",
+	)
+
+	require.NoError(t, repo.RequeueShareJob(
+		t.Context(),
+		job.ID,
+		reclaimed.LeaseToken,
+		"retry after restart",
+		0,
+	))
+
+	requeued, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskQueued, requeued.Status)
+	assert.Equal(t, "retry after restart", requeued.Message)
+
+	claimedAgain, err := repo.ClaimShareJob(t.Context(), time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, claimedAgain)
+	require.NoError(t, repo.CompleteShareJob(t.Context(), job.ID, claimedAgain.LeaseToken))
+
+	completed, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskSent, completed.Status)
+
+	deleted, err := repo.PruneShareJobs(t.Context(), time.Now().UTC().Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+	_, err = repo.GetShareJob(t.Context(), job.ID)
+	assert.ErrorIs(t, err, errShareJobNotFound)
+}

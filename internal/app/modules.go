@@ -59,7 +59,7 @@ func buildPicturesSource(in *infra) (picturebank.Source, error) {
 }
 
 // buildModules wires every domain module on top of the infrastructure.
-func buildModules(in *infra) (*modules, error) {
+func buildModules(in *infra, closer *Closer) (*modules, error) {
 	cfg := in.cfg
 
 	resendPolicy := middleware.RateLimitPolicy{
@@ -100,7 +100,30 @@ func buildModules(in *infra) (*modules, error) {
 			return image.Data, image.ContentType, nil
 		},
 	)
-	shareService := pack.NewShareService(packService, contentService, studentService, in.mailer)
+	shareService := pack.NewShareServiceWithOutbox(
+		packService,
+		contentService,
+		studentService,
+		in.mailer,
+		packRepo,
+		in.redis,
+		pack.ShareConfig{
+			Workers:            cfg.PackShare.Workers,
+			PollInterval:       cfg.PackShare.PollInterval,
+			JobTimeout:         cfg.PackShare.JobTimeout,
+			DailySendsPerUser:  cfg.PackShare.DailySendsPerUser,
+			DailyBytesPerUser:  cfg.PackShare.DailyBytesPerUser,
+			MaxAttachmentBytes: cfg.PackShare.MaxAttachmentBytes,
+			SendRetries:        cfg.PackShare.SendRetries,
+			SendTimeout:        cfg.PackShare.SendTimeout,
+			RetryBackoff:       cfg.PackShare.RetryBackoff,
+		},
+	)
+	closer.Add("pack share worker", func(ctx context.Context) error {
+		shareCtx, cancel := context.WithTimeout(ctx, cfg.PackShare.ShutdownTimeout)
+		defer cancel()
+		return shareService.Shutdown(shareCtx)
+	})
 
 	authCfg := auth.Config{
 		JWTSecret:                cfg.JWT.Secret,

@@ -12,7 +12,11 @@ type shareService interface {
 	Share(context.Context, uuid.UUID, ShareInput) (*ShareResult, error)
 }
 
-// ShareHandler exposes POST /api/v1/packs/{id}/share.
+type shareTaskService interface {
+	GetTask(context.Context, uuid.UUID) (*ShareTask, error)
+}
+
+// ShareHandler exposes pack share delivery endpoints.
 type ShareHandler struct {
 	service shareService
 }
@@ -33,11 +37,15 @@ func (h *ShareHandler) SharePack(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	var req sharePackRequest
-	if err = decodeJSON(r, &req); err != nil || req.TargetID == uuid.Nil {
-		return apperr.ErrBadRequest
+	if err = decodeJSON(r, &req); err != nil {
+		return apperr.ErrBadRequest.WithMessage("invalid share request body")
+	}
+	if req.TargetID == uuid.Nil {
+		return apperr.ErrBadRequest.WithMessage("target_id must be a valid UUID")
 	}
 
-	result, err := h.service.Share(r.Context(), packID, ShareInput(req))
+	input := ShareInput{TargetType: req.TargetType, TargetID: req.TargetID}
+	result, err := h.service.Share(r.Context(), packID, input)
 	if err != nil {
 		return err
 	}
@@ -47,9 +55,24 @@ func (h *ShareHandler) SharePack(w http.ResponseWriter, r *http.Request) error {
 	if result.Pack != nil {
 		return writeJSON(w, http.StatusCreated, result.Pack)
 	}
-	if result.Accepted {
-		w.WriteHeader(http.StatusAccepted)
-		return nil
+	if result.Task != nil {
+		return writeJSON(w, http.StatusAccepted, result.Task)
 	}
 	return apperr.ErrInternal.WithMessage("share result is invalid")
+}
+
+func (h *ShareHandler) GetShareTask(w http.ResponseWriter, r *http.Request) error {
+	taskID, err := pathUUID(r)
+	if err != nil {
+		return err
+	}
+	taskService, ok := h.service.(shareTaskService)
+	if !ok {
+		return apperr.ErrInternal.WithMessage("share task service is not configured")
+	}
+	task, err := taskService.GetTask(r.Context(), taskID)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, task)
 }

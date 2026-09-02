@@ -214,6 +214,46 @@ redis.call("EXPIRE", KEYS[3], ARGV[3])
 return 1
 `)
 
+var reserveCounterWithTTL = redis.NewScript(`
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+local delta = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+if delta < 0 or limit < 0 then
+  return redis.error_reply("invalid counter arguments")
+end
+if current + delta > limit then
+  return {0, current}
+end
+local next = redis.call("INCRBY", KEYS[1], delta)
+if next == delta then
+  redis.call("EXPIRE", KEYS[1], ARGV[3])
+end
+return {1, next}
+`)
+
+// ReserveCounter atomically adds delta only when the resulting value does not exceed limit.
+func (c *Client) ReserveCounter(ctx context.Context, key string, delta, limit int64, ttl time.Duration) (bool, int64, error) {
+	if delta < 0 || limit < 0 {
+		return false, 0, fmt.Errorf("redis.ReserveCounter: invalid counter arguments")
+	}
+	result, err := reserveCounterWithTTL.Run(ctx, c.rdb, []string{key}, delta, limit, int(ttl.Seconds())).Slice()
+	if err != nil {
+		return false, 0, fmt.Errorf("redis.ReserveCounter: %w", err)
+	}
+	if len(result) != 2 {
+		return false, 0, fmt.Errorf("redis.ReserveCounter: unexpected result")
+	}
+	allowed, ok := result[0].(int64)
+	if !ok {
+		return false, 0, fmt.Errorf("redis.ReserveCounter: invalid allowed result")
+	}
+	value, ok := result[1].(int64)
+	if !ok {
+		return false, 0, fmt.Errorf("redis.ReserveCounter: invalid value result")
+	}
+	return allowed == 1, value, nil
+}
+
 // IncrCounter atomically increments key and sets ttl on first increment via Lua.
 func (c *Client) IncrCounter(ctx context.Context, key string, ttl time.Duration) (int64, error) {
 	count, err := incrWithTTL.Run(ctx, c.rdb, []string{key}, int(ttl.Seconds())).Int64()

@@ -112,7 +112,9 @@ func (h *Handler) DuplicatePack(w http.ResponseWriter, r *http.Request) error {
 		(req.FolderID != nil && *req.FolderID == uuid.Nil) {
 		return apperr.ErrBadRequest
 	}
-	result, err := h.service.Duplicate(r.Context(), packID, DuplicateInput(req))
+	result, err := h.service.Duplicate(r.Context(), packID, DuplicateInput{
+		FolderID: req.FolderID,
+	})
 	if err != nil {
 		return err
 	}
