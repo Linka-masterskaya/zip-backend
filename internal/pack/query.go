@@ -539,6 +539,12 @@ const deleteOrphanedMediaQuery = `
 				AND NOT EXISTS (
 					SELECT 1 FROM media_usages WHERE media_id = media_files.id
 				)
+				AND NOT EXISTS (
+					SELECT 1 FROM students WHERE avatar_media_id = media_files.id
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM tts_jobs WHERE media_id = media_files.id
+				)
 			RETURNING org_id, size_bytes
 		)
 		UPDATE organizations o
