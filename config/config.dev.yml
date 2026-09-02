@@ -20,6 +20,7 @@ server:
 
 db:
   url: "postgres://linka:linka@localhost:5432/linka?sslmode=disable"
+  migrate_url: "postgres://linka:linka@localhost:5432/linka?sslmode=disable"
   max_conns: 25
   min_conns: 5
   max_conn_lifetime: "1h"
@@ -188,6 +189,6 @@ cron:
     interval: 1h
   tts_cleanup:
     interval: 6h
-    clean_period: 2160h  # 90 days
-    jobs_ttl: 72h        # 3 days
+    clean_period: 2160h # 90 days
+    jobs_ttl: 72h # 3 days
     limit: 100

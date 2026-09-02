@@ -38,7 +38,7 @@ func run() error {
 	}
 	logger.Init(cfg.App.Env)
 
-	conn, err := sql.Open("postgres", cfg.DB.URL)
+	conn, err := sql.Open("postgres", cfg.DB.MigrateURL)
 	if err != nil {
 		return fmt.Errorf("connect to postgres: %w", err)
 	}

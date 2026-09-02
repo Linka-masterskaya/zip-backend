@@ -1,3 +1,5 @@
+# Файл работает в паре с 'compose.dev.yaml'
+
 services:
   zip-backend:
     build: .
