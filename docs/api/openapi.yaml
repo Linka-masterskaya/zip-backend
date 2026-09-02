@@ -347,15 +347,52 @@ components:
 
     MediaPage:
       type: object
-      required: [items]
+      required: [items, total]
       description: Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`.
       properties:
         items:
           type: array
           items: { $ref: '#/components/schemas/MediaFile' }
+        total:
+          type: integer
+          minimum: 0
+          description: Всего файлов организации с учётом query, type и unused.
         next_cursor:
           type: string
           description: Курсор следующей страницы. Отсутствует, если страница последняя.
+
+    MediaBatchDeleteRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+          description: Идентификаторы media, максимум 100 за вызов; повторы схлопываются.
+
+    MediaSkippedFile:
+      type: object
+      required: [id, reason]
+      properties:
+        id: { type: string, format: uuid }
+        reason:
+          type: string
+          enum: [not_found, in_use]
+          description: 'not_found — файла нет, он чужой или загружен другим пользователем; in_use — на файл остались строки в media_usages'
+
+    MediaBatchDeleteResult:
+      type: object
+      required: [deleted, skipped]
+      description: Удалённые и пропущенные файлы одной пачки.
+      properties:
+        deleted:
+          type: array
+          items: { type: string, format: uuid }
+        skipped:
+          type: array
+          items: { $ref: '#/components/schemas/MediaSkippedFile' }
 
     PictureCategory:
       type: object
@@ -1139,6 +1176,13 @@ paths:
             description: 'Фильтр по media_type, например image или audio',
           }
         - {
+            name: unused,
+            in: query,
+            required: false,
+            schema: { type: boolean, default: false },
+            description: 'Только файлы, на которые нет ссылок в media_usages',
+          }
+        - {
             name: cursor,
             in: query,
             required: false,
@@ -1189,6 +1233,25 @@ paths:
           }
         '400': { $ref: '#/components/responses/BadRequest' }
         '413': { description: Файл или квота превышены }
+
+    delete:
+      tags: [media]
+      summary: Массовое удаление media одной пачкой
+      description: Идемпотентно — файл, которого нет, чужой или ещё используемый, попадает в `skipped` с причиной, остальные из пачки удаляются.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MediaBatchDeleteRequest' }
+      responses:
+        '200':
+          description: Что удалено и что пропущено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaBatchDeleteResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /media/{id}:
     get:

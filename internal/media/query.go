@@ -49,8 +49,23 @@ const listMediaQuery = `
 	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%')
 	  AND ($3::text = '' OR media_type = $3::text)
 	  AND ($4::timestamptz IS NULL OR (created_at, id) < ($4::timestamptz, $5::uuid))
+	  AND (
+	    NOT $6::boolean
+	    OR NOT EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
+	  )
 	ORDER BY created_at DESC, id DESC
-	LIMIT $6`
+	LIMIT $7`
+
+const countMediaQuery = `
+	SELECT count(*)
+	FROM media_files
+	WHERE org_id = $1
+	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%')
+	  AND ($3::text = '' OR media_type = $3::text)
+	  AND (
+	    NOT $4::boolean
+	    OR NOT EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
+	  )`
 
 const lockOwnedMediaQuery = `
 	SELECT m.id, m.org_id, m.uploader_id, m.name, m.sha256, m.mime_type, m.media_type,
@@ -60,11 +75,25 @@ const lockOwnedMediaQuery = `
 	WHERE m.id = $2 AND m.uploader_id = u.id
 	FOR UPDATE OF m, u`
 
+const lockOwnedMediaBatchQuery = `
+	SELECT m.id, m.org_id, m.size_bytes
+	FROM media_files m
+	JOIN users u ON u.id = $1 AND u.org_id = m.org_id AND u.deleted_at IS NULL
+	WHERE m.id = ANY($2::uuid[]) AND m.uploader_id = u.id
+	ORDER BY m.id
+	FOR UPDATE OF m, u`
+
 const mediaInUseQuery = `
 	SELECT EXISTS (SELECT 1 FROM media_usages WHERE media_id = $1)`
 
+const usedMediaBatchQuery = `
+	SELECT DISTINCT media_id FROM media_usages WHERE media_id = ANY($1::uuid[])`
+
 const deleteMediaQuery = `
 	DELETE FROM media_files WHERE id = $1`
+
+const deleteMediaBatchQuery = `
+	DELETE FROM media_files WHERE id = ANY($1::uuid[])`
 
 const releaseMediaQuotaQuery = `
 	UPDATE organizations

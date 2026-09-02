@@ -116,6 +116,7 @@ func (r *Repository) List(
 	orgID uuid.UUID,
 	query, mediaType string,
 	cursor *mediaCursor,
+	unused bool,
 	limit int,
 ) ([]File, error) {
 	var cursorCreatedAt *time.Time
@@ -124,7 +125,7 @@ func (r *Repository) List(
 		cursorCreatedAt = &cursor.CreatedAt
 		cursorID = cursor.ID
 	}
-	rows, err := r.pool.Query(ctx, listMediaQuery, orgID, query, mediaType, cursorCreatedAt, cursorID, limit)
+	rows, err := r.pool.Query(ctx, listMediaQuery, orgID, query, mediaType, cursorCreatedAt, cursorID, unused, limit)
 	if err != nil {
 		return nil, fmt.Errorf("media repository list: %w", err)
 	}
@@ -185,4 +186,123 @@ func (r *Repository) Delete(
 		return nil, fmt.Errorf("media repository delete commit: %w", err)
 	}
 	return &result, nil
+}
+
+func (r *Repository) Count(
+	ctx context.Context,
+	orgID uuid.UUID,
+	query, mediaType string,
+	unused bool,
+) (int, error) {
+	var total int
+	err := r.pool.QueryRow(ctx, countMediaQuery, orgID, query, mediaType, unused).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("media repository count: %w", err)
+	}
+	return total, nil
+}
+
+func (r *Repository) DeleteBatch(
+	ctx context.Context,
+	userID uuid.UUID,
+	ids []uuid.UUID,
+) (*BatchOutcome, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("media repository batch delete begin: %w", err)
+	}
+	defer rollbackMediaTx(ctx, tx)
+
+	owned, err := lockOwnedMediaBatch(ctx, tx, userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	used, err := usedMediaBatch(ctx, tx, ownedIDs(owned))
+	if err != nil {
+		return nil, err
+	}
+
+	outcome := &BatchOutcome{Deleted: []uuid.UUID{}, InUse: []uuid.UUID{}}
+	var orgID uuid.UUID
+	var freedBytes int64
+	for _, item := range owned {
+		if _, inUse := used[item.id]; inUse {
+			outcome.InUse = append(outcome.InUse, item.id)
+			continue
+		}
+		outcome.Deleted = append(outcome.Deleted, item.id)
+		orgID = item.orgID
+		freedBytes += item.sizeBytes
+	}
+	if len(outcome.Deleted) > 0 {
+		if _, err = tx.Exec(ctx, deleteMediaBatchQuery, outcome.Deleted); err != nil {
+			return nil, fmt.Errorf("media repository batch delete rows: %w", err)
+		}
+		if _, err = tx.Exec(ctx, releaseMediaQuotaQuery, orgID, freedBytes); err != nil {
+			return nil, fmt.Errorf("media repository batch release quota: %w", err)
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("media repository batch delete commit: %w", err)
+	}
+	return outcome, nil
+}
+
+type ownedMedia struct {
+	id        uuid.UUID
+	orgID     uuid.UUID
+	sizeBytes int64
+}
+
+func lockOwnedMediaBatch(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ids []uuid.UUID) ([]ownedMedia, error) {
+	rows, err := tx.Query(ctx, lockOwnedMediaBatchQuery, userID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("media repository batch delete lock: %w", err)
+	}
+	defer rows.Close()
+
+	var owned []ownedMedia
+	for rows.Next() {
+		var item ownedMedia
+		if err = rows.Scan(&item.id, &item.orgID, &item.sizeBytes); err != nil {
+			return nil, fmt.Errorf("media repository batch delete lock scan: %w", err)
+		}
+		owned = append(owned, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("media repository batch delete lock rows: %w", err)
+	}
+	return owned, nil
+}
+
+func usedMediaBatch(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) (map[uuid.UUID]struct{}, error) {
+	used := make(map[uuid.UUID]struct{})
+	if len(ids) == 0 {
+		return used, nil
+	}
+	rows, err := tx.Query(ctx, usedMediaBatchQuery, ids)
+	if err != nil {
+		return nil, fmt.Errorf("media repository batch delete usage: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uuid.UUID
+		if err = rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("media repository batch delete usage scan: %w", err)
+		}
+		used[id] = struct{}{}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("media repository batch delete usage rows: %w", err)
+	}
+	return used, nil
+}
+
+func ownedIDs(owned []ownedMedia) []uuid.UUID {
+	ids := make([]uuid.UUID, len(owned))
+	for i, item := range owned {
+		ids[i] = item.id
+	}
+	return ids
 }

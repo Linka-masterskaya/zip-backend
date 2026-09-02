@@ -99,20 +99,20 @@ func TestRepositoryListScopesSearchesFiltersAndPaginatesByCursor(t *testing.T) {
 	oldCat := seed(orgID, "old-cat.png", "sha-old-cat", "image", base.Add(1*time.Minute))
 	seed(otherOrgID, "other-cat.png", "sha-other", "image", base.Add(5*time.Minute))
 
-	all, err := repo.List(t.Context(), orgID, "", "", nil, 10)
+	all, err := repo.List(t.Context(), orgID, "", "", nil, false, 10)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{cat.ID, dog.ID, note.ID, oldCat.ID}, idsOf(all),
 		"only the caller's org, newest first")
 
-	byName, err := repo.List(t.Context(), orgID, "CAT", "", nil, 10)
+	byName, err := repo.List(t.Context(), orgID, "CAT", "", nil, false, 10)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{cat.ID, oldCat.ID}, idsOf(byName), "case-insensitive substring match")
 
-	byType, err := repo.List(t.Context(), orgID, "", "audio", nil, 10)
+	byType, err := repo.List(t.Context(), orgID, "", "audio", nil, false, 10)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{note.ID}, idsOf(byType))
 
-	firstPage, err := repo.List(t.Context(), orgID, "", "", nil, 2)
+	firstPage, err := repo.List(t.Context(), orgID, "", "", nil, false, 2)
 	require.NoError(t, err)
 	require.Equal(t, []uuid.UUID{cat.ID, dog.ID}, idsOf(firstPage))
 
@@ -120,7 +120,7 @@ func TestRepositoryListScopesSearchesFiltersAndPaginatesByCursor(t *testing.T) {
 		CreatedAt: firstPage[len(firstPage)-1].CreatedAt,
 		ID:        firstPage[len(firstPage)-1].ID,
 	}
-	secondPage, err := repo.List(t.Context(), orgID, "", "", cursor, 2)
+	secondPage, err := repo.List(t.Context(), orgID, "", "", cursor, false, 2)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{note.ID, oldCat.ID}, idsOf(secondPage), "resumes right after the cursor")
 }
@@ -138,4 +138,143 @@ func applyMediaMigrations(db *sql.DB) error {
 		return err
 	}
 	return goose.Up(db, "../../migrations")
+}
+
+func TestRepositoryListAndCountRespectUnusedFilter(t *testing.T) {
+	pool, cleanup := testutil.NewPostgres(t)
+	t.Cleanup(cleanup)
+	db := stdlib.OpenDBFromPool(pool)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, applyMediaMigrations(db))
+
+	orgID, otherOrgID, userID := uuid.New(), uuid.New(), uuid.New()
+	_, err := pool.Exec(t.Context(), `
+		INSERT INTO organizations (id, name) VALUES ($1, 'media org'), ($2, 'other org')`,
+		orgID, otherOrgID)
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, userID, orgID)
+	require.NoError(t, err)
+
+	repo := NewRepository(pool)
+	base := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	seed := func(org uuid.UUID, name, sha, mediaType string, createdAt time.Time) File {
+		created, upsertErr := repo.Upsert(t.Context(), File{
+			OrgID: org, UploaderID: userID, Name: name, SHA256: sha,
+			MIMEType: mediaType + "/x", MediaType: mediaType, SizeBytes: 10, MinIOKey: "media/" + sha,
+		})
+		require.NoError(t, upsertErr)
+		_, execErr := pool.Exec(t.Context(),
+			`UPDATE media_files SET created_at = $2 WHERE id = $1`, created.ID, createdAt)
+		require.NoError(t, execErr)
+		created.CreatedAt = createdAt
+		return *created
+	}
+
+	// От новых к старым: freeCat, usedCat, freeNote.
+	freeCat := seed(orgID, "cat.png", "sha-free-cat", "image", base.Add(3*time.Minute))
+	usedCat := seed(orgID, "used-cat.png", "sha-used-cat", "image", base.Add(2*time.Minute))
+	freeNote := seed(orgID, "notes.mp3", "sha-note", "audio", base.Add(1*time.Minute))
+	seed(otherOrgID, "other-cat.png", "sha-other", "image", base.Add(4*time.Minute))
+
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack', $2)`, usedCat.ID, uuid.New())
+	require.NoError(t, err)
+
+	unused, err := repo.List(t.Context(), orgID, "", "", nil, true, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{freeCat.ID, freeNote.ID}, idsOf(unused),
+		"файл со строкой в media_usages в выдачу не попадает")
+
+	// Фильтр комбинируется с поиском и типом.
+	unusedCats, err := repo.List(t.Context(), orgID, "cat", "image", nil, true, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{freeCat.ID}, idsOf(unusedCats))
+
+	// Счётчик учитывает те же фильтры, что и выдача.
+	unusedTotal, err := repo.Count(t.Context(), orgID, "", "", true)
+	require.NoError(t, err)
+	assert.Equal(t, 2, unusedTotal)
+
+	allTotal, err := repo.Count(t.Context(), orgID, "", "", false)
+	require.NoError(t, err)
+	assert.Equal(t, 3, allTotal, "чужая организация в счётчик не входит")
+
+	unusedCatsTotal, err := repo.Count(t.Context(), orgID, "cat", "image", true)
+	require.NoError(t, err)
+	assert.Equal(t, 1, unusedCatsTotal)
+}
+
+func TestRepositoryDeleteBatchFreesQuotaAndSkipsUsedAndForeign(t *testing.T) {
+	pool, cleanup := testutil.NewPostgres(t)
+	t.Cleanup(cleanup)
+	db := stdlib.OpenDBFromPool(pool)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, applyMediaMigrations(db))
+
+	orgID, otherOrgID := uuid.New(), uuid.New()
+	userID, mateID, strangerID := uuid.New(), uuid.New(), uuid.New()
+	_, err := pool.Exec(t.Context(), `
+		INSERT INTO organizations (id, name) VALUES ($1, 'media org'), ($2, 'other org')`,
+		orgID, otherOrgID)
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO users (id, org_id, display_name)
+		VALUES ($1, $2, 'Owner'), ($3, $2, 'Mate'), ($4, $5, 'Stranger')`,
+		userID, orgID, mateID, strangerID, otherOrgID)
+	require.NoError(t, err)
+
+	repo := NewRepository(pool)
+	seed := func(org, uploader uuid.UUID, sha string, size int64) File {
+		created, upsertErr := repo.Upsert(t.Context(), File{
+			OrgID: org, UploaderID: uploader, Name: sha, SHA256: sha,
+			MIMEType: "image/png", MediaType: "image", SizeBytes: size, MinIOKey: "media/" + sha,
+		})
+		require.NoError(t, upsertErr)
+		return *created
+	}
+
+	free := seed(orgID, userID, "sha-free", 100)
+	alsoFree := seed(orgID, userID, "sha-also-free", 40)
+	used := seed(orgID, userID, "sha-used", 700)
+	mates := seed(orgID, mateID, "sha-mate", 5)
+	foreign := seed(otherOrgID, strangerID, "sha-foreign", 9)
+	missing := uuid.New()
+
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack', $2)`, used.ID, uuid.New())
+	require.NoError(t, err)
+
+	outcome, err := repo.DeleteBatch(t.Context(), userID,
+		[]uuid.UUID{free.ID, alsoFree.ID, used.ID, mates.ID, foreign.ID, missing})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []uuid.UUID{free.ID, alsoFree.ID}, outcome.Deleted,
+		"остальные файлы пачки удаляются")
+	assert.Equal(t, []uuid.UUID{used.ID}, outcome.InUse, "файл с usages пропускается")
+
+	// Квота уменьшается ровно на сумму размеров реально удалённых файлов.
+	var storageUsed int64
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&storageUsed))
+	assert.Equal(t, used.SizeBytes+mates.SizeBytes, storageUsed)
+
+	// Чужая организация не затронута ни строкой, ни квотой.
+	var otherStorageUsed int64
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT storage_used_bytes FROM organizations WHERE id = $1`, otherOrgID).Scan(&otherStorageUsed))
+	assert.Equal(t, foreign.SizeBytes, otherStorageUsed)
+
+	var alive int
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files WHERE id = ANY($1::uuid[])`,
+		[]uuid.UUID{used.ID, mates.ID, foreign.ID}).Scan(&alive))
+	assert.Equal(t, 3, alive)
+
+	// Повторный вызов той же пачкой ничего не ломает и ничего не удаляет.
+	repeat, err := repo.DeleteBatch(t.Context(), userID, []uuid.UUID{free.ID, alsoFree.ID})
+	require.NoError(t, err)
+	assert.Empty(t, repeat.Deleted)
+	assert.Empty(t, repeat.InUse)
 }

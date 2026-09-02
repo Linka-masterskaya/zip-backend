@@ -26,5 +26,6 @@ func RegisterMediaRoutes(
 	mux.Handle("POST /api/v1/media", protected(handlers.Media.Upload))
 	mux.Handle("GET /api/v1/media", protected(handlers.Media.List))
 	mux.Handle("GET /api/v1/media/{id}", protected(handlers.Media.Get))
+	mux.Handle("DELETE /api/v1/media", protected(handlers.Media.DeleteBatch))
 	mux.Handle("DELETE /api/v1/media/{id}", protected(handlers.Media.Delete))
 }

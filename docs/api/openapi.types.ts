@@ -603,6 +603,8 @@ export interface paths {
                     query?: string;
                     /** @description Фильтр по media_type, например image или audio */
                     type?: string;
+                    /** @description Только файлы, на которые нет ссылок в media_usages */
+                    unused?: boolean;
                     /** @description Курсор из next_cursor предыдущей страницы */
                     cursor?: string;
                     limit?: number;
@@ -666,7 +668,36 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
+        /**
+         * Массовое удаление media одной пачкой
+         * @description Идемпотентно — файл, которого нет, чужой или ещё используемый, попадает в `skipped` с причиной, остальные из пачки удаляются.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MediaBatchDeleteRequest"];
+                };
+            };
+            responses: {
+                /** @description Что удалено и что пропущено */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaBatchDeleteResult"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -2811,8 +2842,28 @@ export interface components {
         /** @description Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`. */
         MediaPage: {
             items: components["schemas"]["MediaFile"][];
+            /** @description Всего файлов организации с учётом query, type и unused. */
+            total: number;
             /** @description Курсор следующей страницы. Отсутствует, если страница последняя. */
             next_cursor?: string;
+        };
+        MediaBatchDeleteRequest: {
+            /** @description Идентификаторы media, максимум 100 за вызов; повторы схлопываются. */
+            ids: string[];
+        };
+        MediaSkippedFile: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description not_found — файла нет, он чужой или загружен другим пользователем; in_use — на файл остались строки в media_usages
+             * @enum {string}
+             */
+            reason: "not_found" | "in_use";
+        };
+        /** @description Удалённые и пропущенные файлы одной пачки. */
+        MediaBatchDeleteResult: {
+            deleted: string[];
+            skipped: components["schemas"]["MediaSkippedFile"][];
         };
         PictureCategory: {
             /** @description Opaque adapter-specific category identifier; clients must not parse it as a UUID. */

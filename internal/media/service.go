@@ -52,6 +52,7 @@ type Response struct {
 type ListInput struct {
 	Query     string
 	MediaType string
+	Unused    bool
 	Limit     int
 	Cursor    string
 }
@@ -59,6 +60,7 @@ type ListInput struct {
 // ListPage is a page of media library items with an cursor to the next page.
 type ListPage struct {
 	Items      []File `json:"items"`
+	Total      int    `json:"total"`
 	NextCursor string `json:"next_cursor,omitempty"`
 }
 
@@ -66,8 +68,10 @@ type repository interface {
 	UserOrg(context.Context, uuid.UUID) (uuid.UUID, error)
 	Upsert(context.Context, File) (*File, error)
 	GetAccessible(context.Context, uuid.UUID, uuid.UUID) (*File, error)
-	List(context.Context, uuid.UUID, string, string, *mediaCursor, int) ([]File, error)
+	List(context.Context, uuid.UUID, string, string, *mediaCursor, bool, int) ([]File, error)
+	Count(context.Context, uuid.UUID, string, string, bool) (int, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) (*File, error)
+	DeleteBatch(context.Context, uuid.UUID, []uuid.UUID) (*BatchOutcome, error)
 }
 
 type objectStorage interface {
@@ -168,11 +172,15 @@ func (s *Service) List(ctx context.Context, input ListInput) (*ListPage, error) 
 		}
 		cursor = &decoded
 	}
-	files, err := s.repo.List(ctx, orgID, input.Query, input.MediaType, cursor, input.Limit+1)
+	files, err := s.repo.List(ctx, orgID, input.Query, input.MediaType, cursor, input.Unused, input.Limit+1)
 	if err != nil {
 		return nil, mediaError(err)
 	}
-	page := &ListPage{Items: files}
+	total, err := s.repo.Count(ctx, orgID, input.Query, input.MediaType, input.Unused)
+	if err != nil {
+		return nil, mediaError(err)
+	}
+	page := &ListPage{Items: files, Total: total}
 	if len(files) > input.Limit {
 		page.Items = files[:input.Limit]
 		last := page.Items[len(page.Items)-1]
@@ -223,4 +231,78 @@ func mediaError(err error) error {
 		return apperr.ErrConflict.WithMessage("media is still used by a pack")
 	}
 	return err
+}
+
+const MaxBatchDeleteIDs = 100
+
+const (
+	SkipReasonNotFound = "not_found"
+	SkipReasonInUse    = "in_use"
+)
+
+type BatchOutcome struct {
+	Deleted []uuid.UUID
+	InUse   []uuid.UUID
+}
+
+type SkippedMedia struct {
+	ID     uuid.UUID `json:"id"`
+	Reason string    `json:"reason"`
+}
+
+type BatchDeleteResult struct {
+	Deleted []uuid.UUID    `json:"deleted"`
+	Skipped []SkippedMedia `json:"skipped"`
+}
+
+func (s *Service) DeleteBatch(ctx context.Context, ids []uuid.UUID) (*BatchDeleteResult, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, apperr.ErrBadRequest.WithMessage("ids must not be empty")
+	}
+	if len(ids) > MaxBatchDeleteIDs {
+		return nil, apperr.ErrBadRequest.WithMessage(
+			fmt.Sprintf("ids must contain at most %d items", MaxBatchDeleteIDs),
+		)
+	}
+	unique := uniqueMediaIDs(ids)
+	outcome, err := s.repo.DeleteBatch(ctx, userID, unique)
+	if err != nil {
+		return nil, mediaError(err)
+	}
+	return batchDeleteResult(unique, outcome), nil
+}
+
+func batchDeleteResult(requested []uuid.UUID, outcome *BatchOutcome) *BatchDeleteResult {
+	result := &BatchDeleteResult{Deleted: outcome.Deleted, Skipped: []SkippedMedia{}}
+	resolved := make(map[uuid.UUID]struct{}, len(outcome.Deleted)+len(outcome.InUse))
+	for _, id := range outcome.Deleted {
+		resolved[id] = struct{}{}
+	}
+	for _, id := range outcome.InUse {
+		resolved[id] = struct{}{}
+		result.Skipped = append(result.Skipped, SkippedMedia{ID: id, Reason: SkipReasonInUse})
+	}
+	for _, id := range requested {
+		if _, ok := resolved[id]; !ok {
+			result.Skipped = append(result.Skipped, SkippedMedia{ID: id, Reason: SkipReasonNotFound})
+		}
+	}
+	return result
+}
+
+func uniqueMediaIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	unique := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }
