@@ -86,6 +86,66 @@ func TestStudentCreateRequiresEmail(t *testing.T) {
 	assertStudentStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
 }
 
+func TestRepositoryListReturnsTotalWhenOffsetIsPastEnd(t *testing.T) {
+	pool := studentTestDB(t)
+	repo := NewRepository(pool)
+	ownerID := seedStudentUser(t, pool, "pagination owner")
+
+	for _, name := range []string{"first", "second", "third"} {
+		createTestStudent(t, repo, ownerID, name)
+	}
+
+	items, total, err := repo.List(t.Context(), ownerID, ListInput{
+		Limit: 2, Offset: 100,
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, items)
+	assert.Equal(t, 3, total)
+}
+
+func TestRepositoryListReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
+	pool := studentTestDB(t)
+	writerRepo := NewRepository(pool)
+	ownerID := seedStudentUser(t, pool, "pagination snapshot owner")
+	createTestStudent(t, writerRepo, ownerID, "first")
+
+	gate := testutil.NewQueryGate()
+	readerPoolConfig := pool.Config()
+	readerPoolConfig.ConnConfig.Tracer = gate
+	readerPool, err := pgxpool.NewWithConfig(t.Context(), readerPoolConfig)
+	require.NoError(t, err)
+	defer readerPool.Close()
+	readerRepo := NewRepository(readerPool)
+
+	type listResult struct {
+		items []storedStudent
+		total int
+		err   error
+	}
+	resultCh := make(chan listResult, 1)
+	go func() {
+		items, total, listErr := readerRepo.List(
+			t.Context(), ownerID, ListInput{Limit: 50},
+		)
+		resultCh <- listResult{items: items, total: total, err: listErr}
+	}()
+	defer gate.Release()
+	gate.Wait(t, 5*time.Second)
+
+	createTestStudent(t, writerRepo, ownerID, "second")
+	gate.Release()
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.NotEmpty(t, result.items)
+		assert.Equal(t, len(result.items), result.total)
+	case <-time.After(5 * time.Second):
+		t.Fatal("List did not return after the second query was released")
+	}
+}
+
 type identityCrypto struct{}
 
 func (identityCrypto) Encrypt(value []byte) ([]byte, error) {
@@ -179,6 +239,15 @@ func seedStudentUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 	)
 	require.NoError(t, err)
 	return userID
+}
+
+func createTestStudent(t *testing.T, repo *Repository, ownerID uuid.UUID, name string) {
+	t.Helper()
+	cardsShift := defaultCardsShift
+	_, err := repo.Create(t.Context(), ownerID, []byte(name+"@example.com"), CreateInput{
+		Name: name, Status: "active", CardsShift: &cardsShift,
+	})
+	require.NoError(t, err)
 }
 
 func studentContext(userID uuid.UUID) context.Context {

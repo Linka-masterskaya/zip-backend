@@ -20,8 +20,7 @@ type packRepository interface {
 	Duplicate(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	GetForPublication(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	List(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
-	Count(context.Context, uuid.UUID, ListInput) (int, error)
+	ListWithTotal(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -92,11 +91,7 @@ func (s *Service) List(ctx context.Context, input ListInput) (*ListPage, error) 
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.repo.List(ctx, userID, input)
-	if err != nil {
-		return nil, packError(err)
-	}
-	total, err := s.repo.Count(ctx, userID, input)
+	items, total, err := s.repo.ListWithTotal(ctx, userID, input)
 	if err != nil {
 		return nil, packError(err)
 	}
@@ -235,7 +230,7 @@ func validateListInput(input ListInput) (ListInput, error) {
 }
 
 func validateListFilters(input ListInput) error {
-	if err := packfilter.ValidateAge("age", input.Age); err != nil {
+	if err := packfilter.ValidateAgeFilters(input.Age, input.AgeFrom, input.AgeTo); err != nil {
 		return err
 	}
 	if err := packfilter.ValidateDifficulty(input.Difficulty); err != nil {
@@ -285,18 +280,10 @@ func validateUpdate(input *UpdateInput) error {
 }
 
 func validateFilterMetadata(metadata *FilterMetadataPatch) error {
-	if metadata.AgeMin.Set {
-		if err := packfilter.ValidateAge("age_min", metadata.AgeMin.Value); err != nil {
+	if metadata.Age.Set {
+		if err := packfilter.ValidateAge(metadata.Age.Value); err != nil {
 			return err
 		}
-	}
-	if metadata.AgeMax.Set {
-		if err := packfilter.ValidateAge("age_max", metadata.AgeMax.Value); err != nil {
-			return err
-		}
-	}
-	if invalidAgeRange(metadata) {
-		return apperr.ErrBadRequest.WithMessage("age_min must not exceed age_max")
 	}
 	if metadata.Difficulty.Set && metadata.Difficulty.Value != nil {
 		if err := packfilter.ValidateDifficulty(*metadata.Difficulty.Value); err != nil {
@@ -304,12 +291,6 @@ func validateFilterMetadata(metadata *FilterMetadataPatch) error {
 		}
 	}
 	return nil
-}
-
-func invalidAgeRange(metadata *FilterMetadataPatch) bool {
-	return metadata.AgeMin.Set && metadata.AgeMin.Value != nil &&
-		metadata.AgeMax.Set && metadata.AgeMax.Value != nil &&
-		*metadata.AgeMin.Value > *metadata.AgeMax.Value
 }
 
 func packError(err error) error {

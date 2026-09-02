@@ -5,16 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
-	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
-	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
-	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 )
 
 func TestFolderTreeDepthCycleAccessAndDelete(t *testing.T) {
@@ -111,6 +113,55 @@ func TestStudentFolderOwnershipAndMixedContents(t *testing.T) {
 	assert.Equal(t, "folder", page.Items[0].Type)
 	assert.Equal(t, child.ID, page.Items[0].ID)
 	assert.Equal(t, "pack", page.Items[1].Type)
+	assert.Nil(t, page.Items[1].Age)
+	assert.Nil(t, page.Items[1].Difficulty)
+}
+
+func TestStudentAssignmentsExcludeArchivedStudents(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "owner")
+	studentID := seedFolderStudent(t, pool, ownerID)
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	studentFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionStudents, Kind: KindStudent, StudentID: &studentID, Name: "Анна",
+	})
+	require.NoError(t, err)
+	sourceFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Материалы",
+	})
+	require.NoError(t, err)
+
+	var packID uuid.UUID
+	err = pool.QueryRow(ctx, `
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config)
+		SELECT org_id, id, $2, 'Назначенный набор', '{}'::jsonb
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID, sourceFolder.ID).Scan(&packID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO pack_adaptations (pack_id, student_id, config, created_by)
+		VALUES ($1, $2, '{}'::jsonb, $3)`, packID, studentID, ownerID)
+	require.NoError(t, err)
+
+	active, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &studentFolder.ID,
+	})
+	require.NoError(t, err)
+	require.Len(t, active.Items, 1)
+	assert.Equal(t, packID, active.Items[0].ID)
+	assert.Equal(t, 1, active.Total)
+
+	_, err = pool.Exec(ctx, `UPDATE students SET deleted_at = now() WHERE id = $1`, studentID)
+	require.NoError(t, err)
+
+	archived, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &studentFolder.ID,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, archived.Items)
+	assert.Zero(t, archived.Total)
 }
 
 func TestConcurrentChildCreateAndParentDeleteNeverCascadesData(t *testing.T) {
@@ -380,6 +431,55 @@ func TestContentsTotalIgnoresPaginationAndVisibility(t *testing.T) {
 	assert.Equal(t, 3, pastEnd.Total)
 }
 
+func TestContentsReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
+	pool := folderTestDB(t)
+	writerRepo := NewRepository(pool)
+	ownerID := seedFolderUser(t, pool, "contents snapshot owner")
+
+	_, err := writerRepo.Create(t.Context(), ownerID, "defectologist", CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "first",
+	})
+	require.NoError(t, err)
+
+	gate := testutil.NewQueryGate()
+	readerPoolConfig := pool.Config()
+	readerPoolConfig.ConnConfig.Tracer = gate
+	readerPool, err := pgxpool.NewWithConfig(t.Context(), readerPoolConfig)
+	require.NoError(t, err)
+	defer readerPool.Close()
+	readerRepo := NewRepository(readerPool)
+
+	type contentsResult struct {
+		page *ContentsPage
+		err  error
+	}
+	resultCh := make(chan contentsResult, 1)
+	go func() {
+		page, contentsErr := readerRepo.Contents(t.Context(), ownerID, ContentsInput{
+			Section: SectionMy, Limit: 50,
+		})
+		resultCh <- contentsResult{page: page, err: contentsErr}
+	}()
+	defer gate.Release()
+	gate.Wait(t, 5*time.Second)
+
+	_, err = writerRepo.Create(t.Context(), ownerID, "defectologist", CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "second",
+	})
+	require.NoError(t, err)
+	gate.Release()
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.page)
+		require.NotEmpty(t, result.page.Items)
+		assert.Equal(t, len(result.page.Items), result.page.Total)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Contents did not return after the second query was released")
+	}
+}
+
 // TestContentsFilters: поиск и фильтры работают на общем списке папок и
 // наборов. Возраст и сложность есть только у наборов, поэтому такие
 // фильтры сами по себе отсекают папки.
@@ -403,13 +503,13 @@ func TestContentsFilters(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = pool.Exec(context.Background(), `
-		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age_min, age_max, difficulty)
-		SELECT org_id, id, $2, 'Азбука набор', '{}'::jsonb, 4, 6, 'easy'
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age, difficulty)
+		SELECT org_id, id, $2, 'Азбука набор', '{}'::jsonb, 5, 'easy'
 		FROM users WHERE id = $1`, ownerID, root.ID)
 	require.NoError(t, err)
 	_, err = pool.Exec(context.Background(), `
-		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age_min, age_max, difficulty)
-		SELECT org_id, id, $2, 'Счёт набор', '{}'::jsonb, 7, 9, 'hard'
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age, difficulty)
+		SELECT org_id, id, $2, 'Счёт набор', '{}'::jsonb, 8, 'hard'
 		FROM users WHERE id = $1`, ownerID, root.ID)
 	require.NoError(t, err)
 
@@ -442,6 +542,33 @@ func TestContentsFilters(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, byAge.Items, 1, "у папок возраста нет, остаётся только набор")
 	assert.Equal(t, "Азбука набор", byAge.Items[0].Name)
+	require.NotNil(t, byAge.Items[0].Age)
+	assert.Equal(t, 5, *byAge.Items[0].Age)
+	require.NotNil(t, byAge.Items[0].Difficulty)
+	assert.Equal(t, "easy", *byAge.Items[0].Difficulty)
+
+	ageFrom, ageTo := 6, 8
+	byRange, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeFrom: &ageFrom, AgeTo: &ageTo,
+	})
+	require.NoError(t, err)
+	require.Len(t, byRange.Items, 1)
+	assert.Equal(t, "Счёт набор", byRange.Items[0].Name)
+	assert.Equal(t, 1, byRange.Total)
+
+	fromOnly, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeFrom: &ageFrom,
+	})
+	require.NoError(t, err)
+	require.Len(t, fromOnly.Items, 1)
+	assert.Equal(t, "Счёт набор", fromOnly.Items[0].Name)
+	toOnly := 5
+	upToAge, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeTo: &toOnly,
+	})
+	require.NoError(t, err)
+	require.Len(t, upToAge.Items, 1)
+	assert.Equal(t, "Азбука набор", upToAge.Items[0].Name)
 
 	byDifficulty, err := service.Contents(ctx, ContentsInput{
 		Section: SectionMy, ParentID: &root.ID, Difficulty: "hard",

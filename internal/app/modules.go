@@ -10,6 +10,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/cron"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
@@ -24,6 +25,8 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/tts"
 	"github.com/Linka-masterskaya/zip-backend/internal/ttsapi"
 	"github.com/Linka-masterskaya/zip-backend/internal/worker"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/yandex"
 )
 
 // Час — компромисс: retention измеряется днями, поэтому чаще незачем, а реже
@@ -213,6 +216,7 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 		ttsClient,
 		in.storage,
 		ttsRepo,
+		cfg.TTS.MimeType,
 	)
 
 	ttsConsumer := broker.NewConsumer(
@@ -253,7 +257,8 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 			Student: student.NewHandler(studentService),
 		},
 		auth: httpapi.AuthHandlers{
-			Auth: auth.NewHandler(authService, authCfg),
+			Auth:  auth.NewHandler(authService, authCfg),
+			OAuth: newYandexOAuthHandler(cfg, authService),
 		},
 		profile: httpapi.ProfileHandlers{
 			Profile:        profile.NewHandler(profileService),
@@ -277,4 +282,29 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 		voiceRefresher: voiceRefresher,
 		ttsCleaner:     ttsCleaner,
 	}, nil
+}
+
+// newYandexOAuthHandler возвращает nil, если провайдер не настроен: тогда
+// роуты входа через Яндекс просто не поднимаются, а остальной auth работает
+// как работал.
+func newYandexOAuthHandler(
+	cfg *config.Config,
+	service auth.OAuthService,
+) *auth.OAuthHandler {
+	if cfg.Yandex.ClientID == "" || cfg.Yandex.ClientSecret == "" {
+		return nil
+	}
+	return auth.NewOAuthHandler(
+		service,
+		&oauth2.Config{
+			ClientID:     cfg.Yandex.ClientID,
+			ClientSecret: cfg.Yandex.ClientSecret,
+			RedirectURL:  cfg.Yandex.RedirectURL,
+			Scopes:       []string{"login:email", "login:info"},
+			Endpoint:     yandex.Endpoint,
+		},
+		cfg.App.FrontendURL,
+		cfg.Auth.CookieSecure,
+		cfg.Auth.RefreshTokenTTL,
+	)
 }

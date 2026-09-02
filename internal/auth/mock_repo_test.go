@@ -58,6 +58,20 @@ func (mr *MockauthRepoIfaceMockRecorder) CreateAuthCred(ctx, params any) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAuthCred", reflect.TypeOf((*MockauthRepoIface)(nil).CreateAuthCred), ctx, params)
 }
 
+// CreateIdentity mocks base method.
+func (m *MockauthRepoIface) CreateIdentity(ctx context.Context, params CreateIdentityParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateIdentity", ctx, params)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateIdentity indicates an expected call of CreateIdentity.
+func (mr *MockauthRepoIfaceMockRecorder) CreateIdentity(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateIdentity", reflect.TypeOf((*MockauthRepoIface)(nil).CreateIdentity), ctx, params)
+}
+
 // CreateOrganization mocks base method.
 func (m *MockauthRepoIface) CreateOrganization(ctx context.Context, params CreateOrganizationParams) error {
 	m.ctrl.T.Helper()
@@ -115,20 +129,6 @@ func (mr *MockauthRepoIfaceMockRecorder) CreateVerifyToken(ctx, params any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateVerifyToken", reflect.TypeOf((*MockauthRepoIface)(nil).CreateVerifyToken), ctx, params)
 }
 
-// replaceUnverifiedPassword mocks base method.
-func (m *MockauthRepoIface) replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, passwordHash string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "replaceUnverifiedPassword", ctx, userID, passwordHash)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// replaceUnverifiedPassword indicates an expected call of replaceUnverifiedPassword.
-func (mr *MockauthRepoIfaceMockRecorder) replaceUnverifiedPassword(ctx, userID, passwordHash any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "replaceUnverifiedPassword", reflect.TypeOf((*MockauthRepoIface)(nil).replaceUnverifiedPassword), ctx, userID, passwordHash)
-}
-
 // GetUserByEmailHash mocks base method.
 func (m *MockauthRepoIface) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*User, error) {
 	m.ctrl.T.Helper()
@@ -174,6 +174,21 @@ func (mr *MockauthRepoIfaceMockRecorder) GetUserByID(ctx, userID any) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByID", reflect.TypeOf((*MockauthRepoIface)(nil).GetUserByID), ctx, userID)
 }
 
+// GetUserByIdentity mocks base method.
+func (m *MockauthRepoIface) GetUserByIdentity(ctx context.Context, provider, providerUID string) (*User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserByIdentity", ctx, provider, providerUID)
+	ret0, _ := ret[0].(*User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserByIdentity indicates an expected call of GetUserByIdentity.
+func (mr *MockauthRepoIfaceMockRecorder) GetUserByIdentity(ctx, provider, providerUID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByIdentity", reflect.TypeOf((*MockauthRepoIface)(nil).GetUserByIdentity), ctx, provider, providerUID)
+}
+
 // ResetPasswordByToken mocks base method.
 func (m *MockauthRepoIface) ResetPasswordByToken(ctx context.Context, token, passwordHash string) (string, error) {
 	m.ctrl.T.Helper()
@@ -202,6 +217,20 @@ func (m *MockauthRepoIface) beginTx(ctx context.Context) (pgx.Tx, error) {
 func (mr *MockauthRepoIfaceMockRecorder) beginTx(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "beginTx", reflect.TypeOf((*MockauthRepoIface)(nil).beginTx), ctx)
+}
+
+// replaceUnverifiedPassword mocks base method.
+func (m *MockauthRepoIface) replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, passwordHash string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "replaceUnverifiedPassword", ctx, userID, passwordHash)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// replaceUnverifiedPassword indicates an expected call of replaceUnverifiedPassword.
+func (mr *MockauthRepoIfaceMockRecorder) replaceUnverifiedPassword(ctx, userID, passwordHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "replaceUnverifiedPassword", reflect.TypeOf((*MockauthRepoIface)(nil).replaceUnverifiedPassword), ctx, userID, passwordHash)
 }
 
 // rotateEmailTokens mocks base method.
@@ -300,21 +329,6 @@ func (m *MockrefreshStore) EXPECT() *MockrefreshStoreMockRecorder {
 	return m.recorder
 }
 
-// GetUserSessionVersion mocks base method.
-func (m *MockrefreshStore) GetUserSessionVersion(ctx context.Context, userID string) (int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetUserSessionVersion", ctx, userID)
-	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetUserSessionVersion indicates an expected call of GetUserSessionVersion.
-func (mr *MockrefreshStoreMockRecorder) GetUserSessionVersion(ctx, userID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserSessionVersion", reflect.TypeOf((*MockrefreshStore)(nil).GetUserSessionVersion), ctx, userID)
-}
-
 // GetRefresh mocks base method.
 func (m *MockrefreshStore) GetRefresh(ctx context.Context, jti string) (*cache.RefreshRecord, error) {
 	m.ctrl.T.Helper()
@@ -402,20 +416,6 @@ func (mr *MockrefreshStoreMockRecorder) RotateRefresh(ctx, req any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RotateRefresh", reflect.TypeOf((*MockrefreshStore)(nil).RotateRefresh), ctx, req)
 }
 
-// StoreRefresh mocks base method.
-func (m *MockrefreshStore) StoreRefresh(ctx context.Context, jti string, rec cache.RefreshRecord, ttl time.Duration) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "StoreRefresh", ctx, jti, rec, ttl)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// StoreRefresh indicates an expected call of StoreRefresh.
-func (mr *MockrefreshStoreMockRecorder) StoreRefresh(ctx, jti, rec, ttl any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StoreRefresh", reflect.TypeOf((*MockrefreshStore)(nil).StoreRefresh), ctx, jti, rec, ttl)
-}
-
 // StoreRefreshForLogin mocks base method.
 func (m *MockrefreshStore) StoreRefreshForLogin(ctx context.Context, jti string, rec cache.RefreshRecord, ttl time.Duration) (int64, error) {
 	m.ctrl.T.Helper()
@@ -497,4 +497,44 @@ func (m *MockcryptoService) Hash(data []byte) []byte {
 func (mr *MockcryptoServiceMockRecorder) Hash(data any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Hash", reflect.TypeOf((*MockcryptoService)(nil).Hash), data)
+}
+
+// MockrateLimit is a mock of rateLimit interface.
+type MockrateLimit struct {
+	ctrl     *gomock.Controller
+	recorder *MockrateLimitMockRecorder
+	isgomock struct{}
+}
+
+// MockrateLimitMockRecorder is the mock recorder for MockrateLimit.
+type MockrateLimitMockRecorder struct {
+	mock *MockrateLimit
+}
+
+// NewMockrateLimit creates a new mock instance.
+func NewMockrateLimit(ctrl *gomock.Controller) *MockrateLimit {
+	mock := &MockrateLimit{ctrl: ctrl}
+	mock.recorder = &MockrateLimitMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockrateLimit) EXPECT() *MockrateLimitMockRecorder {
+	return m.recorder
+}
+
+// Allow mocks base method.
+func (m *MockrateLimit) Allow(ctx context.Context, req cache.RateLimitRequest) (bool, int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Allow", ctx, req)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(int64)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// Allow indicates an expected call of Allow.
+func (mr *MockrateLimitMockRecorder) Allow(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Allow", reflect.TypeOf((*MockrateLimit)(nil).Allow), ctx, req)
 }

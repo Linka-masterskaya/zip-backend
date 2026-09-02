@@ -352,18 +352,21 @@ func (r *Repository) Contents(
 	userID uuid.UUID,
 	input ContentsInput,
 ) (*ContentsPage, error) {
-	if err := r.ensureParentVisible(ctx, userID, input); err != nil {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("folder contents begin: %w", err)
+	}
+	defer rollback(ctx, tx)
+
+	if err = r.ensureParentVisible(ctx, tx, userID, input); err != nil {
 		return nil, err
 	}
 
-	countQuery, countArgs := contentsCountQuery(userID, input)
-	var total int
-	if err := r.pool.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, fmt.Errorf("folder contents count: %w", err)
-	}
-
 	query, args := contentsQuery(userID, input)
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("folder contents: %w", err)
 	}
@@ -374,7 +377,7 @@ func (r *Repository) Contents(
 		var item ContentItem
 		if err = rows.Scan(
 			&item.Type, &item.ID, &item.Name, &item.Kind, &item.StudentID,
-			&item.Published, &item.UpdatedAt,
+			&item.Published, &item.UpdatedAt, &item.Age, &item.Difficulty,
 		); err != nil {
 			return nil, fmt.Errorf("folder contents scan: %w", err)
 		}
@@ -383,6 +386,15 @@ func (r *Repository) Contents(
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("folder contents rows: %w", err)
 	}
+
+	countQuery, countArgs := contentsCountQuery(userID, input)
+	var total int
+	if err = tx.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("folder contents count: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("folder contents commit: %w", err)
+	}
 	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
 }
 
@@ -390,6 +402,7 @@ func (r *Repository) Contents(
 // Для корня раздела проверять нечего: он не строка в таблице.
 func (r *Repository) ensureParentVisible(
 	ctx context.Context,
+	tx pgx.Tx,
 	userID uuid.UUID,
 	input ContentsInput,
 ) error {
@@ -399,7 +412,7 @@ func (r *Repository) ensureParentVisible(
 
 	var section string
 	var ownerID uuid.UUID
-	err := r.pool.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
 		Scan(&section, &ownerID)
 	switch {
@@ -453,14 +466,15 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
 			       f.student_id, false AS published, f.updated_at,
-			       NULL::int AS age_min, NULL::int AS age_max,
+			       NULL::int AS age,
 			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id IS NULL
 			  AND f.section = $2
 			  AND ($2 = 'library' OR f.owner_id = $1)
 		)
-		SELECT type, id, name, kind, student_id, published, updated_at
+		SELECT type, id, name, kind, student_id, published, updated_at,
+		       age, difficulty
 		FROM items`
 		args := []any{userID, input.Section}
 		return appendContentsFilters(query, args, input)
@@ -478,8 +492,10 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		studentAssignments = `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       false, p.updated_at, p.age_min, p.age_max, p.difficulty
+			       false, p.updated_at, p.age, p.difficulty
 			FROM folders student_folder
+			JOIN students s ON s.id = student_folder.student_id
+			               AND s.deleted_at IS NULL
 			JOIN pack_adaptations pa ON pa.student_id = student_folder.student_id
 			JOIN packs p ON p.id = pa.pack_id
 			WHERE student_folder.id = $1
@@ -491,7 +507,7 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
 			       f.student_id, false AS published, f.updated_at,
-			       NULL::int AS age_min, NULL::int AS age_max,
+			       NULL::int AS age,
 			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id = $1
@@ -500,11 +516,12 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       p.published_at IS NOT NULL, p.updated_at,
-			       p.age_min, p.age_max, p.difficulty
+			       p.age, p.difficulty
 			FROM packs p
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
-		SELECT type, id, name, kind, student_id, published, updated_at
+		SELECT type, id, name, kind, student_id, published, updated_at,
+		       age, difficulty
 		FROM items`
 	args := []any{*input.ParentID, userID, input.Section}
 	return appendContentsFilters(query, args, input)
@@ -519,14 +536,18 @@ func appendContentsFilters(query string, args []any, input ContentsInput) (strin
 	filters := fmt.Sprintf(`
 		WHERE ($%d::text = '' OR name ILIKE '%%' || $%d::text || '%%')
 		  AND ($%d::text = '' OR type = $%d::text)
-		  AND ($%d::int IS NULL OR (age_min <= $%d::int AND $%d::int <= age_max))
+		  AND ($%d::int IS NULL OR age = $%d::int)
+		  AND ($%d::int IS NULL OR age >= $%d::int)
+		  AND ($%d::int IS NULL OR age <= $%d::int)
 		  AND ($%d::text = '' OR difficulty = $%d::text)`,
 		first, first,
 		first+1, first+1,
-		first+2, first+2, first+2,
-		first+3, first+3)
+		first+2, first+2,
+		first+3, first+3,
+		first+4, first+4,
+		first+5, first+5)
 
-	args = append(args, input.Query, input.Type, input.Age, input.Difficulty)
+	args = append(args, input.Query, input.Type, input.Age, input.AgeFrom, input.AgeTo, input.Difficulty)
 	return query + filters, args
 }
 

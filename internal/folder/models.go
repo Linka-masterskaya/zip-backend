@@ -2,6 +2,7 @@
 package folder
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,22 +57,61 @@ type ContentsInput struct {
 	Sort     string
 	Order    string
 	// Query ищет по названию папки или набора, Type оставляет только папки
-	// или только наборы. Age и Difficulty — свойства наборов, поэтому сами
-	// по себе отсекают папки.
+	// или только наборы. Возрастные фильтры и Difficulty — свойства наборов,
+	// поэтому сами по себе отсекают папки.
 	Query      string
 	Type       string
 	Age        *int
+	AgeFrom    *int
+	AgeTo      *int
 	Difficulty string
 }
 
+// ContentItem is a response-only DTO for folder contents.
 type ContentItem struct {
-	Type      string     `json:"type"`
-	ID        uuid.UUID  `json:"id"`
-	Name      string     `json:"name"`
-	Kind      *string    `json:"kind,omitempty"`
-	StudentID *uuid.UUID `json:"student_id,omitempty"`
-	Published bool       `json:"published,omitempty"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	Type       string     `json:"type"`
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	Kind       *string    `json:"kind,omitempty"`
+	StudentID  *uuid.UUID `json:"student_id,omitempty"`
+	Published  bool       `json:"published,omitempty"`
+	Age        *int       `json:"age"`
+	Difficulty *string    `json:"difficulty"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// MarshalJSON defines the response shape: pack metadata remains present when
+// unset, while folder-only and pack-only fields stay out of the other item type.
+func (i ContentItem) MarshalJSON() ([]byte, error) {
+	type common struct {
+		Type      string    `json:"type"`
+		ID        uuid.UUID `json:"id"`
+		Name      string    `json:"name"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+
+	base := common{
+		Type: i.Type, ID: i.ID, Name: i.Name, UpdatedAt: i.UpdatedAt,
+	}
+	if i.Type == "pack" {
+		return json.Marshal(struct {
+			common
+			Published  bool    `json:"published,omitempty"`
+			Age        *int    `json:"age"`
+			Difficulty *string `json:"difficulty"`
+		}{
+			common: base, Published: i.Published,
+			Age: i.Age, Difficulty: i.Difficulty,
+		})
+	}
+
+	return json.Marshal(struct {
+		common
+		Kind      *string    `json:"kind,omitempty"`
+		StudentID *uuid.UUID `json:"student_id,omitempty"`
+	}{
+		common: base, Kind: i.Kind, StudentID: i.StudentID,
+	})
 }
 
 type ContentsPage struct {

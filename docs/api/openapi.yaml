@@ -10,6 +10,7 @@ servers:
     description: API v1
 tags:
   - name: auth
+  - name: oauth
   - name: profile
   - name: folders
   - name: packs
@@ -240,8 +241,7 @@ components:
         published_at: { type: [string, "null"], format: date-time }
         title: { type: string }
         status: { type: string, enum: [draft, published] }
-        age_min: { type: [integer, "null"], minimum: 3, maximum: 18 }
-        age_max: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        age: { type: [integer, "null"], minimum: 3, maximum: 18 }
         difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
         notes: { type: string }
@@ -288,8 +288,7 @@ components:
       properties:
         title: { type: string }
         folder_id: { type: string, format: uuid }
-        age_min: { type: [integer, "null"], minimum: 3, maximum: 18 }
-        age_max: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        age: { type: [integer, "null"], minimum: 3, maximum: 18 }
         difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
         notes: { type: [string, "null"] }
@@ -486,9 +485,26 @@ components:
         type: { type: string, enum: [folder, pack] }
         id: { type: string, format: uuid }
         name: { type: string }
-        kind: { type: [string, "null"], enum: [folder, student, null] }
-        student_id: { type: [string, "null"], format: uuid }
-        published: { type: boolean }
+        kind:
+          type: [string, "null"]
+          enum: [folder, student, null]
+          description: Тип папки; возвращается только для `type = folder`
+        student_id:
+          type: [string, "null"]
+          format: uuid
+          description: Идентификатор ученика; возвращается только для `type = folder`
+        published:
+          type: boolean
+          description: Признак публикации; возвращается только для `type = pack`
+        age:
+          type: [integer, "null"]
+          minimum: 3
+          maximum: 18
+          description: Рекомендуемый возраст; возвращается только для `type = pack`, может быть `null`
+        difficulty:
+          type: [string, "null"]
+          enum: [easy, medium, hard, null]
+          description: Сложность набора; возвращается только для `type = pack`, может быть `null`
         updated_at: { type: string, format: date-time }
 
     SettingsDocument:
@@ -660,6 +676,56 @@ paths:
         '202': { description: Запрос принят }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
+
+  /auth/yandex/login:
+    get:
+      tags: [oauth]
+      operationId: yandexLogin
+      summary: Начать вход через Яндекс
+      security: []
+      description: |
+        Отдаёт редирект на страницу согласия Яндекса. Одноразовый `state`
+        кладётся в хранилище и в cookie `oauth_state`, привязанную к пути
+        callback: без совпадения обоих значений callback вернёт `403`.
+        Эндпоинт поднимается только если провайдер настроен.
+      responses:
+        '307':
+          description: Редирект на oauth.yandex.ru
+          headers:
+            Location: { schema: { type: string } }
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly-cookie `oauth_state`, живёт 5 минут.
+        '404': { description: 'Провайдер не настроен, эндпоинт не поднят' }
+
+  /auth/yandex/callback:
+    get:
+      tags: [oauth]
+      operationId: yandexCallback
+      summary: Завершить вход через Яндекс
+      security: []
+      description: |
+        Принимает пользователя обратно от Яндекса и выдаёт ту же сессию, что и
+        обычный вход: refresh — в HttpOnly-cookie, access — во фрагменте
+        адреса фронтенда (`#access_token=...`), чтобы токен не попал в
+        `Referer`, историю браузера и логи прокси.
+
+        Если на почту из Яндекса уже заведён локальный аккаунт с паролем,
+        связка не создаётся: пользователь уходит на `/login?email_exists=true`.
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        '303':
+          description: Редирект на фронтенд с сессией
+          headers:
+            Location: { schema: { type: string } }
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly-cookie `refresh_token`.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { description: 'state не совпал, протух или уже использован' }
+        '404': { description: 'Провайдер не настроен, эндпоинт не поднят' }
 
   /auth/login:
     post:
@@ -1064,7 +1130,9 @@ paths:
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
         - { name: query, in: query, schema: { type: string }, description: "Подстрока названия папки или набора без учёта регистра" }
         - { name: type, in: query, schema: { type: string, enum: [folder, pack] }, description: "Оставить только папки или только наборы" }
-        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "age_min <= age <= age_max. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: age_from, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age" }
+        - { name: age_to, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age" }
         - { name: difficulty, in: query, schema: { type: string, enum: [easy, medium, hard] }, description: "Свойство набора: папки отсеиваются" }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
@@ -1332,7 +1400,19 @@ paths:
             name: age,
             in: query,
             schema: { type: integer, minimum: 3, maximum: 18 },
-            description: age_min <= age <= age_max,
+            description: Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to,
+          }
+        - {
+            name: age_from,
+            in: query,
+            schema: { type: integer, minimum: 3, maximum: 18 },
+            description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age",
+          }
+        - {
+            name: age_to,
+            in: query,
+            schema: { type: integer, minimum: 3, maximum: 18 },
+            description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age",
           }
         - {
             name: difficulty,

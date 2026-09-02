@@ -39,15 +39,16 @@ bash scripts/check-migration-order.sh
 
 ### Архитектура
 
-    POST /tts --> Service --> NATS (AI_JOBS) --> Worker --> tts.linka.su
-                                                  |
-                                             MinIO + audio_bank
-                                                  |
-    GET /tts/{id} --> succeeded + media_id
+POST /tts --> Service --> NATS (AI_JOBS) --> Worker --> tts.linka.su
+                |                              |
+           bank hit?                    MinIO + audio_bank
+           media_files                  + media_files
+                |                              |
+GET /tts/{id} <-- succeeded + media_id
 
 - **Дедупликация**: повторный запрос с тем же `text + voice` возвращает результат из `audio_bank` без повторного синтеза
 - **Worker**: получает задачу из NATS, вызывает внешний API, загружает аудио в MinIO, записывает в `audio_bank`
-- **media_files**: при `GET /tts/{id}` со статусом `succeeded` создаётся запись в `media_files` с привязкой к пользователю
+- **media_files**: запись создаётся воркером после синтеза (bank miss) или сервисом при попадании в кеш (bank hit), привязывается к организации и пользователю. GET возвращает готовый media_id.
 
 ### Cron-задачи
 
@@ -81,7 +82,7 @@ cron:
 
 ### Таблицы
 
-- `tts_jobs` — задачи на озвучку (статус, text, voice, minio_key)
+- `tts_jobs` — задачи на озвучку (org_id, text, voice, status, media_id)
 - `audio_bank` — кеш синтезированных аудио (text+voice -> minio_key), дедупликация
 - `app_cache` — кеш голосов (generic JSONB)
 
