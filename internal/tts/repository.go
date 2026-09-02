@@ -182,12 +182,29 @@ func (r *Repository) DeleteFromBank(ctx context.Context, keys []string) error {
 	return nil
 }
 
-func (r *Repository) DeleteOldJobs(ctx context.Context, cutoff time.Time) error {
-	_, err := r.pool.Exec(ctx, deleteOldJobs, cutoff)
+func (r *Repository) CleanupOldJobs(ctx context.Context, cutoff time.Time) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("tts.DeleteOldJobs: %w", err)
+		return fmt.Errorf("tts.CleanupOldJobs begin: %w", err)
 	}
-	return nil
+	defer rollback(ctx, tx)
+
+	rows, err := tx.Query(ctx, deleteOldJobs, cutoff)
+	if err != nil {
+		return fmt.Errorf("tts.CleanupOldJobs delete jobs: %w", err)
+	}
+	mediaIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("tts.CleanupOldJobs collect: %w", err)
+	}
+
+	if len(mediaIDs) > 0 {
+		if _, err = tx.Exec(ctx, deleteOrphanedMediaQuery, mediaIDs); err != nil {
+			return fmt.Errorf("tts.CleanupOldJobs orphaned media: %w", err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 func rollback(ctx context.Context, tx pgx.Tx) {
