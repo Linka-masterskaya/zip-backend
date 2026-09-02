@@ -223,7 +223,7 @@ func TestRepositoryListWithTotalConsistentUnderConcurrentWrites(t *testing.T) {
 	for r := 0; r < readers; r++ {
 		group.Go(func() error {
 			for i := 0; i < iterations; i++ {
-				items, total, err := repo.ListWithTotal(ctx, userID, ListInput{Limit: 100})
+				items, total, err := repo.ListFavoritesWithTotal(ctx, userID, ListInput{Limit: 100})
 				if err != nil {
 					return fmt.Errorf("list with total: %w", err)
 				}

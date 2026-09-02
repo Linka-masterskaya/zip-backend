@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Добавляйте любимые закладки. Повторные вызовы являются идемпотентными.
+// PutFavorite adds favorite bookmarks. Repeated calls are idempotent.
 func (r *Repository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) error {
 	var id uuid.UUID
 	err := r.pool.QueryRow(ctx, putFavoriteQuery, userID, packID).Scan(&id)
@@ -22,7 +22,7 @@ func (r *Repository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) 
 	return nil
 }
 
-// DeleteFavorite удаляет закладку pack для пользователя. Повторные вызовы являются идемпотентными.
+// DeleteFavorite deletes the pack bookmark for the user. Repeated calls are idempotent.
 func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUID) error {
 	if _, err := r.pool.Exec(ctx, deleteFavoriteQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete favorite: %w", err)
@@ -30,8 +30,8 @@ func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUI
 	return nil
 }
 
-// listFavorites возвращает ограниченную страницу с избранными пакетами, доступными пользователю в данный момент.
-// Он должен запускаться в tx, что и countFavorites (см. ListWithTotal), чтобы оба видели один снимок.
+// listFavorites returns a limited page with the selected packages currently available to the user.
+// It should run in tx, like countFavorites (see ListWithTotal), so that both see the same snapshot.
 func (r *Repository) listFavorites(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -59,14 +59,13 @@ func (r *Repository) listFavorites(
 	return packs, nil
 }
 
-// countFavorites возвращает общее количество доступных в данный момент избранных пакетов без изменений с разбивкой по страницам.
-// Вводимые данные принимаются для проверки соответствия подписей с помощью listFavorites и будущих фильтров;
-// Он должен запускаться в том же tx, что и listFavorites (см. ListWithTotal), чтобы оба видели один снимок.
+// countFavorites returns the total number of currently available favorite packages unchanged, broken down by page.
+// The input data is accepted to verify the compliance of signatures using listFavorites and future filters;
+// It should run in the same tx as listFavorites (see ListWithTotal) so that both see the same snapshot.
 func (r *Repository) countFavorites(
 	ctx context.Context,
 	tx pgx.Tx,
 	userID uuid.UUID,
-	_ ListInput,
 ) (int, error) {
 	var total int
 	if err := tx.QueryRow(ctx, countFavoritePacksQuery, userID).Scan(&total); err != nil {
@@ -76,10 +75,10 @@ func (r *Repository) countFavorites(
 	return total, nil
 }
 
-// ListWithTotal возвращает ограниченную страницу избранных пакетов вместе с общим количеством,
-// оба вычисляются в рамках одного REPEATABLE READ, поэтому они всегда отображают один и тот же снимок
-// независимо от одновременных избранных / не избранных пакетов.
-func (r *Repository) ListWithTotal(
+// ListWithTotal returns a limited page of featured packages along with the total number,
+// both are calculated within the same REPEATABLE READ, so they always display the same snapshot
+// regardless of simultaneous featured/non-featured packages.
+func (r *Repository) ListFavoritesWithTotal(
 	ctx context.Context,
 	userID uuid.UUID,
 	input ListInput,
@@ -97,7 +96,7 @@ func (r *Repository) ListWithTotal(
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := r.countFavorites(ctx, tx, userID, input)
+	total, err := r.countFavorites(ctx, tx, userID)
 	if err != nil {
 		return nil, 0, err
 	}

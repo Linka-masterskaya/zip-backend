@@ -11,9 +11,9 @@ import (
 )
 
 type fakeFavoriteRepository struct {
-	putFn           func(context.Context, uuid.UUID, uuid.UUID) error
-	deleteFn        func(context.Context, uuid.UUID, uuid.UUID) error
-	listWithTotalFn func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
+	putFn                    func(context.Context, uuid.UUID, uuid.UUID) error
+	deleteFn                 func(context.Context, uuid.UUID, uuid.UUID) error
+	listFavoritesWithTotalFn func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 }
 
 func (f *fakeFavoriteRepository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) error {
@@ -30,11 +30,11 @@ func (f *fakeFavoriteRepository) DeleteFavorite(ctx context.Context, userID, pac
 	return nil
 }
 
-func (f *fakeFavoriteRepository) ListWithTotal(
+func (f *fakeFavoriteRepository) ListFavoritesWithTotal(
 	ctx context.Context, userID uuid.UUID, input ListInput,
 ) ([]*ListItem, int, error) {
-	if f.listWithTotalFn != nil {
-		return f.listWithTotalFn(ctx, userID, input)
+	if f.listFavoritesWithTotalFn != nil {
+		return f.listFavoritesWithTotalFn(ctx, userID, input)
 	}
 	return []*ListItem{}, 0, nil
 }
@@ -92,7 +92,7 @@ func TestFavoriteServiceListFavoritesAppliesDefaultLimit(t *testing.T) {
 	userID := uuid.New()
 	packID := uuid.New()
 	repo := &fakeFavoriteRepository{}
-	repo.listWithTotalFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) ([]*ListItem, int, error) {
+	repo.listFavoritesWithTotalFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) ([]*ListItem, int, error) {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, ListInput{Limit: 50}, input)
 		return []*ListItem{{ID: packID, IsFavorite: true}}, 7, nil
