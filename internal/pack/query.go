@@ -166,7 +166,8 @@ func listPacksQuery(sortBy, order string) string {
 	return listPacksBaseQuery + `
 	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
 	       published_at, title, status, age, difficulty,
-	       goals, notes, config, is_favorite, section, created_at, updated_at
+	       goals, notes, config, is_favorite, section, created_at, updated_at,
+	       count(*) OVER() AS total
 	FROM filtered
 	ORDER BY ` + column + ` ` + direction + `, id, section, result_folder_id
 	LIMIT $9 OFFSET $10`
