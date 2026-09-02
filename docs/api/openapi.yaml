@@ -1527,7 +1527,7 @@ paths:
         '429': { description: Исчерпан суточный лимит email-отправок }
         '503': { description: Durable outbox недоступен или сервис останавливается }
 
-  /packs/share-tasks/{id}:
+  /pack-share-tasks/{id}:
     get:
       tags: [packs]
       summary: Получить статус отправки пака ученику

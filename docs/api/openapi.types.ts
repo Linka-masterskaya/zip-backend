@@ -1220,7 +1220,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/packs/share-tasks/{id}": {
+    "/pack-share-tasks/{id}": {
         parameters: {
             query?: never;
             header?: never;

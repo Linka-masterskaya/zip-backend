@@ -54,7 +54,7 @@ func TestShareHandlerGetTaskReturnsStatus(t *testing.T) {
 		return &ShareTask{ID: taskID, Status: ShareTaskSent}, nil
 	}}
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/packs/share-tasks/"+taskID.String(), nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/pack-share-tasks/"+taskID.String(), nil)
 	req.SetPathValue("id", taskID.String())
 	rec := httptest.NewRecorder()
 	middleware.ErrorMiddleware(NewShareHandler(service).GetShareTask).ServeHTTP(rec, req)

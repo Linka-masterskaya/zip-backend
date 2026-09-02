@@ -81,9 +81,10 @@ func TestShareServiceStudentQueuesExportAndUsesOriginalPackTitle(t *testing.T) {
 	assert.Equal(t, linka.FormatLooks3, content.format)
 	assert.Equal(t, packID, content.packID)
 	assert.Equal(t, studentID, students.studentID)
-	task, err := service.GetTask(ctx, result.Task.ID)
-	require.NoError(t, err)
-	assert.Equal(t, ShareTaskSent, task.Status)
+	require.Eventually(t, func() bool {
+		task, err := service.GetTask(ctx, result.Task.ID)
+		return err == nil && task.Status == ShareTaskSent
+	}, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestShareServiceStudentReturnsBeforeExportRuns(t *testing.T) {

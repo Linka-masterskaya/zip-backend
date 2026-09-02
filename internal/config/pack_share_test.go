@@ -43,7 +43,7 @@ func TestValidatePackShareConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := valid
-			t.mutate(&cfg)
+			tt.mutate(&cfg)
 			assert.EqualError(t, validatePackShareConfig(&cfg), tt.message)
 		})
 	}
