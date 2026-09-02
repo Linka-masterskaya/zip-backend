@@ -88,13 +88,22 @@ func (h *Handler) Contents(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	ageFrom, err := httpquery.OptionalInt(r, "age_from")
+	if err != nil {
+		return err
+	}
+	ageTo, err := httpquery.OptionalInt(r, "age_to")
+	if err != nil {
+		return err
+	}
 	result, err := h.service.Contents(r.Context(), ContentsInput{
 		Section:  r.PathValue("section"),
 		ParentID: parentID,
 		Limit:    limit, Offset: offset,
 		Sort: r.URL.Query().Get("sort"), Order: r.URL.Query().Get("order"),
 		Query: r.URL.Query().Get("query"), Type: r.URL.Query().Get("type"),
-		Age: age, Difficulty: r.URL.Query().Get("difficulty"),
+		Age: age, AgeFrom: ageFrom, AgeTo: ageTo,
+		Difficulty: r.URL.Query().Get("difficulty"),
 	})
 	if err != nil {
 		return err

@@ -91,8 +91,7 @@ func (r *Repository) Duplicate(
 		userID,
 		lockedFolderID,
 		source.Title+duplicateTitleSuffix,
-		source.AgeMin,
-		source.AgeMax,
+		source.Age,
 		source.Difficulty,
 		source.Goals,
 		source.Notes,
@@ -193,6 +192,8 @@ func (r *Repository) list(
 		userID,
 		input.Query,
 		input.Age,
+		input.AgeFrom,
+		input.AgeTo,
 		input.Difficulty,
 		input.Section,
 		input.StudentID,
@@ -232,6 +233,8 @@ func (r *Repository) count(
 		userID,
 		input.Query,
 		input.Age,
+		input.AgeFrom,
+		input.AgeTo,
 		input.Difficulty,
 		input.Section,
 		input.StudentID,
@@ -275,8 +278,7 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 	metadata := filterPatch(input.FilterMetadata)
 	result, err := scanPack(tx.QueryRow(ctx, updatePackQuery,
 		userID, packID, input.Title, input.FolderID,
-		metadata.ageMin.Set, metadata.ageMin.Value,
-		metadata.ageMax.Set, metadata.ageMax.Value,
+		metadata.age.Set, metadata.age.Value,
 		metadata.difficulty.Set, metadata.difficulty.Value, metadata.goals,
 		input.Notes.Set, input.Notes.Value,
 	))
@@ -441,8 +443,7 @@ func rollbackPackTx(ctx context.Context, tx pgx.Tx) {
 }
 
 type patchValues struct {
-	ageMin     NullablePatch[int]
-	ageMax     NullablePatch[int]
+	age        NullablePatch[int]
 	difficulty NullablePatch[string]
 	goals      []string
 }
@@ -452,7 +453,7 @@ func filterPatch(metadata *FilterMetadataPatch) patchValues {
 		return patchValues{}
 	}
 	values := patchValues{
-		ageMin: metadata.AgeMin, ageMax: metadata.AgeMax,
+		age:        metadata.Age,
 		difficulty: metadata.Difficulty,
 	}
 	if metadata.Goals != nil {
@@ -467,8 +468,7 @@ func isMetadataConstraintError(err error) bool {
 		return false
 	}
 	switch pgErr.ConstraintName {
-	case "packs_age_min_chk", "packs_age_max_chk",
-		"packs_age_range_chk", "packs_difficulty_chk":
+	case "packs_age_chk", "packs_difficulty_chk":
 		return true
 	default:
 		return false
@@ -484,7 +484,7 @@ func scanPack(row rowScanner) (*Pack, error) {
 	err := row.Scan(
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
 		&result.LibraryFolderID, &result.PublishedAt,
-		&result.Title, &result.Status, &result.AgeMin, &result.AgeMax,
+		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.CreatedAt, &result.UpdatedAt,
 	)
@@ -499,7 +499,7 @@ func scanListItem(row rowScanner) (*ListItem, error) {
 	err := row.Scan(
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
 		&result.LibraryFolderID, &result.PublishedAt,
-		&result.Title, &result.Status, &result.AgeMin, &result.AgeMax,
+		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.IsFavorite, &result.Section,
 		&result.CreatedAt, &result.UpdatedAt,

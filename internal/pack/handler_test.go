@@ -104,15 +104,15 @@ func TestHandlerUpdateMapsFilterMetadata(t *testing.T) {
 	service.updateFn = func(_ context.Context, gotPackID uuid.UUID, input UpdateInput) (*Pack, error) {
 		assert.Equal(t, packID, gotPackID)
 		require.NotNil(t, input.FilterMetadata)
-		assert.True(t, input.FilterMetadata.AgeMin.Set)
-		require.NotNil(t, input.FilterMetadata.AgeMin.Value)
+		assert.True(t, input.FilterMetadata.Age.Set)
+		require.NotNil(t, input.FilterMetadata.Age.Value)
 		require.NotNil(t, input.FilterMetadata.Goals)
-		assert.Equal(t, 5, *input.FilterMetadata.AgeMin.Value)
+		assert.Equal(t, 5, *input.FilterMetadata.Age.Value)
 		assert.Equal(t, []string{"speech", "attention"}, *input.FilterMetadata.Goals)
 		return &Pack{ID: packID}, nil
 	}
 	handler := NewHandler(service)
-	body := []byte(`{"age_min":5,"goals":["speech","attention"]}`)
+	body := []byte(`{"age":5,"goals":["speech","attention"]}`)
 
 	rec := performPackRequest(t, handler.UpdatePack, http.MethodPatch, "/api/v1/packs/"+packID.String(), body, packID.String())
 
@@ -125,8 +125,8 @@ func TestHandlerUpdatePreservesExplicitNull(t *testing.T) {
 	packID := uuid.New()
 	service.updateFn = func(_ context.Context, _ uuid.UUID, input UpdateInput) (*Pack, error) {
 		require.NotNil(t, input.FilterMetadata)
-		assert.True(t, input.FilterMetadata.AgeMin.Set)
-		assert.Nil(t, input.FilterMetadata.AgeMin.Value)
+		assert.True(t, input.FilterMetadata.Age.Set)
+		assert.Nil(t, input.FilterMetadata.Age.Value)
 		assert.True(t, input.FilterMetadata.Difficulty.Set)
 		assert.Nil(t, input.FilterMetadata.Difficulty.Value)
 		assert.True(t, input.Notes.Set)
@@ -134,7 +134,7 @@ func TestHandlerUpdatePreservesExplicitNull(t *testing.T) {
 		return &Pack{ID: packID}, nil
 	}
 	handler := NewHandler(service)
-	body := []byte(`{"age_min":null,"difficulty":null,"notes":null}`)
+	body := []byte(`{"age":null,"difficulty":null,"notes":null}`)
 
 	rec := performPackRequest(t, handler.UpdatePack, http.MethodPatch, "/api/v1/packs/"+packID.String(), body, packID.String())
 
@@ -178,12 +178,38 @@ func TestHandlerListRejectsInvalidPagination(t *testing.T) {
 	}
 }
 
-func TestHandlerListRejectsInvalidAge(t *testing.T) {
+func TestHandlerListPacksReadsAgeRange(t *testing.T) {
+	service := &fakePackService{}
+	ageFrom, ageTo := 5, 8
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
+		require.NotNil(t, input.AgeFrom)
+		require.NotNil(t, input.AgeTo)
+		assert.Equal(t, ageFrom, *input.AgeFrom)
+		assert.Equal(t, ageTo, *input.AgeTo)
+		return &ListPage{}, nil
+	}
+
+	rec := performPackRequest(t, NewHandler(service).ListPacks, http.MethodGet,
+		"/api/v1/packs?age_from=5&age_to=8", nil, "")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHandlerListRejectsInvalidAgeFilters(t *testing.T) {
 	handler := NewHandler(&fakePackService{})
-
-	rec := performPackRequest(t, handler.ListPacks, http.MethodGet, "/api/v1/packs?age=invalid", nil, "")
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	for _, query := range []string{
+		"age=invalid",
+		"age_from=invalid",
+		"age_to=invalid",
+		"age=5&age_from=5",
+		"age_from=8&age_to=5",
+	} {
+		t.Run(query, func(t *testing.T) {
+			rec := performPackRequest(t, handler.ListPacks, http.MethodGet,
+				"/api/v1/packs?"+query, nil, "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
 }
 
 func TestHandlerDeletePack(t *testing.T) {

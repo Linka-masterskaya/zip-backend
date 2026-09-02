@@ -377,7 +377,7 @@ func (r *Repository) Contents(
 		var item ContentItem
 		if err = rows.Scan(
 			&item.Type, &item.ID, &item.Name, &item.Kind, &item.StudentID,
-			&item.Published, &item.UpdatedAt,
+			&item.Published, &item.UpdatedAt, &item.Age, &item.Difficulty,
 		); err != nil {
 			return nil, fmt.Errorf("folder contents scan: %w", err)
 		}
@@ -466,14 +466,15 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
 			       f.student_id, false AS published, f.updated_at,
-			       NULL::int AS age_min, NULL::int AS age_max,
+			       NULL::int AS age,
 			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id IS NULL
 			  AND f.section = $2
 			  AND ($2 = 'library' OR f.owner_id = $1)
 		)
-		SELECT type, id, name, kind, student_id, published, updated_at
+		SELECT type, id, name, kind, student_id, published, updated_at,
+		       age, difficulty
 		FROM items`
 		args := []any{userID, input.Section}
 		return appendContentsFilters(query, args, input)
@@ -491,7 +492,7 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		studentAssignments = `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       false, p.updated_at, p.age_min, p.age_max, p.difficulty
+			       false, p.updated_at, p.age, p.difficulty
 			FROM folders student_folder
 			JOIN students s ON s.id = student_folder.student_id
 			               AND s.deleted_at IS NULL
@@ -506,7 +507,7 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
 			       f.student_id, false AS published, f.updated_at,
-			       NULL::int AS age_min, NULL::int AS age_max,
+			       NULL::int AS age,
 			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id = $1
@@ -515,11 +516,12 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       p.published_at IS NOT NULL, p.updated_at,
-			       p.age_min, p.age_max, p.difficulty
+			       p.age, p.difficulty
 			FROM packs p
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
-		SELECT type, id, name, kind, student_id, published, updated_at
+		SELECT type, id, name, kind, student_id, published, updated_at,
+		       age, difficulty
 		FROM items`
 	args := []any{*input.ParentID, userID, input.Section}
 	return appendContentsFilters(query, args, input)
@@ -534,14 +536,18 @@ func appendContentsFilters(query string, args []any, input ContentsInput) (strin
 	filters := fmt.Sprintf(`
 		WHERE ($%d::text = '' OR name ILIKE '%%' || $%d::text || '%%')
 		  AND ($%d::text = '' OR type = $%d::text)
-		  AND ($%d::int IS NULL OR (age_min <= $%d::int AND $%d::int <= age_max))
+		  AND ($%d::int IS NULL OR age = $%d::int)
+		  AND ($%d::int IS NULL OR age >= $%d::int)
+		  AND ($%d::int IS NULL OR age <= $%d::int)
 		  AND ($%d::text = '' OR difficulty = $%d::text)`,
 		first, first,
 		first+1, first+1,
-		first+2, first+2, first+2,
-		first+3, first+3)
+		first+2, first+2,
+		first+3, first+3,
+		first+4, first+4,
+		first+5, first+5)
 
-	args = append(args, input.Query, input.Type, input.Age, input.Difficulty)
+	args = append(args, input.Query, input.Type, input.Age, input.AgeFrom, input.AgeTo, input.Difficulty)
 	return query + filters, args
 }
 

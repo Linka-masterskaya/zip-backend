@@ -241,8 +241,7 @@ components:
         published_at: { type: [string, "null"], format: date-time }
         title: { type: string }
         status: { type: string, enum: [draft, published] }
-        age_min: { type: [integer, "null"], minimum: 3, maximum: 18 }
-        age_max: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        age: { type: [integer, "null"], minimum: 3, maximum: 18 }
         difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
         notes: { type: string }
@@ -267,8 +266,7 @@ components:
       properties:
         title: { type: string }
         folder_id: { type: string, format: uuid }
-        age_min: { type: [integer, "null"], minimum: 3, maximum: 18 }
-        age_max: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        age: { type: [integer, "null"], minimum: 3, maximum: 18 }
         difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
         notes: { type: [string, "null"] }
@@ -465,9 +463,26 @@ components:
         type: { type: string, enum: [folder, pack] }
         id: { type: string, format: uuid }
         name: { type: string }
-        kind: { type: [string, "null"], enum: [folder, student, null] }
-        student_id: { type: [string, "null"], format: uuid }
-        published: { type: boolean }
+        kind:
+          type: [string, "null"]
+          enum: [folder, student, null]
+          description: Тип папки; возвращается только для `type = folder`
+        student_id:
+          type: [string, "null"]
+          format: uuid
+          description: Идентификатор ученика; возвращается только для `type = folder`
+        published:
+          type: boolean
+          description: Признак публикации; возвращается только для `type = pack`
+        age:
+          type: [integer, "null"]
+          minimum: 3
+          maximum: 18
+          description: Рекомендуемый возраст; возвращается только для `type = pack`, может быть `null`
+        difficulty:
+          type: [string, "null"]
+          enum: [easy, medium, hard, null]
+          description: Сложность набора; возвращается только для `type = pack`, может быть `null`
         updated_at: { type: string, format: date-time }
 
     SettingsDocument:
@@ -1093,7 +1108,9 @@ paths:
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
         - { name: query, in: query, schema: { type: string }, description: "Подстрока названия папки или набора без учёта регистра" }
         - { name: type, in: query, schema: { type: string, enum: [folder, pack] }, description: "Оставить только папки или только наборы" }
-        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "age_min <= age <= age_max. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: age_from, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age" }
+        - { name: age_to, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age" }
         - { name: difficulty, in: query, schema: { type: string, enum: [easy, medium, hard] }, description: "Свойство набора: папки отсеиваются" }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
@@ -1361,7 +1378,19 @@ paths:
             name: age,
             in: query,
             schema: { type: integer, minimum: 3, maximum: 18 },
-            description: age_min <= age <= age_max,
+            description: Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to,
+          }
+        - {
+            name: age_from,
+            in: query,
+            schema: { type: integer, minimum: 3, maximum: 18 },
+            description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age",
+          }
+        - {
+            name: age_to,
+            in: query,
+            schema: { type: integer, minimum: 3, maximum: 18 },
+            description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age",
           }
         - {
             name: difficulty,

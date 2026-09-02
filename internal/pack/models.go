@@ -18,8 +18,7 @@ type Pack struct {
 	PublishedAt     *time.Time      `json:"published_at,omitempty"`
 	Title           string          `json:"title"`
 	Status          string          `json:"status"`
-	AgeMin          *int            `json:"age_min,omitempty"`
-	AgeMax          *int            `json:"age_max,omitempty"`
+	Age             *int            `json:"age,omitempty"`
 	Difficulty      *string         `json:"difficulty,omitempty"`
 	Goals           []string        `json:"goals"`
 	Notes           string          `json:"notes"`
@@ -71,8 +70,7 @@ type ListItem struct {
 	PublishedAt     *time.Time      `json:"published_at,omitempty"`
 	Title           string          `json:"title"`
 	Status          string          `json:"status"`
-	AgeMin          *int            `json:"age_min,omitempty"`
-	AgeMax          *int            `json:"age_max,omitempty"`
+	Age             *int            `json:"age,omitempty"`
 	Difficulty      *string         `json:"difficulty,omitempty"`
 	Goals           []string        `json:"goals"`
 	Notes           string          `json:"notes"`
@@ -94,6 +92,8 @@ type ListPage struct {
 type ListInput struct {
 	Query      string
 	Age        *int
+	AgeFrom    *int
+	AgeTo      *int
 	Difficulty string
 	Section    string
 	// StudentID сужает выдачу до наборов одного ученика: его собственной
@@ -113,8 +113,7 @@ type NullablePatch[T any] struct {
 
 // FilterMetadataPatch contains optional list-filter metadata changes.
 type FilterMetadataPatch struct {
-	AgeMin     NullablePatch[int]
-	AgeMax     NullablePatch[int]
+	Age        NullablePatch[int]
 	Difficulty NullablePatch[string]
 	Goals      *[]string
 }

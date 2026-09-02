@@ -113,6 +113,8 @@ func TestStudentFolderOwnershipAndMixedContents(t *testing.T) {
 	assert.Equal(t, "folder", page.Items[0].Type)
 	assert.Equal(t, child.ID, page.Items[0].ID)
 	assert.Equal(t, "pack", page.Items[1].Type)
+	assert.Nil(t, page.Items[1].Age)
+	assert.Nil(t, page.Items[1].Difficulty)
 }
 
 func TestStudentAssignmentsExcludeArchivedStudents(t *testing.T) {
@@ -501,13 +503,13 @@ func TestContentsFilters(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = pool.Exec(context.Background(), `
-		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age_min, age_max, difficulty)
-		SELECT org_id, id, $2, 'Азбука набор', '{}'::jsonb, 4, 6, 'easy'
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age, difficulty)
+		SELECT org_id, id, $2, 'Азбука набор', '{}'::jsonb, 5, 'easy'
 		FROM users WHERE id = $1`, ownerID, root.ID)
 	require.NoError(t, err)
 	_, err = pool.Exec(context.Background(), `
-		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age_min, age_max, difficulty)
-		SELECT org_id, id, $2, 'Счёт набор', '{}'::jsonb, 7, 9, 'hard'
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config, age, difficulty)
+		SELECT org_id, id, $2, 'Счёт набор', '{}'::jsonb, 8, 'hard'
 		FROM users WHERE id = $1`, ownerID, root.ID)
 	require.NoError(t, err)
 
@@ -540,6 +542,33 @@ func TestContentsFilters(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, byAge.Items, 1, "у папок возраста нет, остаётся только набор")
 	assert.Equal(t, "Азбука набор", byAge.Items[0].Name)
+	require.NotNil(t, byAge.Items[0].Age)
+	assert.Equal(t, 5, *byAge.Items[0].Age)
+	require.NotNil(t, byAge.Items[0].Difficulty)
+	assert.Equal(t, "easy", *byAge.Items[0].Difficulty)
+
+	ageFrom, ageTo := 6, 8
+	byRange, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeFrom: &ageFrom, AgeTo: &ageTo,
+	})
+	require.NoError(t, err)
+	require.Len(t, byRange.Items, 1)
+	assert.Equal(t, "Счёт набор", byRange.Items[0].Name)
+	assert.Equal(t, 1, byRange.Total)
+
+	fromOnly, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeFrom: &ageFrom,
+	})
+	require.NoError(t, err)
+	require.Len(t, fromOnly.Items, 1)
+	assert.Equal(t, "Счёт набор", fromOnly.Items[0].Name)
+	toOnly := 5
+	upToAge, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, AgeTo: &toOnly,
+	})
+	require.NoError(t, err)
+	require.Len(t, upToAge.Items, 1)
+	assert.Equal(t, "Азбука набор", upToAge.Items[0].Name)
 
 	byDifficulty, err := service.Contents(ctx, ContentsInput{
 		Section: SectionMy, ParentID: &root.ID, Difficulty: "hard",
