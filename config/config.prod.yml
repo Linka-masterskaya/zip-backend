@@ -21,6 +21,7 @@ server:
 db:
   # Required via DB_URL.
   url: ""
+  migrate_url: ""
   max_conns: 25
   min_conns: 5
   max_conn_lifetime: "1h"
@@ -195,6 +196,3 @@ cron:
     clean_period: 2160h
     jobs_ttl: 72h
     limit: 100
-
-media:
-  batch_delete_limit: 100

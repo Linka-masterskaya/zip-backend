@@ -19,8 +19,7 @@ run:
 
 # Full local stack: infra + migrations + server (blocks in foreground)
 run-local:
-	docker compose -f compose.dev.yaml up -d postgres minio nats redis
-	docker compose -f docker-compose.yml up -d mailpit
+	docker compose -f compose.dev.yaml up -d --wait
 	$(MAKE) migrate-embed
 	SMTP_HOST=localhost $(MAKE) run
 
@@ -63,13 +62,13 @@ dev-reset:
 
 # ── Migrations (goose) ───────────────────────────────────────────────────────
 migrate:
-	goose -dir migrations postgres "$(DB_URL)" up
+	goose -dir migrations postgres "$(MIGRATE_DB_URL)" up
 
 migrate-down:
-	goose -dir migrations postgres "$(DB_URL)" down
+	goose -dir migrations postgres "$(MIGRATE_DB_URL)" down
 
 migrate-reset:
-	goose -dir migrations postgres "$(DB_URL)" down-to 0
+	goose -dir migrations postgres "$(MIGRATE_DB_URL)" down-to 0
 
 migration-generate:
 	@if [ -z "$(NAME)" ]; then \
