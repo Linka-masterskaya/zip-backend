@@ -102,6 +102,7 @@ jobs:
           CI_CORS_ALLOW_ORIGINS: ${{ vars.CORS_ALLOW_ORIGINS }}
           CI_VERSION: ${{ needs.build-and-push.outputs.version }}
           CI_DB_URL: ${{ secrets.DB_URL }}
+          CI_DB_MIGRATE_URL: ${{ secrets.DB_MIGRATE_URL }}
           CI_POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
           CI_POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           CI_POSTGRES_DB: ${{ secrets.POSTGRES_DB }}

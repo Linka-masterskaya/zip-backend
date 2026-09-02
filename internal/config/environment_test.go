@@ -10,6 +10,7 @@ import (
 func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("APP_ENV", "dev")
 	t.Setenv("DB_URL", "postgres://env-user:env-pass@postgres:5432/linka")
+	t.Setenv("DB_MIGRATE_URL", "postgres://env-user:env-pass@postgres:5432/linka")
 	t.Setenv("REDIS_URL", "redis://redis:6379/0")
 	t.Setenv("NATS_CONNECTION_URL", "nats://nats:4222")
 	t.Setenv("JWT_SECRET", testCredential("env-jwt"))
@@ -44,17 +45,17 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 
 func TestLoadMigrationDoesNotValidateRuntimeSecrets(t *testing.T) {
 	t.Setenv("APP_ENV", "prod")
-	t.Setenv("DB_URL", "postgres://migration:secret@postgres:5432/linka")
+	t.Setenv("DB_MIGRATE_URL", "postgres://migration:secret@postgres:5432/linka")
 
 	cfg, err := LoadMigration("../../config/config.prod.yml")
 	require.NoError(t, err)
 	assert.Equal(t, "prod", cfg.App.Env)
-	assert.Equal(t, "postgres://migration:secret@postgres:5432/linka", cfg.DB.URL)
+	assert.Equal(t, "postgres://migration:secret@postgres:5432/linka", cfg.DB.MigrateURL)
 }
 
 func TestLoadMigrationRejectsUnsafeProductionDatabaseURL(t *testing.T) {
 	t.Setenv("APP_ENV", "prod")
-	t.Setenv("DB_URL", "postgres://linka:linka@postgres:5432/linka")
+	t.Setenv("DB_MIGRATE_URL", "postgres://linka:linka@postgres:5432/linka")
 
 	_, err := LoadMigration("../../config/config.prod.yml")
 	require.Error(t, err)
@@ -63,7 +64,7 @@ func TestLoadMigrationRejectsUnsafeProductionDatabaseURL(t *testing.T) {
 
 func TestLoadMigrationTreatsWhitespacePaddedProdAsProduction(t *testing.T) {
 	t.Setenv("APP_ENV", "  PROD  ")
-	t.Setenv("DB_URL", "postgres://linka:linka@postgres:5432/linka")
+	t.Setenv("DB_MIGRATE_URL", "postgres://linka:linka@postgres:5432/linka")
 
 	_, err := LoadMigration("../../config/config.prod.yml")
 	require.Error(t, err)
