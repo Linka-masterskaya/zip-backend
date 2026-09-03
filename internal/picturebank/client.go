@@ -137,6 +137,21 @@ func (c *Client) Image(ctx context.Context, pictureID string) (*Image, error) {
 	return &Image{Data: data, ContentType: contentType}, nil
 }
 
+func (c *Client) PicturesByCategory(ctx context.Context, categoryID string) ([]Picture, error) {
+	key := "category:" + categoryID
+	path := "/picture/category/" + url.PathEscape(categoryID)
+
+	data, _, err := c.cachedGet(ctx, key, path, nil, c.maxMetadataBytes)
+	if err != nil {
+		return nil, err
+	}
+	var result []Picture
+	if err = json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("%w: decode pictures by category", ErrInvalidResponse)
+	}
+	return result, nil
+}
+
 func (c *Client) cachedGet(
 	ctx context.Context,
 	key, path string,

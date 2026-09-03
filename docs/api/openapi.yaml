@@ -368,14 +368,18 @@ components:
 
     Picture:
       type: object
-      required: [id, name, categories]
+      required: [id, name, categories, url]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         mimeType: { type: string }
         categories:
           type: array
-          items: { $ref: '#/components/schemas/PictureCategory' }
+          items: { type: string }
+          description: "Список названий категорий, к которым относится изображение"
+        url:
+          type: string
+          description: "Защищённый proxy URL для получения контента через бэкенд (/api/v1/pictures/{id}/content)"
 
     PictureReference:
       type: object
@@ -1319,6 +1323,34 @@ paths:
               schema: { $ref: '#/components/schemas/PictureReference' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
+
+  /pictures/category/{categoryId}/list:
+    get:
+      tags: [pictures]
+      summary: Получить изображения конкретной категории Pictures Bank
+      description: |
+        Возвращает список изображений, принадлежащих указанной категории. В external-режиме ответ кэшируется, а исходящие запросы ограничены через Redis.
+        Response contract идентичен /pictures/search.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: categoryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: UUID категории изображений
+      responses:
+        '200':
+          description: Список изображений категории
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Picture' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
 
   /packs:
     post:

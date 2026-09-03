@@ -20,4 +20,5 @@ func RegisterPictureBankRoutes(
 	mux.Handle("GET /api/v1/pictures/search", protected(handler.Search))
 	mux.Handle("GET /api/v1/pictures/{id}/content", protected(handler.Image))
 	mux.Handle("POST /api/v1/pictures/{id}/import", protected(handler.Import))
+	mux.Handle("GET /api/v1/pictures/category/{categoryId}/list", protected(handler.PicturesByCategory))
 }

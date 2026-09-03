@@ -70,6 +70,11 @@ func (f *fakePictureClient) Image(context.Context, string) (*Image, error) {
 	return f.image, f.err
 }
 
+func (f *fakePictureClient) PicturesByCategory(context.Context, string) ([]Picture, error) {
+	f.calls++
+	return nil, f.err
+}
+
 func assertAppStatus(t *testing.T, err error, status int) {
 	t.Helper()
 	var appErr *apperr.AppError

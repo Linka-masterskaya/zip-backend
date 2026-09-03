@@ -44,6 +44,14 @@ func (s *Service) Image(ctx context.Context, pictureID string) (*Image, error) {
 	return result, pictureBankError(err)
 }
 
+func (s *Service) PicturesByCategory(ctx context.Context, categoryID string) ([]Picture, error) {
+	if _, err := uuid.Parse(categoryID); err != nil {
+		return nil, apperr.ErrBadRequest.WithMessage("category id must be a valid UUID")
+	}
+	result, err := s.client.PicturesByCategory(ctx, categoryID)
+	return result, pictureBankError(err)
+}
+
 // Import keeps the old endpoint as a compatibility bridge without copying
 // picture bytes into organization storage.
 func (s *Service) Import(_ context.Context, pictureID string) (*PictureReference, error) {

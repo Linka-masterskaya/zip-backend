@@ -12,6 +12,7 @@ type Source interface {
 	Categories(context.Context) ([]Category, error)
 	Search(context.Context, string) ([]Picture, error)
 	Image(context.Context, string) (*Image, error)
+	PicturesByCategory(context.Context, string) ([]Picture, error)
 }
 
 // NewSource selects the configured adapter without initializing the unused one.

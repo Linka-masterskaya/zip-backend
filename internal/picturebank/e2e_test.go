@@ -32,6 +32,14 @@ import (
 
 const picturesE2EJWTSecret = "pictures-e2e-only-secret"
 
+type e2ePictureResponse struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	MIMEType   string   `json:"mimeType"`
+	Categories []string `json:"categories"`
+	URL        string   `json:"url"`
+}
+
 func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	pool := picturesE2EDatabase(t)
 	userID, folderID := picturesE2EUserAndFolder(t, pool)
@@ -45,19 +53,25 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	require.NoError(t, err)
 
 	pictureID := uuid.New()
+	categoryID := uuid.New()
 	imageData := picturesE2EPNG()
 	var categoriesCalls, searchCalls, imageCalls atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/category/all":
 			categoriesCalls.Add(1)
-			picturesE2EWriteJSON(t, w, []Category{{ID: "animals", Name: "Животные"}})
+			picturesE2EWriteJSON(t, w, []Category{{ID: categoryID.String(), Name: "Животные"}})
 		case "/picture/search", "/picture/search/":
 			searchCalls.Add(1)
 			assert.Equal(t, "кот", r.URL.Query().Get("query"))
 			picturesE2EWriteJSON(t, w, []Picture{{
 				ID: pictureID.String(), Name: "Кот", MIMEType: "image/png",
-				Categories: []Category{{ID: "animals", Name: "Животные"}},
+				Categories: []Category{{ID: categoryID.String(), Name: "Животные"}},
+			}})
+		case "/picture/category/" + categoryID.String():
+			picturesE2EWriteJSON(t, w, []Picture{{
+				ID: pictureID.String(), Name: "Кот", MIMEType: "image/png",
+				Categories: []Category{{ID: categoryID.String(), Name: "Животные"}},
 			}})
 		case "/picture/" + pictureID.String() + "/buffer":
 			imageCalls.Add(1)
@@ -104,11 +118,27 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 			t, server, token, http.MethodGet, "/api/v1/pictures/categories", nil,
 		)
 		picturesE2EJSON[[]Category](t, response, http.StatusOK)
+
 		response = picturesE2ERequest(
 			t, server, token, http.MethodGet, "/api/v1/pictures/search?query=кот", nil,
 		)
-		picturesE2EJSON[[]Picture](t, response, http.StatusOK)
+		searchPictures := picturesE2EJSON[[]e2ePictureResponse](t, response, http.StatusOK)
+		require.Len(t, searchPictures, 1)
+		assert.Equal(t, pictureID.String(), searchPictures[0].ID)
+		assert.Equal(t, "Кот", searchPictures[0].Name)
+		assert.Equal(t, []string{"Животные"}, searchPictures[0].Categories)
+		assert.Equal(t, "/api/v1/pictures/"+pictureID.String()+"/content", searchPictures[0].URL)
 	}
+
+	categoryResponse := picturesE2ERequest(
+		t, server, token, http.MethodGet, "/api/v1/pictures/category/"+categoryID.String()+"/list", nil,
+	)
+	categoryPictures := picturesE2EJSON[[]e2ePictureResponse](t, categoryResponse, http.StatusOK)
+	require.Len(t, categoryPictures, 1)
+	assert.Equal(t, pictureID.String(), categoryPictures[0].ID)
+	assert.Equal(t, "Кот", categoryPictures[0].Name)
+	assert.Equal(t, []string{"Животные"}, categoryPictures[0].Categories)
+	assert.Equal(t, "/api/v1/pictures/"+pictureID.String()+"/content", categoryPictures[0].URL)
 	assert.EqualValues(t, 1, categoriesCalls.Load(), "categories response must be cached")
 	assert.EqualValues(t, 1, searchCalls.Load(), "search response must be cached")
 
@@ -239,6 +269,7 @@ func picturesE2EServer(
 	mux.Handle("GET /api/v1/pictures/search", protected(pictureHandler.Search))
 	mux.Handle("GET /api/v1/pictures/{id}/content", protected(pictureHandler.Image))
 	mux.Handle("POST /api/v1/pictures/{id}/import", protected(pictureHandler.Import))
+	mux.Handle("GET /api/v1/pictures/category/{categoryId}/list", protected(pictureHandler.PicturesByCategory))
 	mux.Handle("POST /api/v1/packs", protected(packHandler.CreatePack))
 	mux.Handle("PUT /api/v1/packs/{id}/config", protected(contentHandler.SaveConfig))
 	mux.Handle("GET /api/v1/packs/{id}/export", protected(contentHandler.Export))

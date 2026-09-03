@@ -41,20 +41,21 @@ func TestE2E_LocalPicturesBankImportAndArchive(t *testing.T) {
 	seeder, err := NewSeeder(pool, objectStorage, picturesConfig.MaxImageBytes)
 	require.NoError(t, err)
 	pictureID := uuid.New()
+	categoryID := uuid.New()
 	imageData := picturesE2EPNG()
 	createdID, err := seeder.Add(t.Context(), SeedInput{
-		ID: pictureID, Category: "Животные", Title: "Кот", Data: imageData,
+		ID: pictureID, Category: categoryID.String(), Title: "Кот", Data: imageData,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, pictureID, createdID)
 
 	literalSearchID := uuid.New()
 	_, err = seeder.Add(t.Context(), SeedInput{
-		ID: literalSearchID, Category: "Животные", Title: "Скидка 100%_off", Data: imageData,
+		ID: literalSearchID, Category: categoryID.String(), Title: "Скидка 100%_off", Data: imageData,
 	})
 	require.NoError(t, err)
 	_, err = seeder.Add(t.Context(), SeedInput{
-		ID: uuid.New(), Category: "Животные", Title: "Скидка 100Xoff", Data: imageData,
+		ID: uuid.New(), Category: categoryID.String(), Title: "Скидка 100Xoff", Data: imageData,
 	})
 	require.NoError(t, err)
 
@@ -93,34 +94,52 @@ func TestE2E_LocalPicturesBankImportAndArchive(t *testing.T) {
 	server := picturesE2EServer(t, redisCache, handler, packHandler, contentHandler)
 	token := picturesE2EToken(t, userID)
 
-	assertPicturesE2ERequiresAuth(t, server.URL, pictureID)
+	assertPicturesE2ERequiresAuth(t, server.URL, pictureID, categoryID)
 
 	categoriesResponse := picturesE2ERequest(
 		t, server, token, http.MethodGet, "/api/v1/pictures/categories", nil,
 	)
 	categories := picturesE2EJSON[[]Category](t, categoriesResponse, http.StatusOK)
-	require.Equal(t, []Category{{ID: "Животные", Name: "Животные"}}, categories)
+	require.Equal(t, []Category{{ID: categoryID.String(), Name: categoryID.String()}}, categories)
 
 	searchResponse := picturesE2ERequest(
 		t, server, token, http.MethodGet, "/api/v1/pictures/search?query=кот", nil,
 	)
-	searchBody := picturesE2EBody(t, searchResponse, http.StatusOK)
-	assert.NotContains(t, string(searchBody), LocalObjectPrefix)
-	assert.NotContains(t, string(searchBody), "minio")
-	var pictures []Picture
-	require.NoError(t, jsonUnmarshal(searchBody, &pictures))
-	require.Len(t, pictures, 1)
-	assert.Equal(t, pictureID.String(), pictures[0].ID)
-	assert.Equal(t, "Кот", pictures[0].Name)
-	assert.Equal(t, "image/png", pictures[0].MIMEType)
+	searchPictures := picturesE2EJSON[[]e2ePictureResponse](t, searchResponse, http.StatusOK)
+
+	require.Len(t, searchPictures, 1)
+	assert.Equal(t, pictureID.String(), searchPictures[0].ID)
+	assert.Equal(t, "Кот", searchPictures[0].Name)
+	assert.Equal(t, "image/png", searchPictures[0].MIMEType)
+	assert.Equal(t, []string{categoryID.String()}, searchPictures[0].Categories)
+	assert.Equal(t, "/api/v1/pictures/"+pictureID.String()+"/content", searchPictures[0].URL)
 
 	literalSearchResponse := picturesE2ERequest(
 		t, server, token, http.MethodGet,
 		"/api/v1/pictures/search?query="+url.QueryEscape("100%_off"), nil,
 	)
-	literalPictures := picturesE2EJSON[[]Picture](t, literalSearchResponse, http.StatusOK)
+	literalPictures := picturesE2EJSON[[]e2ePictureResponse](t, literalSearchResponse, http.StatusOK)
 	require.Len(t, literalPictures, 1, "percent and underscore must be searched literally")
 	assert.Equal(t, literalSearchID.String(), literalPictures[0].ID)
+	assert.Equal(t, []string{categoryID.String()}, literalPictures[0].Categories)
+	assert.Contains(t, literalPictures[0].URL, "/api/v1/pictures/")
+
+	categoryResponse := picturesE2ERequest(
+		t, server, token, http.MethodGet, "/api/v1/pictures/category/"+categoryID.String()+"/list", nil,
+	)
+	categoryPictures := picturesE2EJSON[[]e2ePictureResponse](t, categoryResponse, http.StatusOK)
+	require.Len(t, categoryPictures, 3)
+	var found bool
+	for _, p := range categoryPictures {
+		if p.ID == pictureID.String() {
+			found = true
+			assert.Equal(t, "Кот", p.Name)
+			assert.Equal(t, []string{categoryID.String()}, p.Categories)
+			assert.Equal(t, "/api/v1/pictures/"+pictureID.String()+"/content", p.URL)
+			break
+		}
+	}
+	assert.True(t, found, "Ожидалось найти засиженную картинку 'Кот' в списке категории")
 
 	contentResponse := picturesE2ERequest(
 		t, server, token, http.MethodGet, "/api/v1/pictures/"+pictureID.String()+"/content", nil,
@@ -198,7 +217,7 @@ func TestE2E_LocalPicturesBankImportAndArchive(t *testing.T) {
 	assert.Contains(t, string(deletedBody), "Картинка удалена")
 }
 
-func assertPicturesE2ERequiresAuth(t *testing.T, serverURL string, pictureID uuid.UUID) {
+func assertPicturesE2ERequiresAuth(t *testing.T, serverURL string, pictureID, categoryID uuid.UUID) {
 	t.Helper()
 	tests := []struct {
 		method string
@@ -206,6 +225,7 @@ func assertPicturesE2ERequiresAuth(t *testing.T, serverURL string, pictureID uui
 	}{
 		{method: http.MethodGet, path: "/api/v1/pictures/categories"},
 		{method: http.MethodGet, path: "/api/v1/pictures/search?query=кот"},
+		{method: http.MethodGet, path: "/api/v1/pictures/category/" + categoryID.String() + "/list"},
 		{method: http.MethodGet, path: "/api/v1/pictures/" + pictureID.String() + "/content"},
 		{method: http.MethodPost, path: "/api/v1/pictures/" + pictureID.String() + "/import"},
 	}

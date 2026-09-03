@@ -18,6 +18,7 @@ type service interface {
 	Search(context.Context, string) ([]Picture, error)
 	Image(context.Context, string) (*Image, error)
 	Import(context.Context, string) (*PictureReference, error)
+	PicturesByCategory(context.Context, string) ([]Picture, error)
 }
 
 type Handler struct {
@@ -50,7 +51,7 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Cache-Control", "private, max-age=60")
-	return writeJSON(w, result)
+	return writeJSON(w, toPictureResponses(result))
 }
 
 func (h *Handler) Image(w http.ResponseWriter, r *http.Request) error {
@@ -93,6 +94,19 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	return json.NewEncoder(w).Encode(result)
+}
+
+func (h *Handler) PicturesByCategory(w http.ResponseWriter, r *http.Request) error {
+	categoryID := r.PathValue("categoryId")
+
+	result, err := h.service.PicturesByCategory(r.Context(), categoryID)
+	if err != nil {
+		setRetryAfter(w, err)
+		return err
+	}
+
+	w.Header().Set("Cache-Control", "private, max-age=60")
+	return writeJSON(w, toPictureResponses(result))
 }
 
 func setRetryAfter(w http.ResponseWriter, err error) {
