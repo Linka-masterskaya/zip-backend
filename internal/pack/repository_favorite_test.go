@@ -143,7 +143,7 @@ func TestRepositoryListFavoritesReturnsAccessibleBookmarksInOrder(t *testing.T) 
 		userID, ownPack.ID)
 	require.NoError(t, err)
 
-	listed, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Limit: 50})
+	listed, _, err := repo.ListFavoritesWithTotal(t.Context(), userID, ListInput{Limit: 50})
 
 	require.NoError(t, err)
 	require.Len(t, listed, 2)
@@ -176,13 +176,13 @@ func TestRepositoryListFavoritesPaginates(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	listed, total, err := repo.ListWithTotal(t.Context(), userID, ListInput{Limit: 1, Offset: 1})
+	listed, total, err := repo.ListFavoritesWithTotal(t.Context(), userID, ListInput{Limit: 1, Offset: 1})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created[1].ID, listed[0].ID)
 	assert.Equal(t, 3, total)
 
-	beyond, total, err := repo.ListWithTotal(t.Context(), userID, ListInput{Limit: 1, Offset: 10})
+	beyond, total, err := repo.ListFavoritesWithTotal(t.Context(), userID, ListInput{Limit: 1, Offset: 10})
 	require.NoError(t, err)
 	assert.Empty(t, beyond)
 	assert.Equal(t, 3, total)

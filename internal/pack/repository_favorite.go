@@ -30,8 +30,8 @@ func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUI
 	return nil
 }
 
-// listFavorites returns a limited page with the selected packages currently available to the user.
-// It should run in tx, like countFavorites (see ListWithTotal), so that both see the same snapshot.
+// listFavorites returns a limited page of the packs currently available to the user.
+// It should run in tx, like countFavorites (see ListFavoritesWithTotal), so that both see the same snapshot.
 func (r *Repository) listFavorites(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -59,9 +59,8 @@ func (r *Repository) listFavorites(
 	return packs, nil
 }
 
-// countFavorites returns the total number of currently available favorite packages unchanged, broken down by page.
-// The input data is accepted to verify the compliance of signatures using listFavorites and future filters;
-// It should run in the same tx as listFavorites (see ListWithTotal) so that both see the same snapshot.
+// countFavorites returns the total number of favorite packages currently available to the user, regardless of pagination.
+// It should run in the same tx as listFavorites (see ListFavoritesWithTotal) so that both see the same snapshot.
 func (r *Repository) countFavorites(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -75,9 +74,9 @@ func (r *Repository) countFavorites(
 	return total, nil
 }
 
-// ListWithTotal returns a limited page of featured packages along with the total number,
+// ListFavoritesWithTotal returns a limited page of favorite packages along with the total number,
 // both are calculated within the same REPEATABLE READ, so they always display the same snapshot
-// regardless of simultaneous featured/non-featured packages.
+// regardless of simultaneous favorite/unfavorite operations.
 func (r *Repository) ListFavoritesWithTotal(
 	ctx context.Context,
 	userID uuid.UUID,
