@@ -343,17 +343,76 @@ components:
                 description: Временная presigned MinIO URL,
               }
 
+    MediaListItem:
+      allOf:
+        - $ref: '#/components/schemas/MediaFile'
+        - type: object
+          required: [can_delete]
+          properties:
+            can_delete:
+              type: boolean
+              description: Может ли вызывающий удалить файл. Список орг-скоупный, а удаление доступно только загрузившему.
+
     MediaPage:
       type: object
-      required: [items]
+      required: [items, total]
       description: Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`.
       properties:
         items:
           type: array
-          items: { $ref: '#/components/schemas/MediaFile' }
+          items: { $ref: '#/components/schemas/MediaListItem' }
+        total:
+          type: integer
+          minimum: 0
+          description: Всего файлов организации с учётом query, type и unused.
         next_cursor:
           type: string
           description: Курсор следующей страницы. Отсутствует, если страница последняя.
+
+    MediaBatchDeleteRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+          description: Идентификаторы media; повторы схлопываются. Размер пачки задаётся настройкой media.batch_delete_limit, по умолчанию 100.
+        dry_run:
+          type: boolean
+          default: false
+          description: Посчитать результат и ничего не удалять.
+
+    MediaSkippedFile:
+      type: object
+      required: [id, reason]
+      properties:
+        id: { type: string, format: uuid }
+        reason:
+          type: string
+          enum: [not_found, in_use]
+          description: 'not_found — файла нет, он чужой или загружен другим пользователем; in_use — на файл ссылается набор, аватар ученика или TTS-джоба'
+
+    MediaBatchDeleteResult:
+      type: object
+      required: [deleted, skipped, freed_bytes, dry_run]
+      description: Удалённые и пропущенные файлы одной пачки.
+      properties:
+        deleted:
+          type: array
+          items: { type: string, format: uuid }
+        skipped:
+          type: array
+          items: { $ref: '#/components/schemas/MediaSkippedFile' }
+        freed_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Сколько байт вернулось в квоту организации; при dry_run — сколько вернулось бы.
+        dry_run:
+          type: boolean
+          items: { $ref: '#/components/schemas/MediaSkippedFile' }
 
     PictureCategory:
       type: object
@@ -1156,6 +1215,13 @@ paths:
             description: 'Фильтр по media_type, например image или audio',
           }
         - {
+            name: unused,
+            in: query,
+            required: false,
+            schema: { type: boolean, default: false },
+            description: 'Только файлы, на которые не ссылаются ни media_usages, ни аватар ученика, ни TTS-джоба',
+          }
+        - {
             name: cursor,
             in: query,
             required: false,
@@ -1206,6 +1272,26 @@ paths:
           }
         '400': { $ref: '#/components/responses/BadRequest' }
         '413': { description: Файл или квота превышены }
+
+  /media/batch-delete:
+    post:
+      tags: [media]
+      summary: Массовое удаление media одной пачкой
+      description: Идемпотентно — файл, которого нет, чужой или ещё используемый, попадает в `skipped` с причиной, остальные из пачки удаляются. Сделано методом POST, потому что тело у DELETE вырезают часть прокси и клиентов.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MediaBatchDeleteRequest' }
+      responses:
+        '200':
+          description: Что удалено и что пропущено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaBatchDeleteResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /media/{id}:
     get:

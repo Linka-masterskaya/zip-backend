@@ -607,6 +607,8 @@ export interface paths {
                     query?: string;
                     /** @description Фильтр по media_type, например image или audio */
                     type?: string;
+                    /** @description Только файлы, на которые не ссылаются ни media_usages, ни аватар ученика, ни TTS-джоба */
+                    unused?: boolean;
                     /** @description Курсор из next_cursor предыдущей страницы */
                     cursor?: string;
                     limit?: number;
@@ -668,6 +670,51 @@ export interface paths {
                     };
                     content?: never;
                 };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/batch-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Массовое удаление media одной пачкой
+         * @description Идемпотентно — файл, которого нет, чужой или ещё используемый, попадает в `skipped` с причиной, остальные из пачки удаляются. Сделано методом POST, потому что тело у DELETE вырезают часть прокси и клиентов.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MediaBatchDeleteRequest"];
+                };
+            };
+            responses: {
+                /** @description Что удалено и что пропущено */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaBatchDeleteResult"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
             };
         };
         delete?: never;
@@ -2814,11 +2861,46 @@ export interface components {
              */
             url: string;
         };
+        MediaListItem: components["schemas"]["MediaFile"] & {
+            /** @description Может ли вызывающий удалить файл. Список орг-скоупный, а удаление доступно только загрузившему. */
+            can_delete: boolean;
+        };
         /** @description Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`. */
         MediaPage: {
-            items: components["schemas"]["MediaFile"][];
+            items: components["schemas"]["MediaListItem"][];
+            /** @description Всего файлов организации с учётом query, type и unused. */
+            total: number;
             /** @description Курсор следующей страницы. Отсутствует, если страница последняя. */
             next_cursor?: string;
+        };
+        MediaBatchDeleteRequest: {
+            /** @description Идентификаторы media; повторы схлопываются. Размер пачки задаётся настройкой media.batch_delete_limit, по умолчанию 100. */
+            ids: string[];
+            /**
+             * @description Посчитать результат и ничего не удалять.
+             * @default false
+             */
+            dry_run: boolean;
+        };
+        MediaSkippedFile: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description not_found — файла нет, он чужой или загружен другим пользователем; in_use — на файл ссылается набор, аватар ученика или TTS-джоба
+             * @enum {string}
+             */
+            reason: "not_found" | "in_use";
+        };
+        /** @description Удалённые и пропущенные файлы одной пачки. */
+        MediaBatchDeleteResult: {
+            deleted: string[];
+            skipped: components["schemas"]["MediaSkippedFile"][];
+            /**
+             * Format: int64
+             * @description Сколько байт вернулось в квоту организации; при dry_run — сколько вернулось бы.
+             */
+            freed_bytes: number;
+            dry_run: boolean;
         };
         PictureCategory: {
             /** @description Opaque adapter-specific category identifier; clients must not parse it as a UUID. */

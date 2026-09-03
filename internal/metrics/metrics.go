@@ -24,6 +24,9 @@ var (
 	emailSentToday    prometheus.Gauge
 	emailDailyLimit   prometheus.Gauge
 
+	mediaBatchDeletedTotal    prometheus.Counter
+	mediaBatchFreedBytesTotal prometheus.Counter
+
 	initOnce sync.Once
 )
 
@@ -87,6 +90,20 @@ func Initialize() {
 			},
 		)
 
+		mediaBatchDeletedTotal = prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "media_batch_deleted_files_total",
+				Help: "Total number of media files removed by batch delete",
+			},
+		)
+
+		mediaBatchFreedBytesTotal = prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "media_batch_freed_bytes_total",
+				Help: "Total number of bytes returned to organization quota by batch delete",
+			},
+		)
+
 		registry.MustRegister(httpRequestsTotal)
 		registry.MustRegister(httpRequestDuration)
 		registry.MustRegister(httpRequestsInFlight)
@@ -94,6 +111,8 @@ func Initialize() {
 		registry.MustRegister(emailSendDuration)
 		registry.MustRegister(emailSentToday)
 		registry.MustRegister(emailDailyLimit)
+		registry.MustRegister(mediaBatchDeletedTotal)
+		registry.MustRegister(mediaBatchFreedBytesTotal)
 
 		registry.MustRegister(collectors.NewGoCollector())
 		registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -139,4 +158,13 @@ func SetEmailSentToday(value float64) {
 // SetDailyLimit - sets daily limit from configuration.
 func SetDailyLimit(limit int) {
 	emailDailyLimit.Set(float64(limit))
+}
+
+// ObserveMediaBatchDelete - records the result of one batch delete request.
+func ObserveMediaBatchDelete(deleted int, freedBytes int64) {
+	if mediaBatchDeletedTotal == nil || mediaBatchFreedBytesTotal == nil {
+		return
+	}
+	mediaBatchDeletedTotal.Add(float64(deleted))
+	mediaBatchFreedBytesTotal.Add(float64(freedBytes))
 }

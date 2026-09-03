@@ -71,6 +71,7 @@ func TestRegisterMediaRoutesPatterns(t *testing.T) {
 		"POST /api/v1/media",
 		"GET /api/v1/media",
 		"GET /api/v1/media/{id}",
+		"POST /api/v1/media/batch-delete",
 		"DELETE /api/v1/media/{id}",
 	})
 }

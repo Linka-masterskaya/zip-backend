@@ -62,7 +62,7 @@ func TestE2E_TTSFlow(t *testing.T) {
 	passthrough := func(next http.Handler) http.Handler { return next }
 	httpapi.RegisterTTSRoutes(mux, auth, passthrough, httpapi.TTSHandlers{TTS: ttsHandler})
 	httpapi.RegisterMediaRoutes(mux, auth, passthrough, httpapi.MediaHandlers{
-		Media: media.NewHandler(media.NewService(media.NewRepository(pool), objectStorage)),
+		Media: media.NewHandler(media.NewService(media.NewRepository(pool), objectStorage, media.DefaultBatchDeleteLimit)),
 	})
 	server := httptest.NewServer(middleware.Chain(
 		mux,

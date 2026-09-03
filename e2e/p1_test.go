@@ -580,7 +580,7 @@ func e2eServer(
 	packRepo := pack.NewRepository(pool)
 	packService := pack.NewService(packRepo, nil)
 	packHandler := pack.NewHandler(packService)
-	mediaService := media.NewService(media.NewRepository(pool), objectStorage)
+	mediaService := media.NewService(media.NewRepository(pool), objectStorage, media.DefaultBatchDeleteLimit)
 	mediaHandler := media.NewHandler(mediaService)
 	contentHandler := pack.NewContentHandler(
 		pack.NewContentService(packRepo, objectStorage, mediaService, packService),
@@ -711,7 +711,7 @@ func testPNG(marker byte) []byte {
 	return append(data, marker)
 }
 
-func mediaIDs(items []media.File) []uuid.UUID {
+func mediaIDs(items []media.ListItem) []uuid.UUID {
 	ids := make([]uuid.UUID, len(items))
 	for i, item := range items {
 		ids[i] = item.ID
