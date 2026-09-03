@@ -479,9 +479,8 @@ components:
         name: { type: string }
         parent_id:
           {
-            type: string,
+            type: [string, "null"],
             format: uuid,
-            nullable: true,
             description: Родитель этой папки; null — папка лежит в корне раздела,
           }
 
@@ -495,9 +494,8 @@ components:
       properties:
         id:
           {
-            type: string,
+            type: [string, "null"],
             format: uuid,
-            nullable: true,
             description: null для узла-раздела (первый элемент пути),
           }
         name: { type: string }
@@ -1139,10 +1137,9 @@ paths:
                 required: [current_folder, breadcrumbs, items, limit, offset, total]
                 properties:
                   current_folder:
-                    type: object
-                    nullable: true
-                    allOf:
+                    oneOf:
                       - $ref: '#/components/schemas/CurrentFolder'
+                      - type: "null"
                   breadcrumbs:
                     {
                       type: array,
