@@ -91,9 +91,7 @@ const listPacksBaseQuery = `
 		FROM folders child
 		JOIN folder_students parent ON child.parent_id = parent.id
 	), placements AS (
-		SELECT p.id, p.org_id, p.owner_id, p.folder_id AS result_folder_id,
-		       p.library_folder_id, p.published_at, p.title, p.status,
-		       p.age, p.difficulty, p.goals, p.notes, p.config,
+		SELECT p.id, p.folder_id AS result_folder_id, p.title, p.age, p.difficulty,
 		       p.created_at, p.updated_at, f.section, fs.student_id
 		FROM active_user u
 		JOIN packs p ON p.owner_id = u.id AND p.org_id = u.org_id
@@ -103,9 +101,7 @@ const listPacksBaseQuery = `
 		              AND f.org_id = u.org_id
 		              AND f.section IN ('my', 'students')
 		UNION ALL
-		SELECT p.id, p.org_id, p.owner_id, student_folder.id AS result_folder_id,
-		       p.library_folder_id, p.published_at, p.title, p.status,
-		       p.age, p.difficulty, p.goals, p.notes, p.config,
+		SELECT p.id, student_folder.id AS result_folder_id, p.title, p.age, p.difficulty,
 		       p.created_at, p.updated_at, student_folder.section, s.id AS student_id
 		FROM active_user u
 		JOIN students s ON s.defectologist_id = u.id
@@ -122,9 +118,7 @@ const listPacksBaseQuery = `
 		            AND p.org_id = u.org_id
 		WHERE p.folder_id <> student_folder.id
 		UNION ALL
-		SELECT p.id, p.org_id, p.owner_id, p.library_folder_id AS result_folder_id,
-		       p.library_folder_id, p.published_at, p.title, p.status,
-		       p.age, p.difficulty, p.goals, p.notes, p.config,
+		SELECT p.id, p.library_folder_id AS result_folder_id, p.title, p.age, p.difficulty,
 		       p.created_at, p.updated_at, f.section, NULL::uuid AS student_id
 		FROM active_user u
 		JOIN packs p ON p.org_id = u.org_id
@@ -133,12 +127,7 @@ const listPacksBaseQuery = `
 		              AND f.org_id = u.org_id
 		              AND f.section = 'library'
 	), filtered AS (
-		SELECT placements.*,
-		       EXISTS (
-			   SELECT 1
-			   FROM favorite_packs fp
-			   WHERE fp.user_id = $1 AND fp.pack_id = placements.id
-		       ) AS is_favorite
+		SELECT placements.*
 		FROM placements
 		WHERE ($2::text = '' OR title ILIKE '%' || $2::text || '%')
 		  AND ($3::int IS NULL OR age = $3::int)
@@ -153,24 +142,39 @@ const listPacksBaseQuery = `
 // приходят от клиента, но в SQL попадают только проверенные строки.
 func listPacksQuery(sortBy, order string) string {
 	column := "updated_at"
+	outerColumn := "page.updated_at"
 	switch sortBy {
 	case "title":
 		column = "lower(title)"
+		outerColumn = "lower(page.title)"
 	case "created_at":
 		column = "created_at"
+		outerColumn = "page.created_at"
 	}
 	direction := "DESC"
 	if strings.EqualFold(order, "asc") {
 		direction = "ASC"
 	}
-	return listPacksBaseQuery + `
-	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
-	       published_at, title, status, age, difficulty,
-	       goals, notes, config, is_favorite, section, created_at, updated_at,
-	       count(*) OVER() AS total
-	FROM filtered
-	ORDER BY ` + column + ` ` + direction + `, id, section, result_folder_id
-	LIMIT $9 OFFSET $10`
+	return listPacksBaseQuery + `,
+	paged AS (
+		SELECT id, result_folder_id, title, section, created_at, updated_at,
+		       count(*) OVER() AS total
+		FROM filtered
+		ORDER BY ` + column + ` ` + direction + `, id, section, result_folder_id
+		LIMIT $9 OFFSET $10
+	)
+	SELECT p.id, p.org_id, p.owner_id, page.result_folder_id, p.library_folder_id,
+	       p.published_at, p.title, p.status, p.age, p.difficulty,
+	       p.goals, p.notes, p.config,
+	       EXISTS (
+		   SELECT 1
+		   FROM favorite_packs fp
+		   WHERE fp.user_id = $1 AND fp.pack_id = p.id
+	       ) AS is_favorite,
+	       page.section, p.created_at, p.updated_at, page.total
+	FROM paged page
+	JOIN packs p ON p.id = page.id
+	ORDER BY ` + outerColumn + ` ` + direction + `, page.id, page.section, page.result_folder_id`
 }
 
 const countPacksQuery = listPacksBaseQuery + `

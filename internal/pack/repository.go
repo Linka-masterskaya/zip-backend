@@ -172,7 +172,8 @@ func (r *Repository) ListWithTotal(
 	// count(*) OVER() gives us total together with every returned row.
 	// If OFFSET moves the page past the end, there is no row to carry total,
 	// so fall back to the standalone count query only for that case.
-	if len(items) == 0 && input.Offset > 0 {
+	_, offset := repositoryListBounds(input)
+	if len(items) == 0 && offset > 0 {
 		total, err = r.count(ctx, tx, userID, input)
 		if err != nil {
 			return nil, 0, err
@@ -502,17 +503,20 @@ func scanPack(row rowScanner) (*Pack, error) {
 	return &result, nil
 }
 
-func scanListItem(row rowScanner) (*ListItem, error) {
-	var result ListItem
-	err := row.Scan(
+func listItemScanTargets(result *ListItem) []any {
+	return []any{
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
 		&result.LibraryFolderID, &result.PublishedAt,
 		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.IsFavorite, &result.Section,
 		&result.CreatedAt, &result.UpdatedAt,
-	)
-	if err != nil {
+	}
+}
+
+func scanListItem(row rowScanner) (*ListItem, error) {
+	var result ListItem
+	if err := row.Scan(listItemScanTargets(&result)...); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -521,15 +525,8 @@ func scanListItem(row rowScanner) (*ListItem, error) {
 func scanListItemWithTotal(row rowScanner) (*ListItem, int, error) {
 	var result ListItem
 	var total int
-	err := row.Scan(
-		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
-		&result.LibraryFolderID, &result.PublishedAt,
-		&result.Title, &result.Status, &result.AgeMin, &result.AgeMax,
-		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
-		&result.IsFavorite, &result.Section,
-		&result.CreatedAt, &result.UpdatedAt, &total,
-	)
-	if err != nil {
+	targets := append(listItemScanTargets(&result), &total)
+	if err := row.Scan(targets...); err != nil {
 		return nil, 0, err
 	}
 	return &result, total, nil
