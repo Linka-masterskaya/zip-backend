@@ -15,7 +15,7 @@ groups:
       # Alert on error rate spike (>10%)
       - alert: EmailErrorRateSpike
         expr: |
-          (rate(email_sent_total{status="error"}[5m]) / 
+          (rate(email_sent_total{status="error"}[5m]) /
            (rate(email_sent_total{status="success"}[5m]) + rate(email_sent_total{status="error"}[5m]))) > 0.1
         for: 3m
         labels:

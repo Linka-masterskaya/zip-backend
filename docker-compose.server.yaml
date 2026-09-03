@@ -99,6 +99,46 @@ services:
     networks:
       - linka-net
 
+  pushgateway:
+    profiles:
+      - backup
+    image: prom/pushgateway:v1.9.0
+    restart: unless-stopped
+    expose:
+      - "9091"
+    command:
+      - --persistence.file=/data/pushgateway.store
+      - --persistence.interval=1m
+    volumes:
+      - pushgateway_data:/data
+    networks:
+      - linka-net
+
+  backup:
+    profiles:
+      - backup
+    build:
+      context: .
+      dockerfile: deploy/backup/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+      - .env.backup
+    volumes:
+      - /var/backups/linka:/backup-repo
+      - backup_tmp:/backup-tmp
+      - backup_mirror:/backup-mirror
+      - backup_cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      pushgateway:
+        condition: service_started
+    networks:
+      - linka-net
+
   loki:
     image: grafana/loki:3.7.0
     restart: unless-stopped
@@ -139,6 +179,7 @@ services:
     volumes:
       - prometheus_data:/prometheus
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus/rules:/etc/prometheus/rules:ro
     depends_on:
       zip-backend:
         condition: service_started
@@ -200,6 +241,10 @@ volumes:
   caddy_data:
   caddy_config:
   prometheus_data:
+  pushgateway_data:
+  backup_tmp:
+  backup_mirror:
+  backup_cache:
 
 networks:
   linka-net:
