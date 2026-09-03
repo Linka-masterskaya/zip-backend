@@ -525,6 +525,10 @@ func deleteOrphanedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []uuid.UUID) e
 	if len(mediaIDs) == 0 {
 		return nil
 	}
+	_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) FOR UPDATE", mediaIDs)
+	if err != nil {
+		return fmt.Errorf("select for update media: %w", err)
+	}
 	var count int64
 	var totalBytes int64
 	if err := tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {

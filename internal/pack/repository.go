@@ -22,6 +22,7 @@ var (
 	ErrPackPublished                = errors.New("pack is published")
 	ErrAlreadyPublished             = errors.New("pack is published in another folder")
 	ErrAdaptationNotFound           = errors.New("pack adaptation not found")
+	ErrMediaNotFound                = errors.New("media not found")
 )
 
 const duplicateTitleSuffix = " (копия)"
@@ -106,6 +107,9 @@ func (r *Repository) Duplicate(
 		return nil, fmt.Errorf("pack duplicate insert: %w", err)
 	}
 	if _, err = tx.Exec(ctx, copyDuplicateMediaUsagesQuery, sourcePackID, result.ID); err != nil {
+		if isMediaFKViolation(err) {
+			return nil, ErrMediaNotFound
+		}
 		return nil, fmt.Errorf("pack duplicate media usages: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -516,6 +520,10 @@ func deleteOrphanedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []uuid.UUID) e
 	if len(mediaIDs) == 0 {
 		return nil
 	}
+	_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) FOR UPDATE", mediaIDs)
+	if err != nil {
+		return fmt.Errorf("select for update media: %w", err)
+	}
 	var count int64
 	var totalBytes int64
 	if err := tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {
@@ -536,4 +544,9 @@ func collectPackMedia(ctx context.Context, tx pgx.Tx, packID uuid.UUID, adaptati
 		return nil, fmt.Errorf("pack collect media: %w", err)
 	}
 	return pgx.CollectRows(mediaRows, pgx.RowTo[uuid.UUID])
+}
+
+func isMediaFKViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
