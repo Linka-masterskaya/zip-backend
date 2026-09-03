@@ -604,8 +604,8 @@ func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID,
 	return orgID, nil
 }
 
-// currentUserOrg is like activeUserOrg but avoids FOR UPDATE, so it can run
-// inside the read-only transaction Contents uses.
+// currentUserOrg похож на activeUserOrg, но не требует FOR UPDATE, поэтому может выполняться
+// внутри транзакции Contents, используется только для чтения
 func currentUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {
 	var orgID uuid.UUID
 	err := tx.QueryRow(ctx, `
