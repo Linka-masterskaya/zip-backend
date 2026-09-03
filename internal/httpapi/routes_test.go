@@ -111,6 +111,7 @@ func TestRegisterPictureBankRoutesPatterns(t *testing.T) {
 		"GET /api/v1/pictures/search",
 		"GET /api/v1/pictures/{id}/content",
 		"POST /api/v1/pictures/{id}/import",
+		"GET /api/v1/pictures/category/{categoryId}/list",
 	})
 }
 
