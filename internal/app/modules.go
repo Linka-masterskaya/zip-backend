@@ -75,7 +75,7 @@ func buildModules(in *infra) (*modules, error) {
 	packService := pack.NewService(packRepo, in.pub)
 	favoriteService := pack.NewFavoriteService(packRepo)
 	mediaRepo := media.NewRepository(in.db)
-	mediaService := media.NewService(mediaRepo, in.storage)
+	mediaService := media.NewService(mediaRepo, in.storage, in.cfg.Media.BatchDeleteLimit)
 
 	folderRepo := folder.NewRepository(in.db)
 	studentRepo := student.NewRepository(in.db)

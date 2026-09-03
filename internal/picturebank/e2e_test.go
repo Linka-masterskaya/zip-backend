@@ -78,7 +78,7 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 		MaxMetadataBytes: 2 * 1024 * 1024, MaxImageBytes: 10 * 1024 * 1024,
 	}
 	client := newClient(picturesConfig, upstreamURL, upstream.Client(), redisCache)
-	mediaService := media.NewService(media.NewRepository(pool), objectStorage)
+	mediaService := media.NewService(media.NewRepository(pool), objectStorage, media.DefaultBatchDeleteLimit)
 	picturesService := NewService(client)
 	handler := NewHandler(picturesService)
 	packRepo := pack.NewRepository(pool)

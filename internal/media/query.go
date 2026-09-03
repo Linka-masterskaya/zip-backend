@@ -41,9 +41,17 @@ const getAccessibleMediaQuery = `
 	    )
 	  )`
 
+// mediaUnreferencedPredicate закрывает все три внешние ссылки на media_files:
+// media_usages, аватар ученика и результат TTS-джобы. Список и счётчик обязаны
+// делить один предикат, иначе total разъедется с items.
+const mediaUnreferencedPredicate = `
+	    NOT EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
+	    AND NOT EXISTS (SELECT 1 FROM students s WHERE s.avatar_media_id = media_files.id)
+	    AND NOT EXISTS (SELECT 1 FROM tts_jobs j WHERE j.media_id = media_files.id)`
+
 const listMediaQuery = `
 	SELECT id, org_id, uploader_id, name, sha256, mime_type, media_type,
-	       size_bytes, minio_key, created_at
+	       size_bytes, minio_key, created_at, uploader_id = $8::uuid AS can_delete
 	FROM media_files
 	WHERE org_id = $1
 	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%')
@@ -51,7 +59,7 @@ const listMediaQuery = `
 	  AND ($4::timestamptz IS NULL OR (created_at, id) < ($4::timestamptz, $5::uuid))
 	  AND (
 	    NOT $6::boolean
-	    OR NOT EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
+	    OR ` + mediaUnreferencedPredicate + `
 	  )
 	ORDER BY created_at DESC, id DESC
 	LIMIT $7`
@@ -64,7 +72,7 @@ const countMediaQuery = `
 	  AND ($3::text = '' OR media_type = $3::text)
 	  AND (
 	    NOT $4::boolean
-	    OR NOT EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
+	    OR ` + mediaUnreferencedPredicate + `
 	  )`
 
 const lockOwnedMediaQuery = `
@@ -86,8 +94,14 @@ const lockOwnedMediaBatchQuery = `
 const mediaInUseQuery = `
 	SELECT EXISTS (SELECT 1 FROM media_usages WHERE media_id = $1)`
 
-const usedMediaBatchQuery = `
-	SELECT DISTINCT media_id FROM media_usages WHERE media_id = ANY($1::uuid[])`
+const referencedMediaBatchQuery = `
+	SELECT id FROM media_files
+	WHERE id = ANY($1::uuid[])
+	  AND (
+	    EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
+	    OR EXISTS (SELECT 1 FROM students s WHERE s.avatar_media_id = media_files.id)
+	    OR EXISTS (SELECT 1 FROM tts_jobs j WHERE j.media_id = media_files.id)
+	  )`
 
 const deleteMediaQuery = `
 	DELETE FROM media_files WHERE id = $1`

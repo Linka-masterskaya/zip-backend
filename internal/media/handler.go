@@ -24,7 +24,7 @@ type mediaService interface {
 	Get(context.Context, uuid.UUID) (*Response, error)
 	List(context.Context, ListInput) (*ListPage, error)
 	Delete(context.Context, uuid.UUID) error
-	DeleteBatch(context.Context, []uuid.UUID) (*BatchDeleteResult, error)
+	DeleteBatch(context.Context, []uuid.UUID, bool) (*BatchDeleteResult, error)
 }
 
 type Handler struct {
@@ -132,16 +132,17 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h *Handler) DeleteBatch(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) BatchDelete(w http.ResponseWriter, r *http.Request) error {
 	var req struct {
-		IDs []uuid.UUID `json:"ids"`
+		IDs    []uuid.UUID `json:"ids"`
+		DryRun bool        `json:"dry_run"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		return apperr.ErrBadRequest.WithMessage("body must contain an ids array of media UUIDs")
 	}
-	result, err := h.service.DeleteBatch(r.Context(), req.IDs)
+	result, err := h.service.DeleteBatch(r.Context(), req.IDs, req.DryRun)
 	if err != nil {
 		return err
 	}

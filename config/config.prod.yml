@@ -178,3 +178,6 @@ cron:
     clean_period: 2160h
     jobs_ttl: 72h
     limit: 100
+
+media:
+  batch_delete_limit: 100
