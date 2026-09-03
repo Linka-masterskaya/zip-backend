@@ -200,6 +200,10 @@ func (r *Repository) CleanupOldJobs(ctx context.Context, cutoff time.Time) error
 	}
 
 	if len(mediaIDs) > 0 {
+		_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) FOR UPDATE", mediaIDs)
+		if err != nil {
+			return fmt.Errorf("select for update media: %w", err)
+		}
 		var count int64
 		var totalBytes int64
 		if err = tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {

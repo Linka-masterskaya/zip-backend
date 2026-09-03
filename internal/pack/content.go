@@ -392,6 +392,8 @@ func contentError(err error) error {
 		// Набор валиден, но не выражается в формате Linka Looks:
 		// это конфликт состояния набора с запрошенным форматом.
 		return apperr.ErrConflict.WithMessage(err.Error())
+	case errors.Is(err, ErrMediaNotFound):
+		return apperr.ErrConflict.WithMessage("media was deleted")
 	default:
 		return err
 	}

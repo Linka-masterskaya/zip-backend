@@ -32,21 +32,17 @@ func (r *Repository) SaveConfig(
 	if err != nil {
 		return nil, fmt.Errorf("pack config lock: %w", err)
 	}
-	if len(mediaIDs) > 0 {
-		var count int
-		err = tx.QueryRow(ctx, countAccessibleMediaQuery, orgID, mediaIDs).Scan(&count)
-		if err != nil {
-			return nil, fmt.Errorf("pack config validate media: %w", err)
-		}
-		if count != len(mediaIDs) {
-			return nil, ErrMediaNotAllowed
-		}
+	if err := validateMediaAccess(ctx, tx, orgID, mediaIDs); err != nil {
+		return nil, err
 	}
 	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, packID); err != nil {
 		return nil, fmt.Errorf("pack config clear media usages: %w", err)
 	}
 	if len(mediaIDs) > 0 {
 		if _, err = tx.Exec(ctx, insertPackMediaUsagesQuery, mediaIDs, packID); err != nil {
+			if isMediaFKViolation(err) {
+				return nil, ErrMediaNotFound
+			}
 			return nil, fmt.Errorf("pack config insert media usages: %w", err)
 		}
 	}
@@ -202,14 +198,8 @@ func (r *Repository) UpdateAdaptationConfig(
 	if err != nil {
 		return nil, fmt.Errorf("pack adaptation config lock: %w", err)
 	}
-	if len(mediaIDs) > 0 {
-		var count int
-		if err = tx.QueryRow(ctx, countAccessibleMediaQuery, orgID, mediaIDs).Scan(&count); err != nil {
-			return nil, fmt.Errorf("pack adaptation config validate media: %w", err)
-		}
-		if count != len(mediaIDs) {
-			return nil, ErrMediaNotAllowed
-		}
+	if err := validateMediaAccess(ctx, tx, orgID, mediaIDs); err != nil {
+		return nil, err
 	}
 	mediaRows, err := tx.Query(ctx, `SELECT media_id FROM media_usages WHERE source_id = $1`, adaptationID)
 	if err != nil {
@@ -224,6 +214,9 @@ func (r *Repository) UpdateAdaptationConfig(
 	}
 	if len(mediaIDs) > 0 {
 		if _, err = tx.Exec(ctx, insertAdaptationMediaUsagesQuery, mediaIDs, adaptationID); err != nil {
+			if isMediaFKViolation(err) {
+				return nil, ErrMediaNotFound
+			}
 			return nil, fmt.Errorf("pack adaptation config insert media usages: %w", err)
 		}
 	}
@@ -276,6 +269,9 @@ func (r *Repository) Assign(
 			return nil, fmt.Errorf("pack assignment upsert: %w", upsertErr)
 		}
 		if _, upsertErr = tx.Exec(ctx, replaceAdaptationUsagesQuery, packID, item.ID); upsertErr != nil {
+			if isMediaFKViolation(upsertErr) {
+				return nil, ErrMediaNotFound
+			}
 			return nil, fmt.Errorf("pack assignment media usages: %w", upsertErr)
 		}
 		result = append(result, *item)
@@ -335,4 +331,18 @@ func scanAdaptation(row rowScanner) (*Adaptation, error) {
 		&result.CreatedBy, &result.CreatedAt, &result.UpdatedAt,
 	)
 	return &result, err
+}
+
+func validateMediaAccess(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, mediaIDs []uuid.UUID) error {
+	if len(mediaIDs) == 0 {
+		return nil
+	}
+	var count int
+	if err := tx.QueryRow(ctx, countAccessibleMediaQuery, orgID, mediaIDs).Scan(&count); err != nil {
+		return fmt.Errorf("validate media access: %w", err)
+	}
+	if count != len(mediaIDs) {
+		return ErrMediaNotAllowed
+	}
+	return nil
 }

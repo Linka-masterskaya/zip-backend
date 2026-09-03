@@ -13,7 +13,7 @@ import (
 type fakeCleanupRepo struct {
 	getOldAudioFn    func(ctx context.Context, ttl time.Duration, limit int) ([]string, error)
 	deleteFromBankFn func(ctx context.Context, keys []string) error
-	cleanupOldJobsFn  func(ctx context.Context, cutoff time.Time) error
+	cleanupOldJobsFn func(ctx context.Context, cutoff time.Time) error
 	deleteBankCalled bool
 	deleteJobsCalled bool
 }
