@@ -19,7 +19,7 @@ const (
 var sectionLabels = map[string]string{
 	SectionLibrary:  "Библиотека",
 	SectionMy:       "Мои наборы",
-	SectionStudents: "Карточка учеников",
+	SectionStudents: "Карточки учеников",
 }
 
 // sectionLabel возвращает название разделов для breadcrumbs.
