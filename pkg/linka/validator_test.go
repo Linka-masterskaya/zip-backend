@@ -60,6 +60,21 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
+func TestValidateConfigAllowsBlockName(t *testing.T) {
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{
+			"id":"block","type":"grid","name":"Животные",
+			"elements":[{"id":"el","kind":"text","value":"кот"}]
+		}]
+	}`)
+
+	if err := ValidateConfig(t.Context(), config); err != nil {
+		t.Fatalf("config with block name must be valid: %v", err)
+	}
+}
+
 func TestValidateConfigAllowsPicturesBankSourceID(t *testing.T) {
 	config := json.RawMessage(`{
 		"metadata":{"version":"2.0"},
