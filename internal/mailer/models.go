@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"io"
 )
 
 // EmailSender — interface for sending emails.
@@ -18,12 +19,23 @@ const (
 	PasswordReset Template = "password_reset"
 	EmailChange   Template = "email_change"
 	AccountExists Template = "account_exists"
+	PackShare     Template = "pack_share"
 )
+
+// Attachment is a streamed email attachment. The caller owns the reader and
+// keeps it alive until Send returns.
+type Attachment struct {
+	Filename    string
+	ContentType string
+	Reader      io.Reader
+}
 
 // EmailData - email data.
 type EmailData struct {
-	Token    string
-	Username string
-	Email    string
-	NewEmail string
+	Token       string
+	Username    string
+	Email       string
+	NewEmail    string
+	PackTitle   string
+	Attachments []Attachment
 }

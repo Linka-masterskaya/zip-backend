@@ -455,6 +455,58 @@ func TestCache(t *testing.T) {
 		require.LessOrEqual(t, retry, int64(60), "retry-after must not exceed window")
 	})
 
+	t.Run("ReserveCounter_IsAtomicAndDoesNotOvershoot", func(t *testing.T) {
+		ctx := subCtx(t)
+		flush(ctx, t, raw)
+
+		allowed, value, err := c.ReserveCounter(ctx, "pack-share:test", 6, 10, time.Minute)
+		require.NoError(t, err)
+		require.True(t, allowed)
+		require.Equal(t, int64(6), value)
+
+		allowed, value, err = c.ReserveCounter(ctx, "pack-share:test", 5, 10, time.Minute)
+		require.NoError(t, err)
+		require.False(t, allowed)
+		require.Equal(t, int64(6), value, "rejected reservation must not consume quota")
+
+		ttl, err := raw.TTL(ctx, "pack-share:test").Result()
+		require.NoError(t, err)
+		require.Greater(t, ttl, time.Duration(0))
+	})
+
+	t.Run("ReserveCounterOnce_DoesNotDoubleChargeRetries", func(t *testing.T) {
+		ctx := subCtx(t)
+		flush(ctx, t, raw)
+
+		allowed, value, err := c.ReserveCounterOnce(
+			ctx, "pack-share:bytes", "pack-share:bytes:job-1", 6, 10, time.Minute,
+		)
+		require.NoError(t, err)
+		require.True(t, allowed)
+		require.Equal(t, int64(6), value)
+
+		allowed, value, err = c.ReserveCounterOnce(
+			ctx, "pack-share:bytes", "pack-share:bytes:job-1", 6, 10, time.Minute,
+		)
+		require.NoError(t, err)
+		require.True(t, allowed)
+		require.Equal(t, int64(6), value, "same job retry must not reserve bytes twice")
+
+		allowed, value, err = c.ReserveCounterOnce(
+			ctx, "pack-share:bytes", "pack-share:bytes:job-1", 8, 10, time.Minute,
+		)
+		require.NoError(t, err)
+		require.True(t, allowed)
+		require.Equal(t, int64(8), value, "only size growth should consume additional bytes")
+
+		allowed, value, err = c.ReserveCounterOnce(
+			ctx, "pack-share:bytes", "pack-share:bytes:job-2", 3, 10, time.Minute,
+		)
+		require.NoError(t, err)
+		require.False(t, allowed)
+		require.Equal(t, int64(8), value)
+	})
+
 	t.Run("IncrCounter_SetsTTLOnFirst", func(t *testing.T) {
 		// TTL ставится на ПЕРВОМ инкременте (count==1), окно лимита не вечное.
 		ctx := subCtx(t)

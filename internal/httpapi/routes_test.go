@@ -34,6 +34,11 @@ func assertPatterns(t *testing.T, got, want []string) {
 	}
 }
 
+func TestRegisterPackRoutesWithServeMux(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterPackRoutes(mux, middleware.NewAuthMW([]byte("test-secret")), passthrough, PackHandlers{})
+}
+
 func TestRegisterPackRoutesPatterns(t *testing.T) {
 	m := &recordingMux{}
 	RegisterPackRoutes(m, middleware.NewAuthMW([]byte("test-secret")), passthrough, PackHandlers{})
@@ -41,6 +46,8 @@ func TestRegisterPackRoutesPatterns(t *testing.T) {
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/packs",
 		"POST /api/v1/packs/{id}/duplicate",
+		"POST /api/v1/packs/{id}/share",
+		"GET /api/v1/pack-share-tasks/{id}",
 		"GET /api/v1/packs/{id}",
 		"GET /api/v1/packs",
 		"PATCH /api/v1/packs/{id}",

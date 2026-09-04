@@ -1199,6 +1199,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/packs/{id}/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Поделиться набором с папкой или учеником
+         * @description Для target_type=folder переиспользует общую операцию дублирования, создаёт независимую draft-копию в target_id и сохраняет исходное название без суффикса «(копия)». Для target_type=student проверяет владение учеником и паком, затем создаёт durable outbox-задачу в PostgreSQL. Worker забирает queued-задачи с lease через FOR UPDATE SKIP LOCKED, поэтому принятый 202 переживает рестарт/deploy и может быть продолжен другим инстансом. Вложение ограничено 15 MiB по умолчанию; для больших архивов задача завершится failed и клиенту следует использовать прямой GET /packs/{id}/export. Статус доставки доступен по task id.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SharePackRequest"];
+                };
+            };
+            responses: {
+                /** @description target_type=folder — независимая draft-копия создана */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Pack"];
+                    };
+                };
+                /** @description target_type=student — задача доставки принята */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PackShareTask"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                /** @description Набор или ученик не найден/недоступен */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Исчерпан суточный лимит email-отправок */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Durable outbox недоступен или сервис останавливается */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pack-share-tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Получить статус отправки пака ученику */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Текущий статус фоновой доставки */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PackShareTask"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                /** @description Задача не найдена или принадлежит другому пользователю */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/packs/{id}/move": {
         parameters: {
             query?: never;
@@ -2760,6 +2885,23 @@ export interface components {
         DuplicatePackRequest: {
             /** Format: uuid */
             folder_id?: string | null;
+        };
+        SharePackRequest: {
+            /** @enum {string} */
+            target_type: "folder" | "student";
+            /** Format: uuid */
+            target_id: string;
+        };
+        PackShareTask: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "queued" | "processing" | "sent" | "failed";
+            message?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
         };
         UpdatePackRequest: {
             title?: string;

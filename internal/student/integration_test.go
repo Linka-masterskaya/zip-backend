@@ -33,6 +33,15 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 	assert.Equal(t, "Анна", created.Name)
 	assert.Equal(t, "active", created.Status)
 
+	got, err := service.Get(studentContext(ownerID), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, got.ID)
+	assert.Equal(t, "student@example.com", got.Email)
+	assert.Equal(t, "Анна", got.Name)
+
+	_, err = service.Get(studentContext(foreignID), created.ID)
+	assertStudentStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+
 	ownerList, err := service.List(studentContext(ownerID), ListInput{})
 	require.NoError(t, err)
 	require.Len(t, ownerList.Items, 1)

@@ -62,7 +62,7 @@ func buildPicturesSource(in *infra) (picturebank.Source, error) {
 }
 
 // buildModules wires every domain module on top of the infrastructure.
-func buildModules(in *infra) (*modules, error) {
+func buildModules(in *infra, closer *Closer) (*modules, error) {
 	cfg := in.cfg
 
 	resendPolicy := middleware.RateLimitPolicy{
@@ -79,6 +79,7 @@ func buildModules(in *infra) (*modules, error) {
 
 	folderRepo := folder.NewRepository(in.db)
 	studentRepo := student.NewRepository(in.db)
+	studentService := student.NewService(studentRepo, in.crypto, in.storage, mediaService)
 
 	picturesSource, err := buildPicturesSource(in)
 	if err != nil {
@@ -102,7 +103,26 @@ func buildModules(in *infra) (*modules, error) {
 			return image.Data, image.ContentType, nil
 		},
 	)
-
+	shareService := pack.NewShareServiceWithOutbox(
+		packService,
+		contentService,
+		studentService,
+		in.mailer,
+		packRepo,
+		in.redis,
+		pack.ShareConfig{
+			Workers:            cfg.PackShare.Workers,
+			PollInterval:       cfg.PackShare.PollInterval,
+			JobTimeout:         cfg.PackShare.JobTimeout,
+			DailySendsPerUser:  cfg.PackShare.DailySendsPerUser,
+			DailyBytesPerUser:  cfg.PackShare.DailyBytesPerUser,
+			MaxAttachmentBytes: cfg.PackShare.MaxAttachmentBytes,
+			SendRetries:        cfg.PackShare.SendRetries,
+			MaxAttempts:        cfg.PackShare.MaxAttempts,
+			SendTimeout:        cfg.PackShare.SendTimeout,
+			RetryBackoff:       cfg.PackShare.RetryBackoff,
+		},
+	)
 	authCfg := auth.Config{
 		JWTSecret:                cfg.JWT.Secret,
 		FrontendURL:              cfg.App.FrontendURL,
@@ -162,6 +182,13 @@ func buildModules(in *infra) (*modules, error) {
 		return nil, fmt.Errorf("health checker init: %w", err)
 	}
 
+	shareService.Start()
+	closer.Add("pack share worker", func(ctx context.Context) error {
+		shareCtx, cancel := context.WithTimeout(ctx, cfg.PackShare.ShutdownTimeout)
+		defer cancel()
+		return shareService.Shutdown(shareCtx)
+	})
+
 	ttsClient := ttsapi.NewClient(
 		cfg.TTS.ServiceURL,
 		cfg.TTS.Timeout,
@@ -214,6 +241,7 @@ func buildModules(in *infra) (*modules, error) {
 	return &modules{
 		packs: httpapi.PackHandlers{
 			Pack:     pack.NewHandler(packService),
+			Share:    pack.NewShareHandler(shareService),
 			Content:  pack.NewContentHandler(contentService),
 			Favorite: pack.NewFavoriteHandler(favoriteService),
 		},
@@ -226,9 +254,7 @@ func buildModules(in *infra) (*modules, error) {
 			),
 		},
 		students: httpapi.StudentHandlers{
-			Student: student.NewHandler(
-				student.NewService(studentRepo, in.crypto, in.storage, mediaService),
-			),
+			Student: student.NewHandler(studentService),
 		},
 		auth: httpapi.AuthHandlers{
 			Auth:  auth.NewHandler(authService, authCfg),

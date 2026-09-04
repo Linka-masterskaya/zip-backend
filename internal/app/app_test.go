@@ -11,6 +11,17 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 )
 
+func TestInfrastructureShutdownTimeoutIncludesPackShareDrainBudget(t *testing.T) {
+	cfg := &config.Config{
+		Server:    config.ServerConfig{ShutdownTimeout: 30 * time.Second},
+		PackShare: config.PackShareConfig{ShutdownTimeout: 3 * time.Minute},
+	}
+
+	if got, want := infrastructureShutdownTimeout(cfg), 3*time.Minute+30*time.Second; got != want {
+		t.Fatalf("infrastructureShutdownTimeout() = %s, want %s", got, want)
+	}
+}
+
 func TestShutdownClosesInfrastructureAfterHTTPDeadline(t *testing.T) {
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})

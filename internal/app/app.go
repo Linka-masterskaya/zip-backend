@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -50,7 +51,7 @@ func Bootstrap(cfgPath string) (*App, error) {
 
 	// Any failure past this point must release what the closer already holds.
 	abort := func(err error) (*App, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), infrastructureShutdownTimeout(cfg))
 		defer cancel()
 		if closeErr := closer.Close(ctx); closeErr != nil {
 			slog.Error("cleanup after failed bootstrap", logger.Err(closeErr))
@@ -63,7 +64,7 @@ func Bootstrap(cfgPath string) (*App, error) {
 		return abort(err)
 	}
 
-	mods, err := buildModules(in)
+	mods, err := buildModules(in, closer)
 	if err != nil {
 		return abort(err)
 	}
@@ -165,6 +166,16 @@ func (a *App) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
+func infrastructureShutdownTimeout(cfg *config.Config) time.Duration {
+	timeout := cfg.Server.ShutdownTimeout
+	if cfg.PackShare.ShutdownTimeout > 0 {
+		// Pack-share closes before Redis/Postgres (LIFO closer). Give it its own
+		// drain budget and preserve the normal infrastructure budget afterwards.
+		timeout += cfg.PackShare.ShutdownTimeout
+	}
+	return timeout
+}
+
 func (a *App) shutdown() error {
 	slog.Info("shutting down...")
 
@@ -190,7 +201,7 @@ func (a *App) shutdown() error {
 	// closing database, Redis and NATS connections.
 	infraCtx, cancelInfra := context.WithTimeout(
 		context.Background(),
-		a.cfg.Server.ShutdownTimeout,
+		infrastructureShutdownTimeout(a.cfg),
 	)
 	defer cancelInfra()
 

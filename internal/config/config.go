@@ -32,6 +32,7 @@ type Config struct {
 	Server       ServerConfig       `mapstructure:"server"`
 	TTS          TTSConfig          `mapstructure:"ttsapi"`
 	Cron         CronConfig         `mapstructure:"cron"`
+	PackShare    PackShareConfig    `mapstructure:"pack_share"`
 }
 
 // MigrationConfig contains only the settings required by the migration binary.
@@ -209,6 +210,21 @@ type SMTPConfig struct {
 	Timeout          time.Duration `mapstructure:"timeout"`
 	RequireFromMatch bool          `mapstructure:"require_from_match"`
 	DailyLimit       int           `mapstructure:"daily_limit_alert"`
+}
+
+// PackShareConfig controls asynchronous pack delivery by email.
+type PackShareConfig struct {
+	Workers            int           `mapstructure:"workers"`
+	PollInterval       time.Duration `mapstructure:"poll_interval"`
+	JobTimeout         time.Duration `mapstructure:"job_timeout"`
+	DailySendsPerUser  int64         `mapstructure:"daily_sends_per_user"`
+	DailyBytesPerUser  int64         `mapstructure:"daily_bytes_per_user"`
+	MaxAttachmentBytes int64         `mapstructure:"max_attachment_bytes"`
+	SendRetries        int           `mapstructure:"send_retries"`
+	MaxAttempts        int           `mapstructure:"max_attempts"`
+	SendTimeout        time.Duration `mapstructure:"send_timeout"`
+	RetryBackoff       time.Duration `mapstructure:"retry_backoff"`
+	ShutdownTimeout    time.Duration `mapstructure:"shutdown_timeout"`
 }
 
 // AuthConfig contains authentication and security settings.
@@ -447,6 +463,19 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pictures_bank.max_metadata_bytes", 2097152)
 	v.SetDefault("pictures_bank.max_image_bytes", 10485760)
 
+	// Pack share worker defaults. Email attachments stay deliberately below
+	// common 20-25 MiB receiver limits to account for MIME/base64 overhead.
+	v.SetDefault("pack_share.workers", 2)
+	v.SetDefault("pack_share.poll_interval", "500ms")
+	v.SetDefault("pack_share.job_timeout", "10m")
+	v.SetDefault("pack_share.daily_sends_per_user", 10)
+	v.SetDefault("pack_share.daily_bytes_per_user", 104857600) // 100 MiB/day/user
+	v.SetDefault("pack_share.max_attachment_bytes", 15728640)  // 15 MiB
+	v.SetDefault("pack_share.send_retries", 3)
+	v.SetDefault("pack_share.send_timeout", "30s")
+	v.SetDefault("pack_share.retry_backoff", "2s")
+	v.SetDefault("pack_share.shutdown_timeout", "3m")
+
 	// External Pictures Bank remains the default; local mode is file-owned.
 	v.SetDefault("feature_flags.local_bank", false)
 
@@ -563,6 +592,12 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 
+	// Pack sharing validation. These limits are anti-abuse controls and must
+	// never be silently disabled by an invalid environment override.
+	if err := validatePackShareConfig(&cfg.PackShare); err != nil {
+		return err
+	}
+
 	// TTSapi validation
 	if cfg.TTS.ServiceURL == "" {
 		return fmt.Errorf("ttsapi.service_url is required")
@@ -577,6 +612,47 @@ func validateConfig(cfg *Config) error {
 	// CORS validation
 	if err := validateCORSConfig(&cfg.CORS); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validatePackShareConfig(cfg *PackShareConfig) error {
+	switch {
+	case cfg.Workers <= 0:
+		return fmt.Errorf("pack_share.workers must be > 0")
+	case cfg.PollInterval <= 0:
+		return fmt.Errorf("pack_share.poll_interval must be > 0")
+	case cfg.JobTimeout <= 0:
+		return fmt.Errorf("pack_share.job_timeout must be > 0")
+	case cfg.DailySendsPerUser <= 0:
+		return fmt.Errorf("pack_share.daily_sends_per_user must be > 0")
+	case cfg.DailyBytesPerUser <= 0:
+		return fmt.Errorf("pack_share.daily_bytes_per_user must be > 0")
+	case cfg.MaxAttachmentBytes <= 0:
+		return fmt.Errorf("pack_share.max_attachment_bytes must be > 0")
+	case cfg.SendRetries <= 0:
+		return fmt.Errorf("pack_share.send_retries must be > 0")
+	case cfg.MaxAttempts <= 0:
+		return fmt.Errorf("pack_share.max_attempts must be > 0")
+	case cfg.SendTimeout <= 0:
+		return fmt.Errorf("pack_share.send_timeout must be > 0")
+	case cfg.RetryBackoff <= 0:
+		return fmt.Errorf("pack_share.retry_backoff must be > 0")
+	case cfg.ShutdownTimeout <= 0:
+		return fmt.Errorf("pack_share.shutdown_timeout must be > 0")
+	}
+
+	// One claimed outbox job must have enough execution time to finish all SMTP
+	// retries plus a conservative archive-build budget. Deployment shutdown is
+	// intentionally independent: if it expires, the durable job is requeued.
+	retryBackoffSteps := int64(cfg.SendRetries-1) * int64(cfg.SendRetries) / 2
+	minimumJobTimeout := time.Duration(cfg.SendRetries)*cfg.SendTimeout +
+		time.Duration(retryBackoffSteps)*cfg.RetryBackoff + 30*time.Second
+	if cfg.JobTimeout < minimumJobTimeout {
+		return fmt.Errorf(
+			"pack_share.job_timeout must be >= %s for configured retry budget",
+			minimumJobTimeout,
+		)
 	}
 	return nil
 }

@@ -57,7 +57,8 @@ type CreateInput struct {
 
 // DuplicateInput contains optional destination settings for a pack copy.
 type DuplicateInput struct {
-	FolderID *uuid.UUID
+	FolderID      *uuid.UUID
+	PreserveTitle bool
 }
 
 // ListItem describes one pack placement returned by the global pack list.

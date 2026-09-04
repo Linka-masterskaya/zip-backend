@@ -261,6 +261,28 @@ components:
       properties:
         folder_id: { type: [string, "null"], format: uuid }
 
+    SharePackRequest:
+      type: object
+      required: [target_type, target_id]
+      additionalProperties: false
+      properties:
+        target_type:
+          type: string
+          enum: [folder, student]
+        target_id: { type: string, format: uuid }
+
+    PackShareTask:
+      type: object
+      required: [id, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [queued, processing, sent, failed]
+        message: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
     UpdatePackRequest:
       type: object
       properties:
@@ -1544,6 +1566,63 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Исходный набор не найден или недоступен }
+
+  /packs/{id}/share:
+    post:
+      tags: [packs]
+      summary: Поделиться набором с папкой или учеником
+      description: >-
+        Для target_type=folder переиспользует общую операцию дублирования,
+        создаёт независимую draft-копию в target_id и сохраняет исходное
+        название без суффикса «(копия)». Для target_type=student проверяет
+        владение учеником и паком, затем создаёт durable outbox-задачу в PostgreSQL.
+        Worker забирает queued-задачи с lease через FOR UPDATE SKIP LOCKED, поэтому
+        принятый 202 переживает рестарт/deploy и может быть продолжен другим инстансом.
+        Вложение ограничено 15 MiB по умолчанию; для больших архивов задача завершится
+        failed и клиенту следует использовать прямой GET /packs/{id}/export.
+        Статус доставки доступен по task id.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SharePackRequest' }
+      responses:
+        '201':
+          description: target_type=folder — независимая draft-копия создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pack' }
+        '202':
+          description: target_type=student — задача доставки принята
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackShareTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Набор или ученик не найден/недоступен }
+        '429': { description: Исчерпан суточный лимит email-отправок }
+        '503': { description: Durable outbox недоступен или сервис останавливается }
+
+  /pack-share-tasks/{id}:
+    get:
+      tags: [packs]
+      summary: Получить статус отправки пака ученику
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Текущий статус фоновой доставки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackShareTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Задача не найдена или принадлежит другому пользователю }
 
   /packs/{id}/move:
     post:
