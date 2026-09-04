@@ -66,6 +66,7 @@ type LooksConfig struct {
 // topColumns.
 type LooksPage struct {
 	ID            string      `json:"id"`
+	Name          string      `json:"name,omitempty"`
 	Mode          string      `json:"mode"`
 	Columns       int         `json:"columns"`
 	Rows          int         `json:"rows"`
@@ -128,6 +129,7 @@ func ToLooks(cfg *Config) (*LooksConfig, error) {
 		if err != nil {
 			return nil, err
 		}
+		page.Name = cfg.Blocks[i].Name
 		out.Pages = append(out.Pages, *page)
 	}
 	return out, nil
