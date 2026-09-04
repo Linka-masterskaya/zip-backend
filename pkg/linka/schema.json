@@ -31,6 +31,7 @@
 				"additionalProperties": false,
 				"properties": {
 					"id": { "type": "string", "minLength": 1 },
+					"name": { "type": "string", "minLength": 1  },
 					"type": {
 						"type": "string",
 						"enum": [
