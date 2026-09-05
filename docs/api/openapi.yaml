@@ -507,6 +507,36 @@ components:
           description: Сложность набора; возвращается только для `type = pack`, может быть `null`
         updated_at: { type: string, format: date-time }
 
+    CurrentFolder:
+      type: object
+      description: Запрошенная папка. Отсутствует (null), если запрошен корень раздела.
+      required: [id, name, parent_id]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        parent_id:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Родитель этой папки; null — папка лежит в корне раздела,
+          }
+
+    Breadcrumb:
+      type: object
+      description: >-
+        Один узел пути от корня раздела до текущей папки. Первый элемент
+        breadcrumbs — всегда сам раздел: id = null, name = его подпись
+        («Мои наборы», «Библиотека», «Карточки учеников»).
+      required: [id, name]
+      properties:
+        id:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: null для узла-раздела (первый элемент пути),
+          }
+        name: { type: string }
+
     SettingsDocument:
       type: object
       additionalProperties: false
@@ -1118,7 +1148,7 @@ paths:
       summary: Содержимое узла дерева — папки и наборы одним списком
       description: >-
         Один эндпоинт на весь экран. Без `parent_id` возвращает корень раздела:
-        «Мои наборы», «Библиотека» и «Картотека учеников» — это пункты меню, а не
+        «Мои наборы», «Библиотека» и «Карточки учеников» — это пункты меню, а не
         папки, поэтому адресовать корень id папки нельзя. В корне лежат только
         папки: у набора `folder_id` объявлен NOT NULL, то есть набор всегда
         находится внутри какой-то папки.
@@ -1143,8 +1173,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, limit, offset, total]
+                required: [current_folder, breadcrumbs, items, limit, offset, total]
                 properties:
+                  current_folder:
+                    oneOf:
+                      - $ref: '#/components/schemas/CurrentFolder'
+                      - type: "null"
+                  breadcrumbs:
+                    {
+                      type: array,
+                      items: { $ref: '#/components/schemas/Breadcrumb' },
+                    }
                   items:
                     {
                       type: array,
@@ -1547,7 +1586,7 @@ paths:
         Свой набор без folder_id копируется в исходную папку. Для опубликованного
         набора другого пользователя той же организации folder_id обязателен.
         Целевая папка должна принадлежать пользователю и находиться в разделе
-        «Мои наборы» или «Картотека учеников». Копия всегда создаётся как draft.
+        «Мои наборы» или «Карточки учеников». Копия всегда создаётся как draft.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
