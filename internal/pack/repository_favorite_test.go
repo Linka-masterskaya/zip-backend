@@ -187,7 +187,7 @@ func TestRepositoryListFavoritesPaginates(t *testing.T) {
 	assert.Empty(t, beyond)
 	assert.Equal(t, 3, total)
 }
-func TestRepositoryListWithTotalConsistentUnderConcurrentWrites(t *testing.T) {
+func TestRepositoryConsistencyInCompetitiveAddingAndDeletingToFavorites(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	_, userID, folderID := seedPackOwner(t, pool, "concurrent favorite org")

@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// PutFavorite adds favorite bookmarks. Repeated calls are idempotent.
 func (r *Repository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) error {
 	var id uuid.UUID
 	err := r.pool.QueryRow(ctx, putFavoriteQuery, userID, packID).Scan(&id)
@@ -22,7 +21,6 @@ func (r *Repository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) 
 	return nil
 }
 
-// DeleteFavorite deletes the pack bookmark for the user. Repeated calls are idempotent.
 func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUID) error {
 	if _, err := r.pool.Exec(ctx, deleteFavoriteQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete favorite: %w", err)
@@ -30,8 +28,6 @@ func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUI
 	return nil
 }
 
-// listFavorites returns a limited page of the packs currently available to the user.
-// It should run in tx, like countFavorites (see ListFavoritesWithTotal), so that both see the same snapshot.
 func (r *Repository) listFavorites(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -59,8 +55,6 @@ func (r *Repository) listFavorites(
 	return packs, nil
 }
 
-// countFavorites returns the total number of favorite packages currently available to the user, regardless of pagination.
-// It should run in the same tx as listFavorites (see ListFavoritesWithTotal) so that both see the same snapshot.
 func (r *Repository) countFavorites(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -74,9 +68,6 @@ func (r *Repository) countFavorites(
 	return total, nil
 }
 
-// ListFavoritesWithTotal returns a limited page of favorite packages along with the total number,
-// both are calculated within the same REPEATABLE READ, so they always display the same snapshot
-// regardless of simultaneous favorite/unfavorite operations.
 func (r *Repository) ListFavoritesWithTotal(
 	ctx context.Context,
 	userID uuid.UUID,
