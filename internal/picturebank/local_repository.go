@@ -124,6 +124,33 @@ func (r *localRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *localRepository) PicturesByCategory(ctx context.Context, category string) ([]localPictureMetadata, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, category, title, mime_type, size_bytes, minio_key, created_at
+		FROM picture_bank_images
+		WHERE category = $1
+		ORDER BY lower(title), id
+		LIMIT 100
+	`, category)
+	if err != nil {
+		return nil, fmt.Errorf("local picture bank by category: %w", err)
+	}
+	defer rows.Close()
+
+	pictures := make([]localPictureMetadata, 0)
+	for rows.Next() {
+		var picture localPictureMetadata
+		if err = scanLocalPicture(rows, &picture); err != nil {
+			return nil, fmt.Errorf("local picture bank by category scan: %w", err)
+		}
+		pictures = append(pictures, picture)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("local picture bank by catogory rows: %w", err)
+	}
+	return pictures, nil
+}
+
 type localRowScanner interface {
 	Scan(...any) error
 }

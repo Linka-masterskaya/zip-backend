@@ -18,6 +18,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type foodPictureResponse struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	MIMEType   string   `json:"mimeType"`
+	Categories []string `json:"categories"`
+	URL        string   `json:"url"`
+}
+
 func TestE2E_FoodPicturesFolderAssignedToStudent(t *testing.T) {
 	pool := e2eDatabase(t)
 	ownerID := e2eUser(t, pool, "food-pictures-owner")
@@ -35,9 +43,9 @@ func TestE2E_FoodPicturesFolderAssignedToStudent(t *testing.T) {
 		{query: "суп", count: 1},
 		{query: "каша", count: 1},
 	}
-	selected := make([]picturebank.Picture, 0, 5)
+	selected := make([]foodPictureResponse, 0, 5)
 	for _, search := range searches {
-		pictures := e2eJSON[[]picturebank.Picture](
+		pictures := e2eJSON[[]foodPictureResponse](
 			t,
 			e2eRequest(t, server, token, http.MethodGet,
 				"/api/v1/pictures/search?query="+url.QueryEscape(search.query), nil),
@@ -73,7 +81,7 @@ func TestE2E_FoodPicturesFolderAssignedToStudent(t *testing.T) {
 	)
 
 	// The user viewed five candidates and deliberately left the red apple out.
-	usedPictures := []picturebank.Picture{selected[0], selected[1], selected[3], selected[4]}
+	usedPictures := []foodPictureResponse{selected[0], selected[1], selected[3], selected[4]}
 	configuredPack := e2eJSON[pack.Pack](
 		t,
 		e2eRequest(t, server, token, http.MethodPut,
@@ -173,7 +181,11 @@ func (s *foodPictureSource) Image(_ context.Context, pictureID string) (*picture
 	return &picturebank.Image{Data: append([]byte(nil), data...), ContentType: "image/png"}, nil
 }
 
-func foodPackConfig(pictures []picturebank.Picture) map[string]any {
+func (s *foodPictureSource) PicturesByCategory(_ context.Context, categoryID string) ([]picturebank.Picture, error) {
+	return nil, nil
+}
+
+func foodPackConfig(pictures []foodPictureResponse) map[string]any {
 	elements := make([]any, 0, len(pictures))
 	for _, picture := range pictures {
 		elements = append(elements, map[string]any{
@@ -192,7 +204,7 @@ func foodPackConfig(pictures []picturebank.Picture) map[string]any {
 	}
 }
 
-func pictureNames(pictures []picturebank.Picture) []string {
+func pictureNames(pictures []foodPictureResponse) []string {
 	names := make([]string, 0, len(pictures))
 	for _, picture := range pictures {
 		names = append(names, picture.Name)
@@ -200,7 +212,7 @@ func pictureNames(pictures []picturebank.Picture) []string {
 	return names
 }
 
-func pictureIDs(pictures []picturebank.Picture) []uuid.UUID {
+func pictureIDs(pictures []foodPictureResponse) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(pictures))
 	for _, picture := range pictures {
 		ids = append(ids, uuid.MustParse(picture.ID))

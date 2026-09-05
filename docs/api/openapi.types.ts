@@ -948,6 +948,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pictures/category/{categoryId}/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Получить изображения конкретной категории Pictures Bank
+         * @description Возвращает список изображений, принадлежащих указанной категории. В external-режиме ответ кэшируется, а исходящие запросы ограничены через Redis.
+         *     Response contract идентичен /pictures/search.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description UUID категории изображений */
+                    categoryId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Список изображений категории */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Picture"][];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                429: components["responses"]["TooMany"];
+                /** @description Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/packs": {
         parameters: {
             query?: never;
@@ -2972,7 +3024,10 @@ export interface components {
             id: string;
             name: string;
             mimeType?: string;
-            categories: components["schemas"]["PictureCategory"][];
+            /** @description Список названий категорий, к которым относится изображение */
+            categories: string[];
+            /** @description Защищённый proxy URL для получения контента через бэкенд (/api/v1/pictures/{id}/content) */
+            url: string;
         };
         PictureReference: {
             /** Format: uuid */

@@ -87,10 +87,36 @@ func TestHandlerSetsCachingAndRetryHeaders(t *testing.T) {
 		assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 		assert.Equal(t, "1", recorder.Header().Get("Retry-After"))
 	})
+
+	t.Run("pictures by category with DTO", func(t *testing.T) {
+		handler := NewHandler(&fakePictureService{
+			pictures: []Picture{{
+				ID:         "123e4567-e89b-12d3-a456-426614174000",
+				Name:       "Троллейбус",
+				MIMEType:   "image/png",
+				Categories: []Category{{ID: "transport", Name: "Транспорт"}},
+			}},
+		})
+		request := httptest.NewRequestWithContext(
+			t.Context(), http.MethodGet, "/api/v1/pictures/category/transport", nil,
+		)
+		request.SetPathValue("categoryId", "transport")
+		recorder := httptest.NewRecorder()
+
+		err := handler.PicturesByCategory(recorder, request)
+
+		assert.NoError(t, err)
+		assert.Equal(t, http.StatusOK, recorder.Code)
+		assert.Equal(t, "private, max-age=60", recorder.Header().Get("Cache-Control"))
+		assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+		assert.Contains(t, recorder.Body.String(), `"categories":["Транспорт"]`)
+		assert.Contains(t, recorder.Body.String(), `"url":"/api/v1/pictures/123e4567-e89b-12d3-a456-426614174000/content"`)
+	})
 }
 
 type fakePictureService struct {
 	categories []Category
+	pictures   []Picture
 	image      *Image
 	err        error
 }
@@ -100,7 +126,7 @@ func (f *fakePictureService) Categories(context.Context) ([]Category, error) {
 }
 
 func (f *fakePictureService) Search(context.Context, string) ([]Picture, error) {
-	return nil, f.err
+	return f.pictures, f.err
 }
 
 func (f *fakePictureService) Image(context.Context, string) (*Image, error) {
@@ -109,4 +135,8 @@ func (f *fakePictureService) Image(context.Context, string) (*Image, error) {
 
 func (f *fakePictureService) Import(context.Context, string) (*PictureReference, error) {
 	return nil, f.err
+}
+
+func (f *fakePictureService) PicturesByCategory(context.Context, string) ([]Picture, error) {
+	return f.pictures, f.err
 }
