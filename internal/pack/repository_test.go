@@ -1399,3 +1399,116 @@ func TestRepositoryDeleteKeepsTTSJobMedia(t *testing.T) {
 		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
 	assert.Equal(t, int64(6), used)
 }
+
+func TestRepositorySaveConfigCleansOrphanedMedia(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "save config org")
+
+	mediaID := uuid.New()
+	_, err := pool.Exec(t.Context(), `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
+		)
+		VALUES ($1, $2, $3, 'old.mp3', $4, 'audio/mpeg', 'audio', 10, $5)`,
+		mediaID, orgID, ownerID, "save-sha", "media/"+mediaID.String())
+	require.NoError(t, err)
+
+	_, err = pool.Exec(t.Context(),
+		`UPDATE organizations SET storage_used_bytes = 10 WHERE id = $1`, orgID)
+	require.NoError(t, err)
+
+	configWithMedia := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":2},
+		"blocks":[{
+			"id":"block","type":"grid",
+			"elements":[{"id":"aud","kind":"audio","media_id":"` + mediaID.String() + `"}]
+		}]
+	}`)
+
+	created, err := repo.Create(t.Context(), ownerID, CreateInput{
+		Title: "Save Config Pack", FolderID: folderID,
+		Config: []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`),
+	})
+	require.NoError(t, err)
+
+	// Первый SaveConfig — привязывает media.
+	_, err = repo.SaveConfig(t.Context(), ownerID, created.ID, configWithMedia, []uuid.UUID{mediaID})
+	require.NoError(t, err)
+
+	// Второй SaveConfig — убирает media, orphan должен удалиться.
+	emptyConfig := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[]
+	}`)
+	_, err = repo.SaveConfig(t.Context(), ownerID, created.ID, emptyConfig, nil)
+	require.NoError(t, err)
+
+	var count int
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
+	assert.Zero(t, count)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
+	assert.Equal(t, int64(0), used)
+}
+
+func TestRepositoryAssignCleansOrphanedMedia(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "assign cleanup org")
+
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+	created, err := repo.Create(t.Context(), ownerID, CreateInput{
+		Title: "Assign Pack", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+
+	studentID := uuid.New()
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO students (id, defectologist_id, email_encrypted, name, status)
+		VALUES ($1, $2, '\x00', 'Student', 'active')`, studentID, ownerID)
+	require.NoError(t, err)
+
+	// Первый assign — создаёт адаптацию.
+	assigned, err := repo.Assign(t.Context(), ownerID, created.ID, []uuid.UUID{studentID})
+	require.NoError(t, err)
+	require.Len(t, assigned, 1)
+
+	// Добавляем media в адаптацию напрямую.
+	mediaID := uuid.New()
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
+		)
+		VALUES ($1, $2, $3, 'adapt.mp3', $4, 'audio/mpeg', 'audio', 15, $5)`,
+		mediaID, orgID, ownerID, "assign-sha", "media/"+mediaID.String())
+	require.NoError(t, err)
+
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack_adaptation', $2)`, mediaID, assigned[0].ID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(t.Context(),
+		`UPDATE organizations SET storage_used_bytes = 15 WHERE id = $1`, orgID)
+	require.NoError(t, err)
+
+	// Повторный assign — replace usages, старая media становится orphan.
+	_, err = repo.Assign(t.Context(), ownerID, created.ID, []uuid.UUID{studentID})
+	require.NoError(t, err)
+
+	var count int
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
+	assert.Zero(t, count)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
+	assert.Equal(t, int64(0), used)
+}

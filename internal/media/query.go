@@ -79,7 +79,7 @@ const countMediaQuery = `
 	    OR ` + mediaUnreferencedPredicate + `
 	  )`
 
-const lockOwnedMediaQuery = `
+const lockMediaQuery = `
 	SELECT m.id, m.org_id, m.uploader_id, m.name, m.sha256, m.mime_type, m.media_type,
 	       m.size_bytes, m.minio_key, m.created_at
 	FROM media_files m
@@ -97,7 +97,7 @@ const lockOwnedMediaBatchQuery = `
 
 const mediaInUseQuery = `
 	SELECT EXISTS (SELECT 1 FROM media_usages WHERE media_id = $1)
-			OR EXISTS (SELECT 1 FROM students WHERE avatar_media_id = $1)
+			OR EXISTS (SELECT 1 FROM students WHERE avatar_media_id = $1 AND deleted_at IS NULL)
 			OR EXISTS (SELECT 1 FROM tts_jobs WHERE media_id = $1)`
 
 const referencedMediaBatchQuery = `
