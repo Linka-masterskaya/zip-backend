@@ -1,3 +1,5 @@
+# Файл работает в паре с 'compose.dev.yaml'
+
 services:
   zip-backend:
     build: .
@@ -54,57 +56,8 @@ services:
       timeout: 5s
       retries: 3
 
-  postgres:
-    image: postgres:15-alpine
-    container_name: postgres
-    restart: unless-stopped
-    environment:
-      - POSTGRES_USER=linka
-      - POSTGRES_PASSWORD=linka
-      - POSTGRES_DB=linka
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - linka-net
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-
-  mailpit:
-    image: axllent/mailpit:latest
-    container_name: mailpit
-    restart: unless-stopped
-    ports:
-      - "8025:8025"
-      - "1025:1025"
-    networks:
-      - linka-net
-    environment:
-      # Приём писем без учётных данных: config.dev.yml ходит в SMTP без логина,
-      # а с MP_SMTP_AUTH отправка падала на 535 и терялась в логе — регистрация
-      # отвечала 202, но письмо не приходило.
-      MP_SMTP_AUTH_ACCEPT_ANY: 1
-      MP_SMTP_AUTH_ALLOW_INSECURE: 1
-      MP_UI_AUTH: "${UI_USERNAME:-admin}:${UI_PASSWORD:-webpass}"
-      MP_MAX_MESSAGES: 1000
-    volumes:
-      - mailpit-data:/data
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8025/livez" ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-
 volumes:
-  grafana_data:
-  postgres_data:
-  mailpit-data:
+  grafana_data:  
     
 networks:
   linka-net:
