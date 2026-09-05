@@ -13,7 +13,7 @@ import (
 type fakeCleanupRepo struct {
 	getOldAudioFn    func(ctx context.Context, ttl time.Duration, limit int) ([]string, error)
 	deleteFromBankFn func(ctx context.Context, keys []string) error
-	deleteOldJobsFn  func(ctx context.Context, cutoff time.Time) error
+	cleanupOldJobsFn func(ctx context.Context, cutoff time.Time) error
 	deleteBankCalled bool
 	deleteJobsCalled bool
 }
@@ -33,10 +33,10 @@ func (f *fakeCleanupRepo) DeleteFromBank(ctx context.Context, keys []string) err
 	return nil
 }
 
-func (f *fakeCleanupRepo) DeleteOldJobs(ctx context.Context, cutoff time.Time) error {
+func (f *fakeCleanupRepo) CleanupOldJobs(ctx context.Context, cutoff time.Time) error {
 	f.deleteJobsCalled = true
-	if f.deleteOldJobsFn != nil {
-		return f.deleteOldJobsFn(ctx, cutoff)
+	if f.cleanupOldJobsFn != nil {
+		return f.cleanupOldJobsFn(ctx, cutoff)
 	}
 	return nil
 }
@@ -80,7 +80,7 @@ func TestCleanupOK(t *testing.T) {
 func TestCleanupDeletesOldJobs(t *testing.T) {
 	var gotCutoff time.Time
 	repo := &fakeCleanupRepo{
-		deleteOldJobsFn: func(_ context.Context, cutoff time.Time) error {
+		cleanupOldJobsFn: func(_ context.Context, cutoff time.Time) error {
 			gotCutoff = cutoff
 			return nil
 		},
@@ -161,7 +161,7 @@ func TestCleanupDeleteJobsErrorContinues(t *testing.T) {
 	keys := []string{"tts/aaa"}
 
 	repo := &fakeCleanupRepo{
-		deleteOldJobsFn: func(_ context.Context, _ time.Time) error {
+		cleanupOldJobsFn: func(_ context.Context, _ time.Time) error {
 			return fmt.Errorf("jobs table locked")
 		},
 		getOldAudioFn: func(_ context.Context, _ time.Duration, _ int) ([]string, error) {

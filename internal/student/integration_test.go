@@ -523,6 +523,11 @@ func TestStudentForceDeleteRemovesFolderTree(t *testing.T) {
 		VALUES ($1, 'pack', $2)`, mediaID, packID)
 	require.NoError(t, err)
 
+	_, err = pool.Exec(context.Background(),
+		`UPDATE organizations SET storage_used_bytes = 10
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID)
+	require.NoError(t, err)
+
 	// Без force ученик с папкой не удаляется.
 	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID),
 		apperr.ErrConflict.HTTPStatus)
@@ -534,9 +539,14 @@ func TestStudentForceDeleteRemovesFolderTree(t *testing.T) {
 	assertCount(t, pool, `SELECT count(*) FROM folders WHERE id = $1`, childID, 0)
 	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packID, 0)
 	assertCount(t, pool, `SELECT count(*) FROM media_usages WHERE source_id = $1`, packID, 0)
-	// Сам файл остаётся в банке: его удаляют отдельно, зато теперь он
-	// больше ничем не занят.
-	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, mediaID, 1)
+	// Файл без других ссылок удаляется вместе с возвратом квоты.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, mediaID, 0)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM organizations
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
+	assert.Equal(t, int64(0), used)
 
 	// Повторный вызов — 404.
 	assertStudentStatus(t, service.ForceDelete(studentContext(ownerID), created.ID),
@@ -605,4 +615,141 @@ func assertCount(t *testing.T, pool *pgxpool.Pool, query string, arg uuid.UUID, 
 	var got int
 	require.NoError(t, pool.QueryRow(context.Background(), query, arg).Scan(&got))
 	assert.Equal(t, want, got, query)
+}
+
+// TestStudentForceDeleteKeepsSharedMedia: файл, который используется
+// паками разных учеников, не удаляется при force-delete одного из них.
+func TestStudentForceDeleteKeepsSharedMedia(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	studentA, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "a@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+	studentB, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "b@example.com", Name: "Боря",
+	})
+	require.NoError(t, err)
+
+	_, folderA := seedStudentFolder(t, pool, ownerID, studentA.ID)
+	_, folderB := seedStudentFolder(t, pool, ownerID, studentB.ID)
+	packA := seedStudentPack(t, pool, ownerID, folderA)
+	packB := seedStudentPack(t, pool, ownerID, folderB)
+
+	mediaID := seedStudentMedia(t, pool, ownerID, "packs/shared.png")
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack', $2), ($1, 'pack', $3)`, mediaID, packA, packB)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(context.Background(),
+		`UPDATE organizations SET storage_used_bytes = 10
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID)
+	require.NoError(t, err)
+
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), studentA.ID))
+
+	// Файл жив — его держит usage от пака ученика B.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, mediaID, 1)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM organizations
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
+	assert.Equal(t, int64(10), used)
+}
+
+// TestStudentForceDeleteCleansAdaptationMedia: при удалении ученика
+// медиа его адаптации чужого пака удаляется, если больше нигде не
+// используется; сам пак и его медиа остаются.
+func TestStudentForceDeleteCleansAdaptationMedia(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	studentA, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "a@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+	studentB, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "b@example.com", Name: "Боря",
+	})
+	require.NoError(t, err)
+
+	_, folderA := seedStudentFolder(t, pool, ownerID, studentA.ID)
+	packA := seedStudentPack(t, pool, ownerID, folderA)
+
+	packMedia := seedStudentMedia(t, pool, ownerID, "packs/pack.png")
+	adaptMedia := seedStudentMedia(t, pool, ownerID, "packs/adapt.png")
+
+	// Usage пака — своя медиа.
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack', $2)`, packMedia, packA)
+	require.NoError(t, err)
+
+	// Адаптация пака A для ученика B с отдельной медиа.
+	var adaptID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO pack_adaptations (pack_id, student_id, config, created_by)
+		VALUES ($1, $2, '{}', $3)
+		RETURNING id`, packA, studentB.ID, ownerID).Scan(&adaptID))
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack_adaptation', $2)`, adaptMedia, adaptID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(context.Background(),
+		`UPDATE organizations SET storage_used_bytes = 20
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID)
+	require.NoError(t, err)
+
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), studentB.ID))
+
+	// Медиа адаптации удалена — больше не используется.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, adaptMedia, 0)
+	// Медиа пака A жива — пак A цел.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, packMedia, 1)
+	// Пак A цел.
+	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packA, 1)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM organizations
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
+	assert.Equal(t, int64(10), used)
+}
+
+// TestStudentForceDeleteCleansAvatarMedia: при удалении ученика
+// его аватар удаляется из media_files и квота возвращается,
+// если аватар больше нигде не используется.
+func TestStudentForceDeleteCleansAvatarMedia(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	avatarMedia := seedStudentMedia(t, pool, ownerID, "avatars/student.png")
+
+	student, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "a@example.com", Name: "Аня", AvatarMediaID: &avatarMedia,
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(context.Background(),
+		`UPDATE organizations SET storage_used_bytes = 10
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID)
+	require.NoError(t, err)
+
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), student.ID))
+
+	// Аватар удалён — больше не используется.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, avatarMedia, 0)
+
+	var used int64
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM organizations
+		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
+	assert.Equal(t, int64(0), used)
 }

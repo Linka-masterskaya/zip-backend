@@ -32,27 +32,30 @@ func (r *Repository) SaveConfig(
 	if err != nil {
 		return nil, fmt.Errorf("pack config lock: %w", err)
 	}
-	if len(mediaIDs) > 0 {
-		var count int
-		err = tx.QueryRow(ctx, countAccessibleMediaQuery, orgID, mediaIDs).Scan(&count)
-		if err != nil {
-			return nil, fmt.Errorf("pack config validate media: %w", err)
-		}
-		if count != len(mediaIDs) {
-			return nil, ErrMediaNotAllowed
-		}
+	if err := validateMediaAccess(ctx, tx, orgID, mediaIDs); err != nil {
+		return nil, err
+	}
+	oldMediaIDs, err := collectPackMedia(ctx, tx, packID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("pack config collect media: %w", err)
 	}
 	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, packID); err != nil {
 		return nil, fmt.Errorf("pack config clear media usages: %w", err)
 	}
 	if len(mediaIDs) > 0 {
 		if _, err = tx.Exec(ctx, insertPackMediaUsagesQuery, mediaIDs, packID); err != nil {
+			if isMediaFKViolation(err) {
+				return nil, ErrMediaNotFound
+			}
 			return nil, fmt.Errorf("pack config insert media usages: %w", err)
 		}
 	}
 	result, err := scanPack(tx.QueryRow(ctx, savePackConfigQuery, userID, packID, config))
 	if err != nil {
 		return nil, fmt.Errorf("pack config update: %w", err)
+	}
+	if err = deleteOrphanedMedia(ctx, tx, oldMediaIDs); err != nil {
+		return nil, fmt.Errorf("pack config orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("pack config commit: %w", err)
@@ -202,26 +205,34 @@ func (r *Repository) UpdateAdaptationConfig(
 	if err != nil {
 		return nil, fmt.Errorf("pack adaptation config lock: %w", err)
 	}
-	if len(mediaIDs) > 0 {
-		var count int
-		if err = tx.QueryRow(ctx, countAccessibleMediaQuery, orgID, mediaIDs).Scan(&count); err != nil {
-			return nil, fmt.Errorf("pack adaptation config validate media: %w", err)
-		}
-		if count != len(mediaIDs) {
-			return nil, ErrMediaNotAllowed
-		}
+	if err := validateMediaAccess(ctx, tx, orgID, mediaIDs); err != nil {
+		return nil, err
+	}
+	mediaRows, err := tx.Query(ctx, `SELECT media_id FROM media_usages WHERE source_id = $1`, adaptationID)
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptation config collect media: %w", err)
+	}
+	oldMediaIDs, err := pgx.CollectRows(mediaRows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, fmt.Errorf("pack adaptation config collect media: %w", err)
 	}
 	if _, err = tx.Exec(ctx, deleteAdaptationUsagesQuery, adaptationID); err != nil {
 		return nil, fmt.Errorf("pack adaptation config clear media usages: %w", err)
 	}
 	if len(mediaIDs) > 0 {
 		if _, err = tx.Exec(ctx, insertAdaptationMediaUsagesQuery, mediaIDs, adaptationID); err != nil {
+			if isMediaFKViolation(err) {
+				return nil, ErrMediaNotFound
+			}
 			return nil, fmt.Errorf("pack adaptation config insert media usages: %w", err)
 		}
 	}
 	result, err := scanAdaptation(tx.QueryRow(ctx, updateAdaptationConfigQuery, adaptationID, config))
 	if err != nil {
 		return nil, fmt.Errorf("pack adaptation config update: %w", err)
+	}
+	if err = deleteOrphanedMedia(ctx, tx, oldMediaIDs); err != nil {
+		return nil, fmt.Errorf("pack adaptation config orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("pack adaptation config commit: %w", err)
@@ -257,6 +268,7 @@ func (r *Repository) Assign(
 		return nil, ErrStudentNotAllowed
 	}
 	result := make([]Adaptation, 0, len(studentIDs))
+	var allOldMediaIDs []uuid.UUID
 	for _, studentID := range studentIDs {
 		item, upsertErr := scanAdaptation(
 			tx.QueryRow(ctx, upsertAdaptationQuery, packID, studentID, config, userID),
@@ -264,10 +276,21 @@ func (r *Repository) Assign(
 		if upsertErr != nil {
 			return nil, fmt.Errorf("pack assignment upsert: %w", upsertErr)
 		}
+		oldIDs, collectErr := collectAdaptationMedia(ctx, tx, []uuid.UUID{item.ID})
+		if collectErr != nil {
+			return nil, fmt.Errorf("pack assignment collect media: %w", collectErr)
+		}
+		allOldMediaIDs = append(allOldMediaIDs, oldIDs...)
 		if _, upsertErr = tx.Exec(ctx, replaceAdaptationUsagesQuery, packID, item.ID); upsertErr != nil {
+			if isMediaFKViolation(upsertErr) {
+				return nil, ErrMediaNotFound
+			}
 			return nil, fmt.Errorf("pack assignment media usages: %w", upsertErr)
 		}
 		result = append(result, *item)
+	}
+	if err = deleteOrphanedMedia(ctx, tx, allOldMediaIDs); err != nil {
+		return nil, fmt.Errorf("pack assignment orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("pack assignment commit: %w", err)
@@ -292,11 +315,24 @@ func (r *Repository) Unassign(
 	if err != nil {
 		return fmt.Errorf("pack unassign lock: %w", err)
 	}
+	mediaRows, err := tx.Query(ctx, `
+    SELECT media_id FROM media_usages
+    WHERE source_type = 'pack_adaptation' AND source_id = $1`, adaptationID)
+	if err != nil {
+		return fmt.Errorf("pack unassign collect media: %w", err)
+	}
+	mediaIDs, err := pgx.CollectRows(mediaRows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("pack unassign collect media: %w", err)
+	}
 	if _, err = tx.Exec(ctx, deleteAdaptationUsagesQuery, adaptationID); err != nil {
 		return fmt.Errorf("pack unassign media usages: %w", err)
 	}
 	if _, err = tx.Exec(ctx, deleteAdaptationQuery, adaptationID); err != nil {
 		return fmt.Errorf("pack unassign delete: %w", err)
+	}
+	if err = deleteOrphanedMedia(ctx, tx, mediaIDs); err != nil {
+		return fmt.Errorf("pack unassign orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pack unassign commit: %w", err)
@@ -311,4 +347,26 @@ func scanAdaptation(row rowScanner) (*Adaptation, error) {
 		&result.CreatedBy, &result.CreatedAt, &result.UpdatedAt,
 	)
 	return &result, err
+}
+
+func validateMediaAccess(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, mediaIDs []uuid.UUID) error {
+	if len(mediaIDs) == 0 {
+		return nil
+	}
+	var count int
+	if err := tx.QueryRow(ctx, countAccessibleMediaQuery, orgID, mediaIDs).Scan(&count); err != nil {
+		return fmt.Errorf("validate media access: %w", err)
+	}
+	if count != len(mediaIDs) {
+		return ErrMediaNotAllowed
+	}
+	return nil
+}
+
+func collectAdaptationMedia(ctx context.Context, tx pgx.Tx, adaptationIDs []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `SELECT media_id FROM media_usages WHERE source_id = ANY($1::uuid[])`, adaptationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("collect adaptation media: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 }

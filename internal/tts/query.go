@@ -71,9 +71,13 @@ const getCache = `
 	SELECT data FROM app_cache WHERE key = $1`
 
 const deleteOldJobs = `
-	DELETE FROM tts_jobs
-	WHERE status IN ('succeeded', 'failed')
-	AND created_at < $1`
+	WITH deleted AS (
+		DELETE FROM tts_jobs
+		WHERE status IN ('succeeded', 'failed')
+			AND created_at < $1
+		RETURNING media_id
+	)
+	SELECT media_id FROM deleted WHERE media_id IS NOT NULL`
 
 const deleteFromBank = `
 	DELETE FROM audio_bank
@@ -86,3 +90,26 @@ const selectExpiredBank = `
 	WHERE mf.id IS NULL
 	AND ab.last_used_at < $1
 	LIMIT $2`
+
+const deleteOrphanedMediaQuery = `
+	WITH deleted AS (
+		DELETE FROM media_files
+		WHERE id = ANY($1)
+				AND NOT EXISTS (
+						SELECT 1 FROM media_usages WHERE media_id = media_files.id
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM students WHERE avatar_media_id = media_files.id AND deleted_at IS NULL
+				)
+				AND NOT EXISTS (
+						SELECT 1 FROM tts_jobs WHERE media_id = media_files.id
+				)
+		RETURNING org_id, size_bytes
+	),
+	updated AS (
+		UPDATE organizations o
+		SET storage_used_bytes = GREATEST(o.storage_used_bytes - d.total, 0)
+		FROM (SELECT org_id, SUM(size_bytes) AS total FROM deleted GROUP BY org_id) d
+		WHERE o.id = d.org_id
+	)
+	SELECT count(*), COALESCE(SUM(size_bytes), 0) FROM deleted`

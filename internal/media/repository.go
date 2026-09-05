@@ -158,7 +158,7 @@ func (r *Repository) Delete(
 	defer rollbackMediaTx(ctx, tx)
 
 	var result File
-	err = tx.QueryRow(ctx, lockOwnedMediaQuery, userID, mediaID).Scan(
+	err = tx.QueryRow(ctx, lockMediaQuery, userID, mediaID).Scan(
 		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
 		&result.MIMEType, &result.MediaType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)

@@ -52,16 +52,18 @@ const listMediaQuery = `
 	ORDER BY created_at DESC, id DESC
 	LIMIT $6`
 
-const lockOwnedMediaQuery = `
+const lockMediaQuery = `
 	SELECT m.id, m.org_id, m.uploader_id, m.name, m.sha256, m.mime_type, m.media_type,
 	       m.size_bytes, m.minio_key, m.created_at
 	FROM media_files m
 	JOIN users u ON u.id = $1 AND u.org_id = m.org_id AND u.deleted_at IS NULL
-	WHERE m.id = $2 AND m.uploader_id = u.id
+	WHERE m.id = $2
 	FOR UPDATE OF m, u`
 
 const mediaInUseQuery = `
-	SELECT EXISTS (SELECT 1 FROM media_usages WHERE media_id = $1)`
+	SELECT EXISTS (SELECT 1 FROM media_usages WHERE media_id = $1)
+			OR EXISTS (SELECT 1 FROM students WHERE avatar_media_id = $1 AND deleted_at IS NULL)
+			OR EXISTS (SELECT 1 FROM tts_jobs WHERE media_id = $1)`
 
 const deleteMediaQuery = `
 	DELETE FROM media_files WHERE id = $1`
