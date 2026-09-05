@@ -423,7 +423,7 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 		response = e2eRequest(
 			t, server, token, http.MethodDelete, "/api/v1/media/"+mediaID.String(), nil,
 		)
-		assert.Equal(t, http.StatusNoContent, response.StatusCode)
+		assert.Equal(t, http.StatusNotFound, response.StatusCode)
 		e2eClose(t, response)
 	}
 
