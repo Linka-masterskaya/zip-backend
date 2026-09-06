@@ -176,22 +176,27 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+func validatePutObjectArgs(c *Client, key string, reader io.Reader, size int64, contentType string) error {
+	switch {
+	case c == nil || c.client == nil:
+		return errors.New("minio client is not initialized")
+	case key == "":
+		return errors.New("object key is required")
+	case reader == nil:
+		return errors.New("object reader is required")
+	case size < 0:
+		return errors.New("object size must be non-negative")
+	case contentType == "":
+		return errors.New("object content type is required")
+	default:
+		return nil
+	}
+}
+
 // PutObject uploads an object to the configured bucket.
 func (c *Client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
-	if c == nil || c.client == nil {
-		return errors.New("minio client is not initialized")
-	}
-	if key == "" {
-		return errors.New("object key is required")
-	}
-	if reader == nil {
-		return errors.New("object reader is required")
-	}
-	if size < 0 {
-		return errors.New("object size must be non-negative")
-	}
-	if contentType == "" {
-		return errors.New("object content type is required")
+	if err := validatePutObjectArgs(c, key, reader, size, contentType); err != nil {
+		return err
 	}
 
 	registryConn, releaseLock, err := acquireObjectLock(ctx, c.registry, key)

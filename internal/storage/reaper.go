@@ -32,22 +32,28 @@ SELECT EXISTS (
       AND NOT EXISTS (SELECT 1 FROM avatar_cleanup_jobs acj WHERE acj.object_key = so.key AND acj.completed_at IS NULL)
 )`
 
+func validateReaperArgs(c *Client, gracePeriod time.Duration, limit int) error {
+	switch {
+	case c == nil || c.client == nil:
+		return errors.New("minio client is not initialized")
+	case c.registry == nil:
+		return errors.New("storage object registry is not initialized")
+	case limit <= 0:
+		return errors.New("reaper limit must be positive")
+	case gracePeriod < 0:
+		return errors.New("reaper grace period must be non-negative")
+	default:
+		return nil
+	}
+}
+
 // ReapUnreferenced removes old registry objects that are no longer referenced
 // by any domain table. It continues after individual MinIO failures so one bad
 // key does not block the rest of the batch. RemoveObject removes the registry
 // row only after MinIO accepted the deletion, making retries idempotent.
 func (c *Client) ReapUnreferenced(ctx context.Context, gracePeriod time.Duration, limit int) (int, error) {
-	if c == nil || c.client == nil {
-		return 0, errors.New("minio client is not initialized")
-	}
-	if c.registry == nil {
-		return 0, errors.New("storage object registry is not initialized")
-	}
-	if limit <= 0 {
-		return 0, errors.New("reaper limit must be positive")
-	}
-	if gracePeriod < 0 {
-		return 0, errors.New("reaper grace period must be non-negative")
+	if err := validateReaperArgs(c, gracePeriod, limit); err != nil {
+		return 0, err
 	}
 
 	cutoff := time.Now().Add(-gracePeriod)

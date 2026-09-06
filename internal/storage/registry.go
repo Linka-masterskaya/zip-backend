@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -31,7 +32,12 @@ type registryExecutor interface {
 // occur, would only serialize two unrelated object operations.
 func objectLockID(key string) int64 {
 	digest := sha256.Sum256([]byte(key))
-	return int64(binary.BigEndian.Uint64(digest[:8]))
+	// Keep the advisory-lock ID in the non-negative int64 range without a
+	// narrowing uint64 -> int64 conversion (gosec G115). Sixty-three hash bits
+	// still make accidental collisions negligibly unlikely.
+	high := int64(binary.BigEndian.Uint32(digest[:4]) & 0x7fffffff)
+	low := int64(binary.BigEndian.Uint32(digest[4:8]))
+	return (high << 32) | low
 }
 
 // acquireObjectLock serializes lifecycle mutations for one MinIO key across
@@ -56,7 +62,12 @@ func acquireObjectLock(ctx context.Context, pool *pgxpool.Pool, key string) (*pg
 		closeCtx, cancel := context.WithTimeout(context.Background(), objectLockTimeout)
 		defer cancel()
 		raw := conn.Hijack()
-		_ = raw.Close(closeCtx)
+		if closeErr := raw.Close(closeCtx); closeErr != nil {
+			return nil, nil, fmt.Errorf(
+				"lock storage object %q: %w; close hijacked connection: %v",
+				key, err, closeErr,
+			)
+		}
 		return nil, nil, fmt.Errorf("lock storage object %q: %w", key, err)
 	}
 
@@ -74,7 +85,14 @@ func acquireObjectLock(ctx context.Context, pool *pgxpool.Pool, key string) (*pg
 			// failed. Hijacking and closing the underlying connection guarantees
 			// PostgreSQL releases all session locks held by it.
 			raw := conn.Hijack()
-			_ = raw.Close(unlockCtx)
+			if closeErr := raw.Close(unlockCtx); closeErr != nil {
+				slog.WarnContext(
+					unlockCtx,
+					"close hijacked storage registry connection failed",
+					"key", key,
+					"err", closeErr,
+				)
+			}
 			return
 		}
 		conn.Release()
