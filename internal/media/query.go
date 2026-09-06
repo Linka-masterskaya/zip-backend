@@ -42,11 +42,15 @@ const getAccessibleMediaQuery = `
 	  )`
 
 // mediaUnreferencedPredicate закрывает все три внешние ссылки на media_files:
-// media_usages, аватар ученика и результат TTS-джобы. Список и счётчик обязаны
+// media_usages, аватар активного ученика и результат TTS-джобы. Аватар
+// архивированного ученика свободен, восстановления в API нет. Список и счётчик обязаны
 // делить один предикат, иначе total разъедется с items.
 const mediaUnreferencedPredicate = `
 	    NOT EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
-	    AND NOT EXISTS (SELECT 1 FROM students s WHERE s.avatar_media_id = media_files.id)
+	    AND NOT EXISTS (
+	      SELECT 1 FROM students s
+	      WHERE s.avatar_media_id = media_files.id AND s.deleted_at IS NULL
+	    )
 	    AND NOT EXISTS (SELECT 1 FROM tts_jobs j WHERE j.media_id = media_files.id)`
 
 const listMediaQuery = `
@@ -99,7 +103,10 @@ const referencedMediaBatchQuery = `
 	WHERE id = ANY($1::uuid[])
 	  AND (
 	    EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
-	    OR EXISTS (SELECT 1 FROM students s WHERE s.avatar_media_id = media_files.id)
+	    OR EXISTS (
+	      SELECT 1 FROM students s
+	      WHERE s.avatar_media_id = media_files.id AND s.deleted_at IS NULL
+	    )
 	    OR EXISTS (SELECT 1 FROM tts_jobs j WHERE j.media_id = media_files.id)
 	  )`
 

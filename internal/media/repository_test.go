@@ -164,24 +164,26 @@ func TestRepositoryUnusedFilterCoversAvatarsAndTTS(t *testing.T) {
 	free := env.seed(env.orgID, env.userID, "sha-free", 10)
 	usedByPack := env.seed(env.orgID, env.userID, "sha-pack", 10)
 	avatar := env.seed(env.orgID, env.userID, "sha-avatar", 10)
+	archived := env.seed(env.orgID, env.userID, "sha-archived", 10)
 	voiced := env.seed(env.orgID, env.userID, "sha-tts", 10)
 
 	env.attachPackUsage(usedByPack.ID)
 	env.attachAvatar(avatar.ID)
+	env.attachArchivedAvatar(archived.ID)
 	env.attachTTSJob(voiced.ID)
 
 	unused := ListQuery{OrgID: env.orgID, UserID: env.userID, Unused: true, Limit: 10}
 	items, total, err := env.repo.ListWithTotal(t.Context(), unused)
 	require.NoError(t, err)
-	assert.Equal(t, []uuid.UUID{free.ID}, idsOf(items),
-		"аватар ученика и результат TTS не считаются неиспользуемыми")
-	assert.Equal(t, 1, total, "счётчик считается тем же предикатом, что и выдача")
+	assert.ElementsMatch(t, []uuid.UUID{free.ID, archived.ID}, idsOf(items),
+		"аватар активного ученика и результат TTS заняты, аватар архивированного свободен")
+	assert.Equal(t, 2, total, "счётчик считается тем же предикатом, что и выдача")
 
 	all, allTotal, err := env.repo.ListWithTotal(t.Context(),
 		ListQuery{OrgID: env.orgID, UserID: env.userID, Limit: 10})
 	require.NoError(t, err)
-	assert.Len(t, all, 4)
-	assert.Equal(t, 4, allTotal)
+	assert.Len(t, all, 5)
+	assert.Equal(t, 5, allTotal)
 }
 
 func TestRepositoryDeleteBatchSkipsEveryKindOfReference(t *testing.T) {
@@ -192,22 +194,26 @@ func TestRepositoryDeleteBatchSkipsEveryKindOfReference(t *testing.T) {
 	usedByPack := env.seed(env.orgID, env.userID, "sha-pack", 700)
 	avatar := env.seed(env.orgID, env.userID, "sha-avatar", 300)
 	voiced := env.seed(env.orgID, env.userID, "sha-tts", 200)
+	archived := env.seed(env.orgID, env.userID, "sha-archived", 60)
 	mates := env.seed(env.orgID, env.mateID, "sha-mate", 5)
 	foreign := env.seed(env.otherOrgID, env.strangerID, "sha-foreign", 9)
 	missing := uuid.New()
 
 	env.attachPackUsage(usedByPack.ID)
 	env.attachAvatar(avatar.ID)
+	env.attachArchivedAvatar(archived.ID)
 	env.attachTTSJob(voiced.ID)
 
 	outcome, err := env.repo.DeleteBatch(t.Context(), env.userID, []uuid.UUID{
-		free.ID, alsoFree.ID, usedByPack.ID, avatar.ID, voiced.ID, mates.ID, foreign.ID, missing,
+		free.ID, alsoFree.ID, archived.ID, usedByPack.ID, avatar.ID, voiced.ID,
+		mates.ID, foreign.ID, missing,
 	}, false)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []uuid.UUID{free.ID, alsoFree.ID}, outcome.Deleted)
+	assert.ElementsMatch(t, []uuid.UUID{free.ID, alsoFree.ID, archived.ID}, outcome.Deleted,
+		"аватар архивированного ученика удаляется наравне со свободными файлами")
 	assert.ElementsMatch(t, []uuid.UUID{usedByPack.ID, avatar.ID, voiced.ID}, outcome.InUse,
-		"аватар и TTS пропускаются наравне с файлом из набора")
-	assert.Equal(t, int64(140), outcome.FreedBytes)
+		"аватар активного ученика и TTS пропускаются наравне с файлом из набора")
+	assert.Equal(t, int64(200), outcome.FreedBytes)
 
 	// Квота уменьшается ровно на сумму размеров реально удалённых файлов.
 	assert.Equal(t, int64(1205), env.storageUsed(env.orgID))
@@ -331,6 +337,17 @@ func (e *mediaEnv) attachPackUsage(mediaID uuid.UUID) {
 func (e *mediaEnv) attachAvatar(mediaID uuid.UUID) {
 	_, err := e.pool.Exec(e.t.Context(), `
 		UPDATE students SET avatar_media_id = $2 WHERE id = $1`, e.studentID, mediaID)
+	require.NoError(e.t, err)
+}
+
+// attachArchivedAvatar вешает файл на архивированного ученика. Восстановления
+// ученика в API нет, поэтому такой аватар считается свободным.
+func (e *mediaEnv) attachArchivedAvatar(mediaID uuid.UUID) {
+	_, err := e.pool.Exec(e.t.Context(), `
+		INSERT INTO students
+			(id, defectologist_id, email_encrypted, name, status, avatar_media_id, deleted_at)
+		VALUES ($1, $2, $3, 'Архивный', 'archived', $4, now())`,
+		uuid.New(), e.userID, []byte{2}, mediaID)
 	require.NoError(e.t, err)
 }
 
