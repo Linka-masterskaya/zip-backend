@@ -118,6 +118,23 @@ smtp:
   require_from_match: true
   daily_limit_alert: 300
 
+pack_share:
+  workers: 2
+  # Durable PostgreSQL outbox polling; accepted jobs survive process restarts.
+  poll_interval: 500ms
+  job_timeout: 10m
+  daily_sends_per_user: 10
+  daily_bytes_per_user: 104857600
+  # Keep below common receiver limits after MIME/base64 overhead.
+  max_attachment_bytes: 15728640
+  send_retries: 3
+  # Total durable claims per task, including timeout/restart retries.
+  max_attempts: 5
+  send_timeout: 30s
+  retry_backoff: 2s
+  # Graceful drain budget. If it expires, the leased DB job is requeued.
+  shutdown_timeout: 3m
+
 auth:
   access_token_ttl: 15m
   refresh_token_ttl: 720h

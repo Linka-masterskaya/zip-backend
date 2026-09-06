@@ -10,6 +10,7 @@ import (
 // PackHandlers contains the handlers exposed by the packs API.
 type PackHandlers struct {
 	Pack     *pack.Handler
+	Share    *pack.ShareHandler
 	Content  *pack.ContentHandler
 	Favorite *pack.FavoriteHandler
 }
@@ -28,6 +29,8 @@ func RegisterPackRoutes(
 
 	mux.Handle("POST /api/v1/packs", protected(handlers.Pack.CreatePack))
 	mux.Handle("POST /api/v1/packs/{id}/duplicate", protected(handlers.Pack.DuplicatePack))
+	mux.Handle("POST /api/v1/packs/{id}/share", protected(handlers.Share.SharePack))
+	mux.Handle("GET /api/v1/pack-share-tasks/{id}", protected(handlers.Share.GetShareTask))
 	mux.Handle("GET /api/v1/packs/{id}", protected(handlers.Pack.GetPack))
 	mux.Handle("GET /api/v1/packs", protected(handlers.Pack.ListPacks))
 	mux.Handle("PATCH /api/v1/packs/{id}", protected(handlers.Pack.UpdatePack))

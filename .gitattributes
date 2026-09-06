@@ -8,4 +8,5 @@
 *.md text eol=lf
 *.json text eol=lf
 Dockerfile* text eol=lf
+deploy/backup/crontab text eol=lf
 .env.example text eol=lf

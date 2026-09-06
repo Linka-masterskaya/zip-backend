@@ -1,11 +1,13 @@
 package pack
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestRepositoryPutFavoriteIsIdempotent(t *testing.T) {
@@ -141,7 +143,7 @@ func TestRepositoryListFavoritesReturnsAccessibleBookmarksInOrder(t *testing.T) 
 		userID, ownPack.ID)
 	require.NoError(t, err)
 
-	listed, err := repo.ListFavorites(t.Context(), userID, ListInput{Limit: 50})
+	listed, _, err := repo.ListFavoritesWithTotal(t.Context(), userID, ListInput{Limit: 50})
 
 	require.NoError(t, err)
 	require.Len(t, listed, 2)
@@ -174,20 +176,67 @@ func TestRepositoryListFavoritesPaginates(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	listed, err := repo.ListFavorites(t.Context(), userID, ListInput{Limit: 1, Offset: 1})
+	listed, total, err := repo.ListFavoritesWithTotal(t.Context(), userID, ListInput{Limit: 1, Offset: 1})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created[1].ID, listed[0].ID)
-
-	total, err := repo.CountFavorites(t.Context(), userID)
-	require.NoError(t, err)
 	assert.Equal(t, 3, total)
 
-	beyond, err := repo.ListFavorites(t.Context(), userID, ListInput{Limit: 1, Offset: 10})
+	beyond, total, err := repo.ListFavoritesWithTotal(t.Context(), userID, ListInput{Limit: 1, Offset: 10})
 	require.NoError(t, err)
 	assert.Empty(t, beyond)
-
-	total, err = repo.CountFavorites(t.Context(), userID)
-	require.NoError(t, err)
 	assert.Equal(t, 3, total)
+}
+func TestRepositoryConsistencyInCompetitiveAddingAndDeletingToFavorites(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, userID, folderID := seedPackOwner(t, pool, "concurrent favorite org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	const stableCount = 5
+	for i := 0; i < stableCount; i++ {
+		pack, err := repo.Create(t.Context(), userID, CreateInput{Title: "Stable", FolderID: folderID, Config: config})
+		require.NoError(t, err)
+		require.NoError(t, repo.PutFavorite(t.Context(), userID, pack.ID))
+	}
+
+	toggled, err := repo.Create(t.Context(), userID, CreateInput{Title: "Toggled", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+
+	const iterations = 150
+	group, ctx := errgroup.WithContext(t.Context())
+	// Горутина добавляет-удаляет избранный пакет Toggled.
+	group.Go(func() error {
+		for i := 0; i < iterations; i++ {
+			if err := repo.PutFavorite(ctx, userID, toggled.ID); err != nil {
+				return fmt.Errorf("put favorite: %w", err)
+			}
+			if err := repo.DeleteFavorite(ctx, userID, toggled.ID); err != nil {
+				return fmt.Errorf("delete favorite: %w", err)
+			}
+		}
+		return nil
+	})
+	// 4 горутины проверяют, что возвращённые записи в списке в точности совпадают с общим числом избранных пакетов.
+	// Total может быть только stableCount либо stableCount+1 (+ toggled).
+	const readers = 4
+	for r := 0; r < readers; r++ {
+		group.Go(func() error {
+			for i := 0; i < iterations; i++ {
+				items, total, err := repo.ListFavoritesWithTotal(ctx, userID, ListInput{Limit: 100})
+				if err != nil {
+					return fmt.Errorf("list with total: %w", err)
+				}
+				if len(items) != total {
+					return fmt.Errorf("inconsistent snapshot: len(items)=%d total=%d", len(items), total)
+				}
+				if total != stableCount && total != stableCount+1 {
+					return fmt.Errorf("unexpected total %d, want %d or %d", total, stableCount, stableCount+1)
+				}
+			}
+			return nil
+		})
+	}
+
+	require.NoError(t, group.Wait())
 }

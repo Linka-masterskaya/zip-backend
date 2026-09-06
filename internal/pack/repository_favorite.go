@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// PutFavorite bookmarks. Repeated calls are idempotent.
 func (r *Repository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) error {
 	var id uuid.UUID
 	err := r.pool.QueryRow(ctx, putFavoriteQuery, userID, packID).Scan(&id)
@@ -22,7 +21,6 @@ func (r *Repository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) 
 	return nil
 }
 
-// DeleteFavorite removes a pack bookmark for the user. Repeated calls are idempotent.
 func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUID) error {
 	if _, err := r.pool.Exec(ctx, deleteFavoriteQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete favorite: %w", err)
@@ -30,10 +28,14 @@ func (r *Repository) DeleteFavorite(ctx context.Context, userID, packID uuid.UUI
 	return nil
 }
 
-// ListFavorites returns a bounded page of the user's currently accessible favorited packs.
-func (r *Repository) ListFavorites(ctx context.Context, userID uuid.UUID, input ListInput) ([]*ListItem, error) {
+func (r *Repository) listFavorites(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+	input ListInput,
+) ([]*ListItem, error) {
 	limit, offset := repositoryListBounds(input)
-	rows, err := r.pool.Query(ctx, listFavoritePacksQuery, userID, limit, offset)
+	rows, err := tx.Query(ctx, listFavoritePacksQuery, userID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("pack repository list favorites: %w", err)
 	}
@@ -53,12 +55,43 @@ func (r *Repository) ListFavorites(ctx context.Context, userID uuid.UUID, input 
 	return packs, nil
 }
 
-// CountFavorites returns the total number of currently accessible favorited packs.
-func (r *Repository) CountFavorites(ctx context.Context, userID uuid.UUID) (int, error) {
+func (r *Repository) countFavorites(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+) (int, error) {
 	var total int
-	if err := r.pool.QueryRow(ctx, countFavoritePacksQuery, userID).Scan(&total); err != nil {
+	if err := tx.QueryRow(ctx, countFavoritePacksQuery, userID).Scan(&total); err != nil {
 		return 0, fmt.Errorf("pack repository count favorites: %w", err)
 	}
 
 	return total, nil
+}
+
+func (r *Repository) ListFavoritesWithTotal(
+	ctx context.Context,
+	userID uuid.UUID,
+	input ListInput,
+) ([]*ListItem, int, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("favorites list page begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	items, err := r.listFavorites(ctx, tx, userID, input)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := r.countFavorites(ctx, tx, userID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("favorite list page commit: %w", err)
+	}
+	return items, total, nil
 }

@@ -1,6 +1,7 @@
 package mailer
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
@@ -204,6 +205,19 @@ func TestMailpit_SendAllTemplates(t *testing.T) {
 				Username: "TestUser",
 				Email:    "old@example.com",
 				NewEmail: "new@example.com",
+			},
+		},
+		{
+			name:     "Pack Share",
+			template: PackShare,
+			data: EmailData{
+				Username:  "Student",
+				PackTitle: "Speech pack",
+				Attachments: []Attachment{{
+					Filename:    "speech-pack.linka",
+					ContentType: "application/vnd.linka+zip",
+					Reader:      bytes.NewReader([]byte("test linka archive")),
+				}},
 			},
 		},
 	}

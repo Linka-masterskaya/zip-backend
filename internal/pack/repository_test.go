@@ -32,7 +32,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	assert.Equal(t, folderID, created.FolderID)
 	assert.JSONEq(t, string(config), string(created.Config))
 
-	ageMin, ageMax := 5, 8
+	age := 5
 	difficulty := "medium"
 	notes := "notes"
 	goals := []string{"speech", "attention"}
@@ -40,8 +40,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	updated, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
 		Title: &title,
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true, Value: &ageMin},
-			AgeMax:     NullablePatch[int]{Set: true, Value: &ageMax},
+			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
 			Goals:      &goals,
 		},
@@ -54,15 +53,13 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 
 	cleared, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true},
-			AgeMax:     NullablePatch[int]{Set: true},
+			Age:        NullablePatch[int]{Set: true},
 			Difficulty: NullablePatch[string]{Set: true},
 		},
 		Notes: NullablePatch[string]{Set: true},
 	})
 	require.NoError(t, err)
-	assert.Nil(t, cleared.AgeMin)
-	assert.Nil(t, cleared.AgeMax)
+	assert.Nil(t, cleared.Age)
 	assert.Nil(t, cleared.Difficulty)
 	assert.Empty(t, cleared.Notes)
 	assert.JSONEq(t, string(config), string(cleared.Config))
@@ -219,13 +216,13 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	foreignLibraryID := seedPackLibraryFolder(t, pool, foreignID)
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
 
-	ownPack := createFilteredPack(t, repo, userID, myFolderID, "Speech Easy", 4, 6, "easy", config)
-	studentPack := createFilteredPack(t, repo, userID, studentFolderID, "Reading Hard", 5, 9, "hard", config)
-	privateColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "Speech Private", 4, 7, "easy", config)
-	publishedColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "SPEECH Medium", 5, 8, "medium", config)
+	ownPack := createFilteredPack(t, repo, userID, myFolderID, "Speech Easy", 5, "easy", config)
+	studentPack := createFilteredPack(t, repo, userID, studentFolderID, "Reading Hard", 7, "hard", config)
+	privateColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "Speech Private", 5, "easy", config)
+	publishedColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "SPEECH Medium", 5, "medium", config)
 	_, err := repo.Publish(t.Context(), colleagueID, publishedColleague.ID, libraryFolderID, false)
 	require.NoError(t, err)
-	foreignPack := createFilteredPack(t, repo, foreignID, foreignFolderID, "Speech Foreign", 4, 8, "easy", config)
+	foreignPack := createFilteredPack(t, repo, foreignID, foreignFolderID, "Speech Foreign", 5, "easy", config)
 	_, err = repo.Publish(t.Context(), foreignID, foreignPack.ID, foreignLibraryID, false)
 	require.NoError(t, err)
 	_, err = pool.Exec(t.Context(), `INSERT INTO favorite_packs (user_id, pack_id) VALUES ($1, $2)`, userID, ownPack.ID)
@@ -260,14 +257,30 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	require.Len(t, hard, 1)
 	assert.Equal(t, studentPack.ID, hard[0].ID)
 
-	for _, boundaryAge := range []int{4, 6} {
-		boundary, _, boundaryErr := repo.ListWithTotal(t.Context(), userID, ListInput{
-			Query: "Speech Easy", Age: &boundaryAge, Limit: 50,
-		})
-		require.NoError(t, boundaryErr)
-		require.Len(t, boundary, 1)
-		assert.Equal(t, ownPack.ID, boundary[0].ID)
-	}
+	nonMatchingAge := 4
+	notMatched, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		Query: "Speech Easy", Age: &nonMatchingAge, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, notMatched)
+
+	ageFrom, ageTo := 6, 7
+	inRange, inRangeTotal, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		AgeFrom: &ageFrom, AgeTo: &ageTo, Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, inRange, 1)
+	assert.Equal(t, studentPack.ID, inRange[0].ID)
+	assert.Equal(t, 1, inRangeTotal)
+
+	fromOnly, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{AgeFrom: &ageFrom, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, fromOnly, 1)
+	assert.Equal(t, studentPack.ID, fromOnly[0].ID)
+	toOnly := 5
+	upToAge, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{AgeTo: &toOnly, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, upToAge, 2)
 
 	my, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Section: "my", Limit: 50})
 	require.NoError(t, err)
@@ -295,7 +308,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
 
 	created := createFilteredPack(
-		t, repo, userID, myFolderID, "Placement Speech", 4, 7, "easy", config,
+		t, repo, userID, myFolderID, "Placement Speech", 5, "easy", config,
 	)
 	_, err := repo.Publish(t.Context(), userID, created.ID, libraryFolderID, false)
 	require.NoError(t, err)
@@ -337,7 +350,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	)
 
 	direct := createFilteredPack(
-		t, repo, userID, studentOneFolderID, "Direct Student Pack", 5, 8, "hard", config,
+		t, repo, userID, studentOneFolderID, "Direct Student Pack", 5, "hard", config,
 	)
 	_, err = repo.Assign(t.Context(), userID, direct.ID, []uuid.UUID{studentOneID})
 	require.NoError(t, err)
@@ -414,14 +427,11 @@ func TestRepositoryMapsMetadataConstraintViolation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ageMax := 5
+	invalidAge := 19
 	_, err = repo.Update(context.Background(), userID, created.ID, UpdateInput{
-		FilterMetadata: &FilterMetadataPatch{AgeMax: NullablePatch[int]{Set: true, Value: &ageMax}},
-	})
-	require.NoError(t, err)
-	ageMin := 8
-	_, err = repo.Update(context.Background(), userID, created.ID, UpdateInput{
-		FilterMetadata: &FilterMetadataPatch{AgeMin: NullablePatch[int]{Set: true, Value: &ageMin}},
+		FilterMetadata: &FilterMetadataPatch{
+			Age: NullablePatch[int]{Set: true, Value: &invalidAge},
+		},
 	})
 	assert.ErrorIs(t, err, ErrInvalidPackMetadata)
 }
@@ -798,7 +808,7 @@ func createFilteredPack(
 	repo *Repository,
 	userID, folderID uuid.UUID,
 	title string,
-	ageMin, ageMax int,
+	age int,
 	difficulty string,
 	config []byte,
 ) *Pack {
@@ -809,8 +819,7 @@ func createFilteredPack(
 	require.NoError(t, err)
 	updated, err := repo.Update(t.Context(), userID, created.ID, UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true, Value: &ageMin},
-			AgeMax:     NullablePatch[int]{Set: true, Value: &ageMax},
+			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
 		},
 	})
@@ -960,4 +969,157 @@ func TestRepositoryListSorts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, byDefault, 3)
 	assert.Equal(t, created[2].ID, byDefault[0].ID)
+}
+
+func TestRepositoryPackShareOutboxPersistsAndReclaimsLease(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, _ := seedPackOwner(t, pool, "share outbox org")
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	job := shareJobRecord{
+		ID:            uuid.New(),
+		OwnerID:       ownerID,
+		PackID:        uuid.New(),
+		StudentID:     uuid.New(),
+		RequestID:     "req-1",
+		Status:        ShareTaskQueued,
+		NextAttemptAt: now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+
+	stored, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskQueued, stored.Status)
+	assert.Equal(t, ownerID, stored.OwnerID)
+	assert.Equal(t, "req-1", stored.RequestID)
+
+	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 5)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	assert.Equal(t, job.ID, claimed.ID)
+	assert.Equal(t, ShareTaskProcessing, claimed.Status)
+	assert.NotEqual(t, uuid.Nil, claimed.LeaseToken)
+	assert.Equal(t, 1, claimed.Attempts)
+
+	second, err := repo.ClaimShareJob(t.Context(), time.Minute, 5)
+	require.NoError(t, err)
+	assert.Nil(t, second, "an active lease must prevent duplicate processing")
+
+	_, err = pool.Exec(t.Context(), `
+		UPDATE pack_share_jobs
+		SET lease_until = now() - interval '1 second'
+		WHERE id = $1
+	`, job.ID)
+	require.NoError(t, err)
+
+	reclaimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 5)
+	require.NoError(t, err)
+	require.NotNil(t, reclaimed)
+	assert.Equal(t, job.ID, reclaimed.ID)
+	assert.NotEqual(t, claimed.LeaseToken, reclaimed.LeaseToken)
+	assert.Equal(t, 2, reclaimed.Attempts)
+
+	require.ErrorIs(t,
+		repo.CompleteShareJob(t.Context(), job.ID, claimed.LeaseToken),
+		errShareJobLeaseLost,
+		"a stale worker must not finalize a job after another worker reclaimed it",
+	)
+
+	require.NoError(t, repo.RequeueShareJob(
+		t.Context(),
+		job.ID,
+		reclaimed.LeaseToken,
+		"retry after restart",
+		"context deadline exceeded",
+		0,
+	))
+
+	requeued, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskQueued, requeued.Status)
+	assert.Equal(t, "retry after restart", requeued.Message)
+
+	claimedAgain, err := repo.ClaimShareJob(t.Context(), time.Minute, 5)
+	require.NoError(t, err)
+	require.NotNil(t, claimedAgain)
+	require.NoError(t, repo.CompleteShareJob(t.Context(), job.ID, claimedAgain.LeaseToken))
+
+	completed, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskSent, completed.Status)
+
+	deleted, err := repo.PruneShareJobs(t.Context(), time.Now().UTC().Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+	_, err = repo.GetShareJob(t.Context(), job.ID)
+	assert.ErrorIs(t, err, errShareJobNotFound)
+}
+
+func TestRepositoryPackShareOutboxStopsAfterMaxAttempts(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, _ := seedPackOwner(t, pool, "share max attempts org")
+
+	now := time.Now().UTC()
+	job := shareJobRecord{
+		ID: uuid.New(), OwnerID: ownerID, PackID: uuid.New(), StudentID: uuid.New(),
+		Status: ShareTaskQueued, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+
+	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.Equal(t, 1, claimed.Attempts)
+	require.NoError(t, repo.RequeueShareJob(
+		t.Context(), job.ID, claimed.LeaseToken,
+		"email delivery failed; retrying", "context deadline exceeded", 0,
+	))
+
+	next, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
+	require.NoError(t, err)
+	assert.Nil(t, next, "exhausted job must not be claimed again")
+
+	stored, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskFailed, stored.Status)
+	assert.Equal(t, 1, stored.Attempts)
+	assert.Equal(t, "context deadline exceeded", stored.LastError)
+}
+
+func TestRepositoryPackShareOutboxDoesNotResendAfterSMTPWasAccepted(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, _ := seedPackOwner(t, pool, "share smtp accepted org")
+
+	now := time.Now().UTC()
+	job := shareJobRecord{
+		ID: uuid.New(), OwnerID: ownerID, PackID: uuid.New(), StudentID: uuid.New(),
+		Status: ShareTaskQueued, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+
+	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.NoError(t, repo.MarkShareJobEmailSent(t.Context(), job.ID, claimed.LeaseToken))
+
+	_, err = pool.Exec(t.Context(), `
+		UPDATE pack_share_jobs SET lease_until = now() - interval '1 second' WHERE id = $1
+	`, job.ID)
+	require.NoError(t, err)
+
+	reclaimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
+	require.NoError(t, err)
+	require.NotNil(t, reclaimed)
+	require.NotNil(t, reclaimed.EmailSentAt)
+	assert.Equal(t, 1, reclaimed.Attempts, "finalization reclaim must not consume another delivery attempt")
+	require.NoError(t, repo.CompleteShareJob(t.Context(), job.ID, reclaimed.LeaseToken))
+
+	stored, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskSent, stored.Status)
 }

@@ -1,0 +1,53 @@
+groups:
+  - name: linka-backup
+    rules:
+      - alert: LinkaPostgresBackupStale
+        expr: >-
+          (time() - linka_backup_last_success_timestamp_seconds{target="postgres"} > 7200)
+          or absent(linka_backup_last_success_timestamp_seconds{target="postgres"})
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: PostgreSQL backup is stale or missing
+          description: No successful PostgreSQL backup has been observed for more than two hours.
+
+      - alert: LinkaMinioBackupStale
+        expr: >-
+          (time() - linka_backup_last_success_timestamp_seconds{target="minio"} > 25200)
+          or absent(linka_backup_last_success_timestamp_seconds{target="minio"})
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: MinIO backup is stale or missing
+          description: No successful MinIO backup has been observed for more than seven hours.
+
+      - alert: LinkaBackupRetentionStale
+        expr: >-
+          (time() - linka_backup_last_success_timestamp_seconds{target="retention"} > 93600)
+          or absent(linka_backup_last_success_timestamp_seconds{target="retention"})
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Backup retention is stale or missing
+          description: Retention has not completed successfully for more than 26 hours.
+
+      - alert: LinkaBackupLastRunFailed
+        expr: linka_backup_success{target=~"postgres|minio|retention"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backup task failed
+          description: The latest {{ $labels.target }} backup task reported a failure.
+
+      - alert: LinkaBackupDiskSpaceLow
+        expr: min(linka_backup_disk_free_bytes{target=~"postgres|minio|retention"}) < 5e9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Backup disk space is low
+          description: Less than 5 GB is available on the backup filesystem.

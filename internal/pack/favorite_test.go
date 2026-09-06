@@ -11,10 +11,9 @@ import (
 )
 
 type fakeFavoriteRepository struct {
-	putFn    func(context.Context, uuid.UUID, uuid.UUID) error
-	deleteFn func(context.Context, uuid.UUID, uuid.UUID) error
-	listFn   func(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
-	countFn  func(context.Context, uuid.UUID) (int, error)
+	putFn                    func(context.Context, uuid.UUID, uuid.UUID) error
+	deleteFn                 func(context.Context, uuid.UUID, uuid.UUID) error
+	listFavoritesWithTotalFn func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 }
 
 func (f *fakeFavoriteRepository) PutFavorite(ctx context.Context, userID, packID uuid.UUID) error {
@@ -31,20 +30,13 @@ func (f *fakeFavoriteRepository) DeleteFavorite(ctx context.Context, userID, pac
 	return nil
 }
 
-func (f *fakeFavoriteRepository) ListFavorites(
+func (f *fakeFavoriteRepository) ListFavoritesWithTotal(
 	ctx context.Context, userID uuid.UUID, input ListInput,
-) ([]*ListItem, error) {
-	if f.listFn != nil {
-		return f.listFn(ctx, userID, input)
+) ([]*ListItem, int, error) {
+	if f.listFavoritesWithTotalFn != nil {
+		return f.listFavoritesWithTotalFn(ctx, userID, input)
 	}
-	return []*ListItem{}, nil
-}
-
-func (f *fakeFavoriteRepository) CountFavorites(ctx context.Context, userID uuid.UUID) (int, error) {
-	if f.countFn != nil {
-		return f.countFn(ctx, userID)
-	}
-	return 0, nil
+	return []*ListItem{}, 0, nil
 }
 
 func TestFavoriteServiceFavoriteDelegatesUserScope(t *testing.T) {
@@ -100,14 +92,10 @@ func TestFavoriteServiceListFavoritesAppliesDefaultLimit(t *testing.T) {
 	userID := uuid.New()
 	packID := uuid.New()
 	repo := &fakeFavoriteRepository{}
-	repo.listFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) ([]*ListItem, error) {
+	repo.listFavoritesWithTotalFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) ([]*ListItem, int, error) {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, ListInput{Limit: 50}, input)
-		return []*ListItem{{ID: packID, IsFavorite: true}}, nil
-	}
-	repo.countFn = func(_ context.Context, gotUserID uuid.UUID) (int, error) {
-		assert.Equal(t, userID, gotUserID)
-		return 7, nil
+		return []*ListItem{{ID: packID, IsFavorite: true}}, 7, nil
 	}
 
 	result, err := NewFavoriteService(repo).ListFavorites(packContext(userID), ListInput{})

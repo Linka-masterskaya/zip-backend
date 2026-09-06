@@ -194,6 +194,30 @@ func TestPacksDifficultyCheck(t *testing.T) {
 	assert.Equal(t, "23514", pgErr.Code)
 }
 
+func TestPacksAgeCheck(t *testing.T) {
+	defer truncateAll(t)
+
+	orgID := insertTestOrg(t)
+	ownerID := insertTestUser(t, orgID)
+	folderID := insertTestFolder(t, ownerID, "my", "folder", nil)
+
+	packID := insertTestPack(t, orgID, ownerID, folderID)
+	var age *int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT age FROM packs WHERE id = $1`, packID).Scan(&age))
+	assert.Nil(t, age)
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO packs (org_id, owner_id, folder_id, title, age)
+		VALUES ($1, $2, $3, 'bad age', 19)
+	`, orgID, ownerID, folderID)
+
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	assert.Equal(t, "23514", pgErr.Code)
+	assert.Equal(t, "packs_age_chk", pgErr.ConstraintName)
+}
+
 func TestFoldersKindStudentIDCheck(t *testing.T) {
 	defer truncateAll(t)
 
