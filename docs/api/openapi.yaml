@@ -398,7 +398,6 @@ components:
         ids:
           type: array
           minItems: 1
-          maxItems: 100
           items: { type: string, format: uuid }
           description: Идентификаторы media; повторы схлопываются. Размер пачки задаётся настройкой media.batch_delete_limit, по умолчанию 100.
         dry_run:
@@ -434,7 +433,6 @@ components:
           description: Сколько байт вернулось в квоту организации; при dry_run — сколько вернулось бы.
         dry_run:
           type: boolean
-          items: { $ref: '#/components/schemas/MediaSkippedFile' }
 
     PictureCategory:
       type: object

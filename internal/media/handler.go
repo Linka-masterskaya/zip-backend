@@ -19,6 +19,10 @@ import (
 
 const multipartOverhead = int64(64 * 1024)
 
+// Тело batch-delete это только массив UUID, поэтому лимит взят с большим
+// запасом к сотне идентификаторов и заодно отсекает гигантский запрос.
+const maxBatchDeleteBody = int64(128 * 1024)
+
 type mediaService interface {
 	Upload(context.Context, []byte, string) (*Response, error)
 	Get(context.Context, uuid.UUID) (*Response, error)
@@ -133,6 +137,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) BatchDelete(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBatchDeleteBody)
 	var req struct {
 		IDs    []uuid.UUID `json:"ids"`
 		DryRun bool        `json:"dry_run"`
