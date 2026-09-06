@@ -27,7 +27,7 @@ func TestE2E_TTSFlow(t *testing.T) {
 	userID := e2eUser(t, pool, "tts-user")
 	token := e2eToken(t, userID, "defectologist")
 
-	objectStorage, cleanupStorage := testutil.NewMinIO(t)
+	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
 	t.Cleanup(cleanupStorage)
 
 	fakeAudio := []byte("fake-mp3-data-for-e2e")
@@ -100,6 +100,15 @@ func TestE2E_TTSFlow(t *testing.T) {
 	mediaInfo := e2eJSON[media.Response](t, resp, http.StatusOK)
 	assert.Equal(t, "audio/mpeg", mediaInfo.MIMEType)
 	assert.Equal(t, int64(len(fakeAudio)), mediaInfo.SizeBytes)
+
+	var registeredCount int
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT count(*)
+		FROM storage_objects so
+		JOIN media_files mf ON mf.minio_key = so.key
+		WHERE mf.id = $1
+	`, *doneResult.MediaID).Scan(&registeredCount))
+	assert.Equal(t, 1, registeredCount, "PutObject must register the MinIO blob")
 
 	// 6. Дедупликация — повторный запрос берёт из audio_bank
 	resp = e2eRequest(t, server, token, http.MethodPost, "/api/v1/tts", map[string]any{

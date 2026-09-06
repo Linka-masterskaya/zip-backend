@@ -235,6 +235,7 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 		in.storage,
 		cfg.Cron.TTSCleanup.CleanPeriod,
 		cfg.Cron.TTSCleanup.JobsTTL,
+		cfg.Cron.TTSCleanup.ReaperGracePeriod,
 		cfg.Cron.TTSCleanup.Limit,
 	)
 

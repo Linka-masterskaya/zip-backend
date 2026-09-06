@@ -34,7 +34,13 @@ type infra struct {
 // shutdown with the closer immediately after it is created, so a failure at any
 // step still releases everything created before it.
 func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
-	storageClient, err := storage.New(cfg.MinIO)
+	dbPool, err := db.New(cfg.DB)
+	if err != nil {
+		return nil, fmt.Errorf("postgres init: %w", err)
+	}
+	closer.Add("postgres", func(context.Context) error { dbPool.Close(); return nil })
+
+	storageClient, err := storage.New(cfg.MinIO, dbPool)
 	if err != nil {
 		return nil, fmt.Errorf("minio connect: %w", err)
 	}
@@ -54,12 +60,6 @@ func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
 		return nil, fmt.Errorf("redis init: %w", err)
 	}
 	closer.Add("redis", func(context.Context) error { return redisClient.Close() })
-
-	dbPool, err := db.New(cfg.DB)
-	if err != nil {
-		return nil, fmt.Errorf("postgres init: %w", err)
-	}
-	closer.Add("postgres", func(context.Context) error { dbPool.Close(); return nil })
 
 	cryptoClient, err := cryptox.New(cfg.Crypto.AESKey, cfg.Crypto.HMACKey)
 	if err != nil {

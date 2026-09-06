@@ -194,6 +194,7 @@ cron:
     interval: 6h
     clean_period: 2160h
     jobs_ttl: 72h
+    reaper_grace_period: 5m
     limit: 100
 
 media:

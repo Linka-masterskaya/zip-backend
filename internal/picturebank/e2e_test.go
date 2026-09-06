@@ -35,7 +35,7 @@ const picturesE2EJWTSecret = "pictures-e2e-only-secret"
 func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	pool := picturesE2EDatabase(t)
 	userID, folderID := picturesE2EUserAndFolder(t, pool)
-	objectStorage, cleanupStorage := testutil.NewMinIO(t)
+	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
 	t.Cleanup(cleanupStorage)
 	redisClient, cleanupRedis := testutil.NewRedis(t)
 	t.Cleanup(cleanupRedis)

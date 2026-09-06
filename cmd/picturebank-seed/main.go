@@ -116,7 +116,7 @@ func openSeeder(configPath string) (*config.Config, *picturebank.Seeder, func(),
 		return nil, nil, nil, fmt.Errorf("connect postgres: %w", err)
 	}
 	closeDB := func() { pool.Close() }
-	objectStorage, err := storage.New(cfg.MinIO)
+	objectStorage, err := storage.New(cfg.MinIO, pool)
 	if err != nil {
 		closeDB()
 		return nil, nil, nil, fmt.Errorf("connect minio: %w", err)
