@@ -19,11 +19,16 @@ import (
 
 const multipartOverhead = int64(64 * 1024)
 
+// Тело batch-delete это только массив UUID, поэтому лимит взят с большим
+// запасом к сотне идентификаторов и заодно отсекает гигантский запрос.
+const maxBatchDeleteBody = int64(128 * 1024)
+
 type mediaService interface {
 	Upload(context.Context, []byte, string) (*Response, error)
 	Get(context.Context, uuid.UUID) (*Response, error)
 	List(context.Context, ListInput) (*ListPage, error)
 	Delete(context.Context, uuid.UUID) error
+	DeleteBatch(context.Context, []uuid.UUID, bool) (*BatchDeleteResult, error)
 }
 
 type Handler struct {
@@ -109,6 +114,13 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 		}
 		input.Limit = limit
 	}
+	if q.Has("unused") {
+		unused, err := strconv.ParseBool(q.Get("unused"))
+		if err != nil {
+			return ListInput{}, apperr.ErrBadRequest.WithMessage("unused must be a boolean")
+		}
+		input.Unused = unused
+	}
 	return input, nil
 }
 
@@ -122,6 +134,24 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+func (h *Handler) BatchDelete(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBatchDeleteBody)
+	var req struct {
+		IDs    []uuid.UUID `json:"ids"`
+		DryRun bool        `json:"dry_run"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return apperr.ErrBadRequest.WithMessage("body must contain an ids array of media UUIDs")
+	}
+	result, err := h.service.DeleteBatch(r.Context(), req.IDs, req.DryRun)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, result)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) error {

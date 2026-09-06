@@ -69,7 +69,7 @@ func TestE2E_LocalPicturesBankImportAndArchive(t *testing.T) {
 		DB: pool, Storage: objectStorage,
 	})
 	require.NoError(t, err)
-	mediaService := media.NewService(media.NewRepository(pool), objectStorage)
+	mediaService := media.NewService(media.NewRepository(pool), objectStorage, media.DefaultBatchDeleteLimit)
 	picturesService := NewService(source)
 	handler := NewHandler(picturesService, picturesConfig.CacheTTL)
 	packRepo := pack.NewRepository(pool)

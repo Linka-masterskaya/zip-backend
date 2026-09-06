@@ -32,6 +32,7 @@ type Config struct {
 	Server       ServerConfig       `mapstructure:"server"`
 	TTS          TTSConfig          `mapstructure:"ttsapi"`
 	Cron         CronConfig         `mapstructure:"cron"`
+	Media        MediaConfig        `mapstructure:"media"`
 	PackShare    PackShareConfig    `mapstructure:"pack_share"`
 }
 
@@ -736,4 +737,9 @@ func normalizeStringSlice(items []string) []string {
 		}
 	}
 	return result
+}
+
+// MediaConfig contains media library settings.
+type MediaConfig struct {
+	BatchDeleteLimit int `mapstructure:"batch_delete_limit"`
 }
