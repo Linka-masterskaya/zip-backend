@@ -233,7 +233,9 @@ func TestE2EStoragePutSerializesByObjectKey(t *testing.T) {
 	ctx := t.Context()
 	key := "tests/storage-registry/advisory-lock"
 	lockHash := sha256.Sum256([]byte(key))
-	lockID := int64(binary.BigEndian.Uint64(lockHash[:8]))
+	high := int64(binary.BigEndian.Uint32(lockHash[:4]) & 0x7fffffff)
+	low := int64(binary.BigEndian.Uint32(lockHash[4:8]))
+	lockID := (high << 32) | low
 
 	conn, err := pool.Acquire(ctx)
 	require.NoError(t, err)
