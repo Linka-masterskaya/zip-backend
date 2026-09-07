@@ -484,7 +484,7 @@ components:
             description: Родитель этой папки; null — папка лежит в корне раздела,
           }
 
-    Breadcrumb:
+    Breadcrumbs:
       type: object
       description: >-
         Один узел пути от корня раздела до текущей папки. Первый элемент
@@ -1143,7 +1143,7 @@ paths:
                   breadcrumbs:
                     {
                       type: array,
-                      items: { $ref: '#/components/schemas/Breadcrumb' },
+                      items: { $ref: '#/components/schemas/Breadcrumbs' },
                     }
                   items:
                     {

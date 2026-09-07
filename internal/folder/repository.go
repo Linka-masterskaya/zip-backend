@@ -416,8 +416,8 @@ func (r *Repository) ensureParentVisible(
 	tx pgx.Tx,
 	userID uuid.UUID,
 	input ContentsInput,
-) (*CurrentFolder, []BreadCrumbs, error) {
-	breadcrumbs := []BreadCrumbs{{Name: sectionLabel(input.Section)}}
+) (*CurrentFolder, []Breadcrumbs, error) {
+	breadcrumbs := []Breadcrumbs{{Name: sectionLabel(input.Section)}}
 	if input.ParentID == nil {
 		return nil, breadcrumbs, nil
 	}
@@ -427,24 +427,25 @@ func (r *Repository) ensureParentVisible(
 	}
 	rows, err := tx.Query(ctx, `
          WITH RECURSIVE ancestors AS (
-		 SELECT id, name, parent_id, section, owner_id, depth
+		 SELECT id, name, parent_id, section, owner_id, 0 AS level
 		 FROM folders
 		 WHERE id = $1 AND org_id = $2
 		 UNION ALL
-	     SELECT f.id, f.name, f.parent_id, f.section, f.owner_id, f.depth
+	     SELECT f.id, f.name, f.parent_id, f.section, f.owner_id, a.level + 1
 		 FROM folders f
 		 JOIN ancestors a ON f.id = a.parent_id
-		 WHERE f.depth < a.depth AND f.org_id = $2)
+		 WHERE f.org_id = $2 AND a.level < 5)
 		 SELECT id, name, parent_id, section, owner_id
 		 FROM ancestors
-		 ORDER BY depth ASC`, *input.ParentID, orgID)
+		 ORDER BY level DESC`, *input.ParentID, orgID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("folder ancestors: %w", err)
 	}
 	defer rows.Close()
 
 	var current *CurrentFolder
-	var found bool
+	// first самый дальний предок (т.е.корень, если цепочка полная).
+	var found, first bool = false, true
 	for rows.Next() {
 		var id uuid.UUID
 		var name, section string
@@ -453,16 +454,26 @@ func (r *Repository) ensureParentVisible(
 		if err = rows.Scan(&id, &name, &parentID, &section, &ownerID); err != nil {
 			return nil, nil, fmt.Errorf("folder ancestors scan: %w", err)
 		}
-		breadcrumbs = append(breadcrumbs, BreadCrumbs{ID: &id, Name: name})
+		// level DESC первая строка, самый дальний найденный предок.
+		// Он должен быть корнем (parent_id IS NULL). Если это не так, значит цепочка
+		// оборвалась (испорченный parent_id) или упёрлась в лимит level < 5
+		if first {
+			first = false
+			if parentID != nil {
+				return nil, nil, fmt.Errorf(
+					"folder ancestors: chain for %s did not reach root", *input.ParentID)
+			}
+		}
+		// Папка из другого раздела или чужая (кроме library) считается
+		// отсутствующей: ответ не должен подтверждать, что она существует
+		// где-то ещё. Проверяется каждго предка.
+		if section != input.Section || (section != SectionLibrary && ownerID != userID) {
+			return nil, nil, ErrNotFound
+		}
+		breadcrumbs = append(breadcrumbs, Breadcrumbs{ID: &id, Name: name})
 		current = &CurrentFolder{ID: id, Name: name, ParentID: parentID}
 		if id == *input.ParentID {
 			found = true
-			// Папка из другого раздела или чужая (кроме library) считается
-			// отсутствующей: ответ не должен подтверждать, что она
-			// существует где-то ещё.
-			if section != input.Section || (section != SectionLibrary && ownerID != userID) {
-				return nil, nil, ErrNotFound
-			}
 		}
 	}
 	if err = rows.Err(); err != nil {

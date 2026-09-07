@@ -90,7 +90,7 @@ type ContentItem struct {
 
 type ContentsPage struct {
 	CurrentFolder *CurrentFolder `json:"current_folder"`
-	Breadcrumbs   []BreadCrumbs  `json:"breadcrumbs"`
+	Breadcrumbs   []Breadcrumbs  `json:"breadcrumbs"`
 	Items         []ContentItem  `json:"items"`
 	Limit         int            `json:"limit"`
 	Offset        int            `json:"offset"`
@@ -102,7 +102,7 @@ type CurrentFolder struct {
 	Name     string     `json:"name"`
 	ParentID *uuid.UUID `json:"parent_id"`
 }
-type BreadCrumbs struct {
+type Breadcrumbs struct {
 	ID   *uuid.UUID `json:"id"`
 	Name string     `json:"name"`
 }

@@ -674,3 +674,75 @@ func TestContentsLibraryBreadcrumbsScopedToOrganization(t *testing.T) {
 	})
 	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
+
+func TestContentsDataIntegrityErrorWhenBreakingTheChain(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "broken chain owner")
+	repo := NewRepository(pool)
+	service := NewService(repo)
+	ctx := folderContext(ownerID)
+
+	root, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Root",
+	})
+	require.NoError(t, err)
+	animals, err := service.Create(ctx, CreateInput{
+		ParentID: &root.ID, Section: SectionMy, Kind: KindFolder, Name: "animals",
+	})
+	require.NoError(t, err)
+	pet, err := service.Create(ctx, CreateInput{
+		ParentID: &animals.ID, Section: SectionMy, Kind: KindFolder, Name: "pet",
+	})
+	require.NoError(t, err)
+
+	// Ломаем цепочку. Папка pet будет родительской для папки animals
+	_, err = pool.Exec(context.Background(),
+		`UPDATE folders SET parent_id = $1 WHERE id = $2`, pet.ID, animals.ID)
+	require.NoError(t, err)
+
+	_, err = repo.Contents(t.Context(), ownerID, ContentsInput{
+		Section: SectionMy, ParentID: &pet.ID, Limit: 50,
+	})
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrNotFound),
+		"поломанная цепочка — это ошибка целостности данных, а не обычный 404")
+	assert.Contains(t, err.Error(), "did not reach root")
+}
+
+func TestContentsStudentsBreadcrumbsAndNonExistentID(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "students breadcrumb owner")
+	studentID := seedFolderStudent(t, pool, ownerID)
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	studentFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionStudents, Kind: KindStudent, StudentID: &studentID, Name: "Вика",
+	})
+	require.NoError(t, err)
+	animals, err := service.Create(ctx, CreateInput{
+		ParentID: &studentFolder.ID, Section: SectionStudents, Kind: KindFolder, Name: "animals",
+	})
+	require.NoError(t, err)
+
+	page, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &animals.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, page.CurrentFolder)
+	assert.Equal(t, animals.ID, page.CurrentFolder.ID)
+	require.Len(t, page.Breadcrumbs, 3)
+	assert.Nil(t, page.Breadcrumbs[0].ID)
+	assert.Equal(t, sectionLabel(SectionStudents), page.Breadcrumbs[0].Name)
+	require.NotNil(t, page.Breadcrumbs[1].ID)
+	assert.Equal(t, studentFolder.ID, *page.Breadcrumbs[1].ID)
+	assert.Equal(t, "Вика", page.Breadcrumbs[1].Name)
+	require.NotNil(t, page.Breadcrumbs[2].ID)
+	assert.Equal(t, animals.ID, *page.Breadcrumbs[2].ID)
+	//Проверка на несущ id.
+	nonexistentID := uuid.New()
+	_, err = service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &nonexistentID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+}

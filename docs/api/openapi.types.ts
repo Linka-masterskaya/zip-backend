@@ -563,7 +563,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             current_folder: components["schemas"]["CurrentFolder"] | null;
-                            breadcrumbs: components["schemas"]["Breadcrumb"][];
+                            breadcrumbs: components["schemas"]["Breadcrumbs"][];
                             items: components["schemas"]["ContentItem"][];
                             limit: number;
                             offset: number;
@@ -2932,7 +2932,7 @@ export interface components {
             parent_id: string | null;
         };
         /** @description Один узел пути от корня раздела до текущей папки. Первый элемент breadcrumbs — всегда сам раздел: id = null, name = его подпись («Мои наборы», «Библиотека», «Карточки учеников»). */
-        Breadcrumb: {
+        Breadcrumbs: {
             /**
              * Format: uuid
              * @description null для узла-раздела (первый элемент пути)
