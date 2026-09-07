@@ -168,13 +168,20 @@ func (r *Repository) ListWithTotal(
 	}
 	defer rollbackPackTx(ctx, tx)
 
-	items, err := r.list(ctx, tx, userID, input)
+	items, total, err := r.list(ctx, tx, userID, input)
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := r.count(ctx, tx, userID, input)
-	if err != nil {
-		return nil, 0, err
+
+	// count(*) OVER() gives us total together with every returned row.
+	// If OFFSET moves the page past the end, there is no row to carry total,
+	// so fall back to the standalone count query only for that case.
+	_, offset := repositoryListBounds(input)
+	if len(items) == 0 && offset > 0 {
+		total, err = r.count(ctx, tx, userID, input)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, 0, fmt.Errorf("pack repository list page commit: %w", err)
@@ -188,7 +195,7 @@ func (r *Repository) list(
 	tx pgx.Tx,
 	userID uuid.UUID,
 	input ListInput,
-) ([]*ListItem, error) {
+) ([]*ListItem, int, error) {
 	limit, offset := repositoryListBounds(input)
 	rows, err := tx.Query(
 		ctx,
@@ -205,22 +212,24 @@ func (r *Repository) list(
 		offset,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("pack repository list: %w", err)
+		return nil, 0, fmt.Errorf("pack repository list: %w", err)
 	}
 	defer rows.Close()
 
 	packs := make([]*ListItem, 0)
+	total := 0
 	for rows.Next() {
-		item, scanErr := scanListItem(rows)
+		item, rowTotal, scanErr := scanListItemWithTotal(rows)
 		if scanErr != nil {
-			return nil, fmt.Errorf("pack repository list scan: %w", scanErr)
+			return nil, 0, fmt.Errorf("pack repository list scan: %w", scanErr)
 		}
+		total = rowTotal
 		packs = append(packs, item)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("pack repository list rows: %w", err)
+		return nil, 0, fmt.Errorf("pack repository list rows: %w", err)
 	}
-	return packs, nil
+	return packs, total, nil
 }
 
 // count returns the total number of placements using the caller's transaction.
@@ -498,18 +507,31 @@ func scanPack(row rowScanner) (*Pack, error) {
 	return &result, nil
 }
 
-func scanListItem(row rowScanner) (*ListItem, error) {
-	var result ListItem
-	err := row.Scan(
+func listItemScanTargets(result *ListItem) []any {
+	return []any{
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
 		&result.LibraryFolderID, &result.PublishedAt,
 		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.IsFavorite, &result.Section,
 		&result.CreatedAt, &result.UpdatedAt,
-	)
-	if err != nil {
+	}
+}
+
+func scanListItem(row rowScanner) (*ListItem, error) {
+	var result ListItem
+	if err := row.Scan(listItemScanTargets(&result)...); err != nil {
 		return nil, err
 	}
 	return &result, nil
+}
+
+func scanListItemWithTotal(row rowScanner) (*ListItem, int, error) {
+	var result ListItem
+	var total int
+	targets := append(listItemScanTargets(&result), &total)
+	if err := row.Scan(targets...); err != nil {
+		return nil, 0, err
+	}
+	return &result, total, nil
 }

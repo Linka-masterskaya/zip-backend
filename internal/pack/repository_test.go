@@ -155,7 +155,7 @@ func TestRepositoryListWithTotalReturnsItemsAndTotal(t *testing.T) {
 	})
 }
 
-func TestRepositoryListWithTotalReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
+func TestRepositoryListWithTotalFallbackReadsTotalFromSameSnapshot(t *testing.T) {
 	pool := newPackTestDB(t)
 	writerRepo := NewRepository(pool)
 	_, userID, folderID := seedPackOwner(t, pool, "pagination snapshot org")
@@ -182,7 +182,7 @@ func TestRepositoryListWithTotalReadsItemsAndTotalFromOneSnapshot(t *testing.T) 
 	resultCh := make(chan listPageResult, 1)
 	go func() {
 		items, total, listErr := readerRepo.ListWithTotal(
-			t.Context(), userID, ListInput{Limit: 50},
+			t.Context(), userID, ListInput{Limit: 50, Offset: 100},
 		)
 		resultCh <- listPageResult{items: items, total: total, err: listErr}
 	}()
@@ -198,10 +198,10 @@ func TestRepositoryListWithTotalReadsItemsAndTotalFromOneSnapshot(t *testing.T) 
 	select {
 	case result := <-resultCh:
 		require.NoError(t, result.err)
-		require.NotEmpty(t, result.items)
-		assert.Equal(t, len(result.items), result.total)
+		assert.Empty(t, result.items)
+		assert.Equal(t, 1, result.total)
 	case <-time.After(5 * time.Second):
-		t.Fatal("ListWithTotal did not return after the second query was released")
+		t.Fatal("ListWithTotal fallback did not return after the count query was released")
 	}
 }
 
