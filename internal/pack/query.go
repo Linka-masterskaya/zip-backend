@@ -548,7 +548,7 @@ const deleteOrphanedMediaQuery = `
 					SELECT 1 FROM students WHERE avatar_media_id = media_files.id AND deleted_at IS NULL
 				)
 				AND NOT EXISTS (
-						SELECT 1 FROM tts_jobs WHERE media_id = media_files.id
+						SELECT 1 FROM tts_jobs WHERE media_id = media_files.id AND status IN ('pending', 'in_progress')
 				)
 		RETURNING org_id, size_bytes
 	),
