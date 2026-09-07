@@ -200,7 +200,7 @@ func (r *Repository) CleanupOldJobs(ctx context.Context, cutoff time.Time) error
 	}
 
 	if len(mediaIDs) > 0 {
-		_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) FOR UPDATE", mediaIDs)
+		_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) ORDER BY id FOR UPDATE", mediaIDs)
 		if err != nil {
 			return fmt.Errorf("select for update media: %w", err)
 		}
