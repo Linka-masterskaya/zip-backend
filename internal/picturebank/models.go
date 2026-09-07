@@ -1,7 +1,7 @@
-// Package picturebank provides a protected proxy to the public LINKa Pictures Bank.
+// Package picturebank provides a protected proxy over interchangeable Pictures Bank sources.
 package picturebank
 
-// Category describes one Pictures Bank category.
+// Category describes one Pictures Bank category. ID is adapter-specific and opaque to clients.
 type Category struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`

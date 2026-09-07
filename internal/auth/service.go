@@ -26,6 +26,9 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrEmailNotVerified   = errors.New("email not verified")
 	errEmailAlreadyExists = errors.New("email already exists")
+	// ErrEmailAlreadyRegistered — на email из Яндекса уже заведён локальный
+	// аккаунт с паролем.
+	ErrEmailAlreadyRegistered = errors.New("email already registered")
 )
 
 var dummyPasswordHash = []byte("$2a$12$UqfJl/B1CJ86pDCgYZuNXefHab2GHToXW1tWtfTc4Ee59.q1GMkcS")
@@ -63,6 +66,8 @@ type authRepoIface interface {
 	) error
 
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error)
+	GetUserByIdentity(ctx context.Context, provider, providerUID string) (*User, error)
+	CreateIdentity(ctx context.Context, params CreateIdentityParams) error
 	replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, passwordHash string) error
 	CreateOrganization(ctx context.Context, params CreateOrganizationParams) error
 	CreateUser(ctx context.Context, params CreateUserParams) error
@@ -183,6 +188,13 @@ func (au *authService) Login(ctx context.Context, email, password string) (*Logi
 		return nil, ErrEmailNotVerified
 	}
 
+	return au.issueSession(ctx, user)
+}
+
+// issueSession выпускает пару токенов. Единственная точка выдачи сессии:
+// вход по паролю и вход через провайдера должны класть в токен одни и те же
+// claims, включая версию сессии.
+func (au *authService) issueSession(ctx context.Context, user *User) (*LoginResult, error) {
 	jti := uuid.NewString()
 	fid := uuid.NewString()
 

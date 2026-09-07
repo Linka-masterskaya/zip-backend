@@ -55,14 +55,14 @@ func TestE2E_TTSFlow(t *testing.T) {
 		MimeType:   "audio/mpeg",
 	})
 	ttsHandler := tts.NewHandler(ttsService, 65536)
-	ttsWorker := worker.NewTTS(ttsClient, objectStorage, ttsRepo)
+	ttsWorker := worker.NewTTS(ttsClient, objectStorage, ttsRepo, "audio/mpeg")
 
 	mux := http.NewServeMux()
 	auth := middleware.NewAuthMW([]byte(e2eJWTSecret))
 	passthrough := func(next http.Handler) http.Handler { return next }
 	httpapi.RegisterTTSRoutes(mux, auth, passthrough, httpapi.TTSHandlers{TTS: ttsHandler})
 	httpapi.RegisterMediaRoutes(mux, auth, passthrough, httpapi.MediaHandlers{
-		Media: media.NewHandler(media.NewService(media.NewRepository(pool), objectStorage)),
+		Media: media.NewHandler(media.NewService(media.NewRepository(pool), objectStorage, media.DefaultBatchDeleteLimit)),
 	})
 	server := httptest.NewServer(middleware.Chain(
 		mux,

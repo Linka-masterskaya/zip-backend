@@ -44,13 +44,17 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		return &Pack{ID: packID}, nil
 	}
 	age := 5
-	repo.listFn = func(_ context.Context, gotUserID uuid.UUID, input ListInput) ([]*ListItem, error) {
+	repo.listWithTotalFn = func(
+		_ context.Context,
+		gotUserID uuid.UUID,
+		input ListInput,
+	) ([]*ListItem, int, error) {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, ListInput{
 			Query: "Speech", Age: &age, Difficulty: "easy",
 			Section: "my", Limit: 50,
 		}, input)
-		return []*ListItem{{ID: packID}}, nil
+		return []*ListItem{{ID: packID}}, 1, nil
 	}
 	repo.deleteFn = func(_ context.Context, gotUserID, gotPackID uuid.UUID) error {
 		assert.Equal(t, userID, gotUserID)
@@ -72,7 +76,9 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		Query: "  Speech  ", Age: &age, Difficulty: "easy", Section: "my",
 	})
 	require.NoError(t, err)
-	require.Len(t, listed, 1)
+	require.Len(t, listed.Items, 1)
+	assert.Equal(t, 1, listed.Total)
+	assert.Equal(t, 50, listed.Limit)
 	require.NoError(t, service.Delete(ctx, packID))
 	moved, err := service.Move(ctx, packID, folderID)
 	require.NoError(t, err)
@@ -101,12 +107,19 @@ func TestServiceListRejectsInvalidPagination(t *testing.T) {
 func TestServiceListRejectsInvalidFilters(t *testing.T) {
 	ageTooLow := 2
 	ageTooHigh := 19
+	age := 5
+	ageFrom := 8
+	ageTo := 5
 	tests := []struct {
 		name  string
 		input ListInput
 	}{
 		{name: "age too low", input: ListInput{Age: &ageTooLow}},
 		{name: "age too high", input: ListInput{Age: &ageTooHigh}},
+		{name: "age_from too low", input: ListInput{AgeFrom: &ageTooLow}},
+		{name: "age_to too high", input: ListInput{AgeTo: &ageTooHigh}},
+		{name: "exact age with range", input: ListInput{Age: &age, AgeFrom: &ageFrom}},
+		{name: "reversed range", input: ListInput{AgeFrom: &ageFrom, AgeTo: &ageTo}},
 		{name: "difficulty", input: ListInput{Difficulty: "expert"}},
 		{name: "section", input: ListInput{Section: "shared"}},
 	}
@@ -129,8 +142,8 @@ func TestServiceUpdateAllowsClearingNullableMetadata(t *testing.T) {
 		assert.Equal(t, userID, gotUserID)
 		assert.Equal(t, packID, gotPackID)
 		require.NotNil(t, input.FilterMetadata)
-		assert.True(t, input.FilterMetadata.AgeMin.Set)
-		assert.Nil(t, input.FilterMetadata.AgeMin.Value)
+		assert.True(t, input.FilterMetadata.Age.Set)
+		assert.Nil(t, input.FilterMetadata.Age.Value)
 		assert.True(t, input.FilterMetadata.Difficulty.Set)
 		assert.Nil(t, input.FilterMetadata.Difficulty.Value)
 		assert.True(t, input.Notes.Set)
@@ -139,7 +152,7 @@ func TestServiceUpdateAllowsClearingNullableMetadata(t *testing.T) {
 	}
 	input := UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true},
+			Age:        NullablePatch[int]{Set: true},
 			Difficulty: NullablePatch[string]{Set: true},
 		},
 		Notes: NullablePatch[string]{Set: true},
@@ -151,18 +164,16 @@ func TestServiceUpdateAllowsClearingNullableMetadata(t *testing.T) {
 }
 
 func TestServiceUpdateRejectsInvalidMetadata(t *testing.T) {
-	ageMin := 8
-	ageMax := 5
+	invalidAge := 2
 	invalidDifficulty := "expert"
 	tests := []struct {
 		name     string
 		metadata *FilterMetadataPatch
 	}{
 		{
-			name: "age range",
+			name: "age",
 			metadata: &FilterMetadataPatch{
-				AgeMin: NullablePatch[int]{Set: true, Value: &ageMin},
-				AgeMax: NullablePatch[int]{Set: true, Value: &ageMax},
+				Age: NullablePatch[int]{Set: true, Value: &invalidAge},
 			},
 		},
 		{
@@ -292,6 +303,7 @@ func TestServiceRequiresAuthenticatedUser(t *testing.T) {
 		})
 	}
 }
+
 func packContext(userID uuid.UUID) context.Context {
 	return authctx.SetUserIDToCtx(context.Background(), userID)
 }
@@ -309,7 +321,7 @@ type fakePackRepository struct {
 	duplicateFn         func(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	getFn               func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	listFn              func(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
+	listWithTotalFn     func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
 	moveFn              func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -326,6 +338,7 @@ func (f *fakePackRepository) Duplicate(
 	}
 	return &Pack{}, nil
 }
+
 func (f *fakePackRepository) GetForPublication(
 	ctx context.Context,
 	userID, packID uuid.UUID,
@@ -351,15 +364,15 @@ func (f *fakePackRepository) Get(ctx context.Context, userID, packID uuid.UUID) 
 	return &Pack{}, nil
 }
 
-func (f *fakePackRepository) List(
+func (f *fakePackRepository) ListWithTotal(
 	ctx context.Context,
 	userID uuid.UUID,
 	input ListInput,
-) ([]*ListItem, error) {
-	if f.listFn != nil {
-		return f.listFn(ctx, userID, input)
+) ([]*ListItem, int, error) {
+	if f.listWithTotalFn != nil {
+		return f.listWithTotalFn(ctx, userID, input)
 	}
-	return []*ListItem{}, nil
+	return []*ListItem{}, 0, nil
 }
 
 func (f *fakePackRepository) Update(ctx context.Context, userID, packID uuid.UUID, input UpdateInput) (*Pack, error) {

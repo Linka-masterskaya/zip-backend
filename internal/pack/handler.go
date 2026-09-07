@@ -8,9 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/httpquery"
 	"github.com/google/uuid"
 )
 
@@ -18,7 +18,7 @@ type packService interface {
 	Create(context.Context, string, uuid.UUID) (*Pack, error)
 	Duplicate(context.Context, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID) (*Pack, error)
-	List(context.Context, ListInput) ([]*ListItem, error)
+	List(context.Context, ListInput) (*ListPage, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -72,8 +72,7 @@ type duplicatePackRequest struct {
 type updatePackRequest struct {
 	Title      *string                   `json:"title"`
 	FolderID   *uuid.UUID                `json:"folder_id"`
-	AgeMin     nullableJSONField[int]    `json:"age_min"`
-	AgeMax     nullableJSONField[int]    `json:"age_max"`
+	Age        nullableJSONField[int]    `json:"age"`
 	Difficulty nullableJSONField[string] `json:"difficulty"`
 	Goals      *[]string                 `json:"goals"`
 	Notes      nullableJSONField[string] `json:"notes"`
@@ -112,7 +111,9 @@ func (h *Handler) DuplicatePack(w http.ResponseWriter, r *http.Request) error {
 		(req.FolderID != nil && *req.FolderID == uuid.Nil) {
 		return apperr.ErrBadRequest
 	}
-	result, err := h.service.Duplicate(r.Context(), packID, DuplicateInput(req))
+	result, err := h.service.Duplicate(r.Context(), packID, DuplicateInput{
+		FolderID: req.FolderID,
+	})
 	if err != nil {
 		return err
 	}
@@ -132,7 +133,7 @@ func (h *Handler) GetPack(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, http.StatusOK, result)
 }
 
-// ListPacks handles GET /api/v1/packs?query=&age=&difficulty=&section=.
+// ListPacks handles GET /api/v1/packs with search and metadata filters.
 func (h *Handler) ListPacks(w http.ResponseWriter, r *http.Request) error {
 	input, err := listInputFromRequest(r)
 	if err != nil {
@@ -224,8 +225,7 @@ func (r updatePackRequest) updateInput() UpdateInput {
 	input := UpdateInput{Title: r.Title, FolderID: r.FolderID, Notes: r.Notes.patch()}
 	if r.hasFilterMetadata() {
 		input.FilterMetadata = &FilterMetadataPatch{
-			AgeMin:     r.AgeMin.patch(),
-			AgeMax:     r.AgeMax.patch(),
+			Age:        r.Age.patch(),
 			Difficulty: r.Difficulty.patch(),
 			Goals:      r.Goals,
 		}
@@ -234,7 +234,7 @@ func (r updatePackRequest) updateInput() UpdateInput {
 }
 
 func (r updatePackRequest) hasFilterMetadata() bool {
-	return r.AgeMin.Set || r.AgeMax.Set || r.Difficulty.Set || r.Goals != nil
+	return r.Age.Set || r.Difficulty.Set || r.Goals != nil
 }
 
 func listInputFromRequest(r *http.Request) (ListInput, error) {
@@ -242,50 +242,43 @@ func listInputFromRequest(r *http.Request) (ListInput, error) {
 		Query:      r.URL.Query().Get("query"),
 		Difficulty: r.URL.Query().Get("difficulty"),
 		Section:    r.URL.Query().Get("section"),
+		SortBy:     r.URL.Query().Get("sort_by"),
+		Order:      r.URL.Query().Get("order"),
 	}
-	age, err := optionalQueryIntPointer(r, "age")
+	studentID, err := httpquery.OptionalUUID(r, "student_id")
 	if err != nil {
 		return ListInput{}, err
 	}
-	limit, err := optionalQueryInt(r, "limit")
+	input.StudentID = studentID
+	age, err := httpquery.OptionalInt(r, "age")
+	if err != nil {
+		return ListInput{}, err
+	}
+	ageFrom, err := httpquery.OptionalInt(r, "age_from")
+	if err != nil {
+		return ListInput{}, err
+	}
+	ageTo, err := httpquery.OptionalInt(r, "age_to")
+	if err != nil {
+		return ListInput{}, err
+	}
+	limit, err := httpquery.Int(r, "limit")
 	if err != nil {
 		return ListInput{}, err
 	}
 	if r.URL.Query().Has("limit") && limit == 0 {
 		return ListInput{}, apperr.ErrBadRequest.WithMessage("limit must be between 1 and 100")
 	}
-	offset, err := optionalQueryInt(r, "offset")
+	offset, err := httpquery.Int(r, "offset")
 	if err != nil {
 		return ListInput{}, err
 	}
 	input.Age = age
+	input.AgeFrom = ageFrom
+	input.AgeTo = ageTo
 	input.Limit = limit
 	input.Offset = offset
 	return validateListInput(input)
-}
-
-func optionalQueryIntPointer(r *http.Request, name string) (*int, error) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return nil, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return nil, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
-	}
-	return &value, nil
-}
-
-func optionalQueryInt(r *http.Request, name string) (int, error) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return 0, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, apperr.ErrBadRequest.WithMessage(name + " must be an integer")
-	}
-	return value, nil
 }
 
 func decodeJSON(r *http.Request, target any) error {

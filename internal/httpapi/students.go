@@ -12,7 +12,7 @@ type StudentHandlers struct {
 	Student *student.Handler
 }
 
-// RegisterStudentRoutes registers student create, list, update, and delete routes.
+// RegisterStudentRoutes registers student create, list, update, delete and avatar routes.
 func RegisterStudentRoutes(
 	mux Mux,
 	authMW *middleware.AuthMW,
@@ -27,4 +27,5 @@ func RegisterStudentRoutes(
 	mux.Handle("GET /api/v1/students", protected(handlers.Student.List))
 	mux.Handle("PATCH /api/v1/students/{id}", protected(handlers.Student.Update))
 	mux.Handle("DELETE /api/v1/students/{id}", protected(handlers.Student.Delete))
+	mux.Handle("PUT /api/v1/students/{id}/avatar", protected(handlers.Student.UploadAvatar))
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -39,19 +40,11 @@ func (f *fakeUploader) PutObject(ctx context.Context, key string, reader io.Read
 }
 
 type fakeAudioBank struct {
-	completeJobFn  func(ctx context.Context, jobID uuid.UUID, key, digest string, size int64) error
-	putToBankFn    func(ctx context.Context, entry *tts.BankEntry) error
-	completeCalled bool
-	bankCalled     bool
-	updateStatusFn func(context.Context, uuid.UUID, string) error
-}
-
-func (f *fakeAudioBank) CompleteJob(ctx context.Context, jobID uuid.UUID, key, digest string, size int64) error {
-	f.completeCalled = true
-	if f.completeJobFn != nil {
-		return f.completeJobFn(ctx, jobID, key, digest, size)
-	}
-	return nil
+	createMediaAndCompleteJobFn func(ctx context.Context, jobID, orgID, userID uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error)
+	putToBankFn                 func(ctx context.Context, entry *tts.BankEntry) error
+	updateStatusFn              func(context.Context, uuid.UUID, string) error
+	mediaJobCalled              bool
+	bankCalled                  bool
 }
 
 func (f *fakeAudioBank) PutToBank(ctx context.Context, entry *tts.BankEntry) error {
@@ -69,11 +62,21 @@ func (f *fakeAudioBank) UpdateStatusTTS(ctx context.Context, jobID uuid.UUID, st
 	return nil
 }
 
+func (f *fakeAudioBank) CreateMediaAndCompleteJob(ctx context.Context, jobID, orgID, userID uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
+	f.mediaJobCalled = true
+	if f.createMediaAndCompleteJobFn != nil {
+		return f.createMediaAndCompleteJobFn(ctx, jobID, orgID, userID, input)
+	}
+	return uuid.New(), nil
+}
+
 func testJob() broker.TTSJob {
 	return broker.TTSJob{
-		JobId: uuid.New().String(),
-		Text:  "привет",
-		Voice: "alena",
+		JobId:  uuid.New().String(),
+		OrgID:  uuid.New().String(),
+		UserID: uuid.New().String(),
+		Text:   "привет",
+		Voice:  "alena",
 	}
 }
 
@@ -91,12 +94,12 @@ func TestHandleOK(t *testing.T) {
 	stor := &fakeUploader{}
 	repo := &fakeAudioBank{}
 
-	w := NewTTS(synth, stor, repo)
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
 	err := w.Handle(context.Background(), job, false)
 
 	require.NoError(t, err)
 	assert.True(t, stor.called)
-	assert.True(t, repo.completeCalled)
+	assert.True(t, repo.mediaJobCalled)
 	assert.True(t, repo.bankCalled)
 }
 
@@ -125,11 +128,13 @@ func TestHandleOKVerifiesKeyAndDigest(t *testing.T) {
 		},
 	}
 	repo := &fakeAudioBank{
-		completeJobFn: func(_ context.Context, _ uuid.UUID, key, digest string, size int64) error {
-			assert.Equal(t, expectedKey, key)
-			assert.Equal(t, expectedDigest, digest)
-			assert.Equal(t, int64(len(audio)), size)
-			return nil
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
+			assert.Equal(t, expectedKey, input.MinioKey)
+			assert.Equal(t, expectedDigest, input.SHA256)
+			assert.Equal(t, int64(len(audio)), input.SizeBytes)
+			assert.Equal(t, "audio/mpeg", input.MimeType)
+			assert.Equal(t, "привет", input.Name)
+			return uuid.New(), nil
 		},
 		putToBankFn: func(_ context.Context, entry *tts.BankEntry) error {
 			assert.Equal(t, job.Text, entry.Text)
@@ -140,7 +145,7 @@ func TestHandleOKVerifiesKeyAndDigest(t *testing.T) {
 		},
 	}
 
-	w := NewTTS(synth, stor, repo)
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
 	err := w.Handle(context.Background(), job, false)
 	require.NoError(t, err)
 }
@@ -154,13 +159,13 @@ func TestHandleSynthesizeError(t *testing.T) {
 	stor := &fakeUploader{}
 	repo := &fakeAudioBank{}
 
-	w := NewTTS(synth, stor, repo)
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
 	err := w.Handle(context.Background(), testJob(), false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection refused")
 	assert.False(t, stor.called)
-	assert.False(t, repo.completeCalled)
+	assert.False(t, repo.mediaJobCalled)
 }
 
 func TestHandlePutObjectError(t *testing.T) {
@@ -176,12 +181,12 @@ func TestHandlePutObjectError(t *testing.T) {
 	}
 	repo := &fakeAudioBank{}
 
-	w := NewTTS(synth, stor, repo)
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
 	err := w.Handle(context.Background(), testJob(), false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "PutObject")
-	assert.False(t, repo.completeCalled)
+	assert.False(t, repo.mediaJobCalled)
 }
 
 func TestHandleCompleteJobError(t *testing.T) {
@@ -192,12 +197,12 @@ func TestHandleCompleteJobError(t *testing.T) {
 	}
 	stor := &fakeUploader{}
 	repo := &fakeAudioBank{
-		completeJobFn: func(_ context.Context, _ uuid.UUID, _, _ string, _ int64) error {
-			return fmt.Errorf("db connection lost")
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
+			return uuid.Nil, fmt.Errorf("db connection lost")
 		},
 	}
 
-	w := NewTTS(synth, stor, repo)
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
 	err := w.Handle(context.Background(), testJob(), false)
 
 	require.Error(t, err)
@@ -214,18 +219,25 @@ func TestHandleInvalidJobID(t *testing.T) {
 		},
 	}
 	stor := &fakeUploader{}
-	repo := &fakeAudioBank{}
+	var markFailedCalled bool
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, _ string) error {
+			markFailedCalled = true
+			return nil
+		},
+	}
 
 	job := testJob()
 	job.JobId = "not-a-uuid"
 
-	w := NewTTS(synth, stor, repo)
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
 	err := w.Handle(context.Background(), job, false)
 
 	require.NoError(t, err, "bad job id должен ACK'аться без ошибки")
 	assert.False(t, synthCalled, "не должен синтезировать при bad job id")
-	assert.False(t, repo.completeCalled)
+	assert.False(t, markFailedCalled, "без job id нечего фейлить")
 }
+
 func TestHandlePutToBankError(t *testing.T) {
 	synth := &fakeSynthesizer{
 		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
@@ -239,11 +251,211 @@ func TestHandlePutToBankError(t *testing.T) {
 		},
 	}
 
-	w := NewTTS(synth, stor, repo)
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), testJob(), false)
+
+	require.NoError(t, err, "ошибка банка не должна фейлить job")
+	assert.True(t, stor.called)
+	assert.True(t, repo.mediaJobCalled)
+}
+
+func TestHandleCreateMediaFileError(t *testing.T) {
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	repo := &fakeAudioBank{
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
+			return uuid.Nil, fmt.Errorf("quota exceeded")
+		},
+	}
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
 	err := w.Handle(context.Background(), testJob(), false)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate entry")
-	assert.True(t, stor.called)
-	assert.True(t, repo.completeCalled)
+	assert.Contains(t, err.Error(), "quota exceeded")
+	assert.True(t, repo.mediaJobCalled)
+}
+
+func TestHandleCreateMediaFileQuotaExceeded(t *testing.T) {
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	var failedStatus string
+	repo := &fakeAudioBank{
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, _ tts.MediaFileInput) (uuid.UUID, error) {
+			return uuid.Nil, tts.ErrQuotaExceeded
+		},
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			failedStatus = status
+			return nil
+		},
+	}
+
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), testJob(), false)
+
+	require.NoError(t, err, "quota exceeded — permanent, ACK без ошибки")
+	assert.Equal(t, tts.StatusFailed, failedStatus)
+	assert.True(t, repo.mediaJobCalled)
+	assert.True(t, repo.bankCalled)
+}
+
+func TestHandleInvalidOrgID(t *testing.T) {
+	var synthCalled bool
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			synthCalled = true
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	var failedStatus string
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			failedStatus = status
+			return nil
+		},
+	}
+
+	job := testJob()
+	job.OrgID = "not-a-uuid"
+
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), job, false)
+
+	require.NoError(t, err, "bad org id должен ACK'аться без ошибки")
+	assert.False(t, synthCalled, "не должен синтезировать при bad org id")
+	assert.Equal(t, tts.StatusFailed, failedStatus, "должен пометить job как failed")
+}
+
+func TestHandleInvalidUserID(t *testing.T) {
+	var synthCalled bool
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			synthCalled = true
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	var failedStatus string
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			failedStatus = status
+			return nil
+		},
+	}
+
+	job := testJob()
+	job.UserID = "not-a-uuid"
+
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), job, false)
+
+	require.NoError(t, err, "bad user id должен ACK'аться без ошибки")
+	assert.False(t, synthCalled, "не должен синтезировать при bad user id")
+	assert.Equal(t, tts.StatusFailed, failedStatus, "должен пометить job как failed")
+}
+
+func TestHandleTruncatesName(t *testing.T) {
+	longText := strings.Repeat("а", 100)
+
+	synth := &fakeSynthesizer{
+		synthesizeFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte("audio"), nil
+		},
+	}
+	stor := &fakeUploader{}
+	var gotName string
+	repo := &fakeAudioBank{
+		createMediaAndCompleteJobFn: func(_ context.Context, _, _, _ uuid.UUID, input tts.MediaFileInput) (uuid.UUID, error) {
+			gotName = input.Name
+			return uuid.New(), nil
+		},
+	}
+
+	job := testJob()
+	job.Text = longText
+
+	w := NewTTS(synth, stor, repo, "audio/mpeg")
+	err := w.Handle(context.Background(), job, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, 51, len([]rune(gotName)), "50 символов + …")
+}
+
+func TestParseJobInvalidOrgID(t *testing.T) {
+	var markFailedCalled bool
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			markFailedCalled = true
+			assert.Equal(t, tts.StatusFailed, status)
+			return nil
+		},
+	}
+	w := NewTTS(nil, nil, repo, "audio/mpeg")
+
+	job := testJob()
+	job.OrgID = "not-a-uuid"
+
+	_, _, _, ok := w.parseJob(context.Background(), job)
+
+	assert.False(t, ok)
+	assert.True(t, markFailedCalled)
+}
+
+func TestParseJobInvalidUserID(t *testing.T) {
+	var markFailedCalled bool
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, status string) error {
+			markFailedCalled = true
+			assert.Equal(t, tts.StatusFailed, status)
+			return nil
+		},
+	}
+	w := NewTTS(nil, nil, repo, "audio/mpeg")
+
+	job := testJob()
+	job.UserID = "not-a-uuid"
+
+	_, _, _, ok := w.parseJob(context.Background(), job)
+
+	assert.False(t, ok)
+	assert.True(t, markFailedCalled)
+}
+
+func TestParseJobInvalidJobID(t *testing.T) {
+	var markFailedCalled bool
+	repo := &fakeAudioBank{
+		updateStatusFn: func(_ context.Context, _ uuid.UUID, _ string) error {
+			markFailedCalled = true
+			return nil
+		},
+	}
+	w := NewTTS(nil, nil, repo, "audio/mpeg")
+
+	job := testJob()
+	job.JobId = "not-a-uuid"
+
+	_, _, _, ok := w.parseJob(context.Background(), job)
+
+	assert.False(t, ok)
+	assert.False(t, markFailedCalled, "без job id нечего фейлить")
+}
+
+func TestParseJobValid(t *testing.T) {
+	w := NewTTS(nil, nil, &fakeAudioBank{}, "audio/mpeg")
+	job := testJob()
+
+	jobID, orgID, userID, ok := w.parseJob(context.Background(), job)
+
+	assert.True(t, ok)
+	assert.Equal(t, job.JobId, jobID.String())
+	assert.Equal(t, job.OrgID, orgID.String())
+	assert.Equal(t, job.UserID, userID.String())
 }

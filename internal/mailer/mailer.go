@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/mail"
 	"strings"
@@ -23,6 +24,7 @@ var subjects = map[Template]string{
 	PasswordReset: "Сброс пароля",
 	EmailChange:   "Смена email",
 	AccountExists: "Аккаунт уже существует",
+	PackShare:     "Набор Linka для вас",
 }
 
 //go:embed templates/*.html
@@ -164,6 +166,7 @@ func (s *SMTPSender) Send(
 		"Username":    data.Username,
 		"Email":       data.Email,
 		"NewEmail":    data.NewEmail,
+		"PackTitle":   data.PackTitle,
 		"FrontendURL": s.frontendURL,
 	}
 
@@ -183,6 +186,11 @@ func (s *SMTPSender) Send(
 
 	msg.Subject(s.getSubject(tmpl))
 	msg.SetBodyString(gomail.TypeTextHTML, html.String())
+
+	if err := attachFiles(msg, data.Attachments); err != nil {
+		metrics.ObserveEmailSend(string(tmpl), "error", time.Since(start).Seconds())
+		return err
+	}
 
 	err := s.client.DialAndSendWithContext(ctx, msg)
 
@@ -204,6 +212,32 @@ func (s *SMTPSender) Send(
 
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func attachFiles(msg *gomail.Msg, attachments []Attachment) error {
+	for _, attachment := range attachments {
+		if attachment.Filename == "" || attachment.Reader == nil {
+			return fmt.Errorf("invalid email attachment")
+		}
+
+		options := make([]gomail.FileOption, 0, 1)
+		if attachment.ContentType != "" {
+			options = append(options, gomail.WithFileContentType(gomail.ContentType(attachment.ContentType)))
+		}
+
+		if seeker, ok := attachment.Reader.(io.ReadSeeker); ok {
+			// go-mail streams ReadSeeker attachments instead of buffering the whole
+			// payload in memory. Exported .linka archives implement io.ReadSeeker.
+			msg.AttachReadSeeker(attachment.Filename, seeker, options...)
+			continue
+		}
+
+		if err := msg.AttachReader(attachment.Filename, attachment.Reader, options...); err != nil {
+			return fmt.Errorf("attach %q: %w", attachment.Filename, err)
+		}
 	}
 
 	return nil

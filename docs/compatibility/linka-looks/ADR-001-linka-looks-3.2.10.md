@@ -130,6 +130,7 @@ PNG и WAV плюс `matching` из двух пар. Архив собран ч�
 | `settings.columns`, `settings.rows` | per-page `columns`, `rows` | Copy to each generated page. `match` uses two lanes and fixed row semantics. |
 | `blocks[]` | `pages[]` | One page per convertible block, preserving block order. |
 | `block.id` | `page.id` | Preserve string ID where possible. |
+| `block.name` | no equivalent | Not converted; Looks 3.2.10 `normalizePage` builds pages from an explicit field list and drops unknown properties. |
 | `grid` | `mode: "standard"` | Direct structural mapping. |
 | `single_choice` | `mode: "quiz"` | `answers[].is_correct=true` → card `answer: true`; Looks question has no backend source and remains empty unless a rule is added. |
 | `multi_choice` | no lossless equivalent | Looks quiz advances after any card with `answer: true`; it does not require selecting the full set. Must reject or define explicit degradation. |

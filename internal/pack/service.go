@@ -10,6 +10,7 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/internal/packfilter"
 	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
 )
@@ -19,7 +20,7 @@ type packRepository interface {
 	Duplicate(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	GetForPublication(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	List(context.Context, uuid.UUID, ListInput) ([]*ListItem, error)
+	ListWithTotal(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -81,7 +82,7 @@ func (s *Service) Get(ctx context.Context, packID uuid.UUID) (*Pack, error) {
 }
 
 // List returns a bounded page of packs from all accessible folders.
-func (s *Service) List(ctx context.Context, input ListInput) ([]*ListItem, error) {
+func (s *Service) List(ctx context.Context, input ListInput) (*ListPage, error) {
 	userID, err := authctx.UserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -90,8 +91,11 @@ func (s *Service) List(ctx context.Context, input ListInput) ([]*ListItem, error
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.repo.List(ctx, userID, input)
-	return result, packError(err)
+	items, total, err := s.repo.ListWithTotal(ctx, userID, input)
+	if err != nil {
+		return nil, packError(err)
+	}
+	return &ListPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
 }
 
 // Update updates editable metadata and never changes config.
@@ -204,14 +208,14 @@ func validateListInput(input ListInput) (ListInput, error) {
 	input.Query = strings.TrimSpace(input.Query)
 	input.Difficulty = strings.TrimSpace(input.Difficulty)
 	input.Section = strings.TrimSpace(input.Section)
-	if input.Age != nil && (*input.Age < 3 || *input.Age > 18) {
-		return ListInput{}, apperr.ErrBadRequest.WithMessage("age must be between 3 and 18")
+	input.SortBy = strings.TrimSpace(input.SortBy)
+	input.Order = strings.TrimSpace(input.Order)
+
+	if err := validateListFilters(input); err != nil {
+		return ListInput{}, err
 	}
-	if input.Difficulty != "" && !validDifficulty(input.Difficulty) {
-		return ListInput{}, apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
-	}
-	if input.Section != "" && !validSection(input.Section) {
-		return ListInput{}, apperr.ErrBadRequest.WithMessage("section must be library, my, or students")
+	if err := validateListSort(input); err != nil {
+		return ListInput{}, err
 	}
 	if input.Limit == 0 {
 		input.Limit = defaultLimit
@@ -225,8 +229,33 @@ func validateListInput(input ListInput) (ListInput, error) {
 	return input, nil
 }
 
-func validDifficulty(value string) bool {
-	return value == "easy" || value == "medium" || value == "hard"
+func validateListFilters(input ListInput) error {
+	if err := packfilter.ValidateAgeFilters(input.Age, input.AgeFrom, input.AgeTo); err != nil {
+		return err
+	}
+	if err := packfilter.ValidateDifficulty(input.Difficulty); err != nil {
+		return err
+	}
+	if input.Section != "" && !validSection(input.Section) {
+		return apperr.ErrBadRequest.WithMessage("section must be library, my, or students")
+	}
+	return nil
+}
+
+func validateListSort(input ListInput) error {
+	if input.SortBy != "" && !validPackSortBy(input.SortBy) {
+		return apperr.ErrBadRequest.WithMessage(
+			"sort_by must be updated_at, created_at, or title")
+	}
+	if input.Order != "" && !strings.EqualFold(input.Order, "asc") &&
+		!strings.EqualFold(input.Order, "desc") {
+		return apperr.ErrBadRequest.WithMessage("order must be asc or desc")
+	}
+	return nil
+}
+
+func validPackSortBy(value string) bool {
+	return value == "updated_at" || value == "created_at" || value == "title"
 }
 
 func validSection(value string) bool {
@@ -251,30 +280,17 @@ func validateUpdate(input *UpdateInput) error {
 }
 
 func validateFilterMetadata(metadata *FilterMetadataPatch) error {
-	if metadata.AgeMin.Set && metadata.AgeMin.Value != nil &&
-		(*metadata.AgeMin.Value < 3 || *metadata.AgeMin.Value > 18) {
-		return apperr.ErrBadRequest.WithMessage("age_min must be between 3 and 18")
-	}
-	if metadata.AgeMax.Set && metadata.AgeMax.Value != nil &&
-		(*metadata.AgeMax.Value < 3 || *metadata.AgeMax.Value > 18) {
-		return apperr.ErrBadRequest.WithMessage("age_max must be between 3 and 18")
-	}
-	if invalidAgeRange(metadata) {
-		return apperr.ErrBadRequest.WithMessage("age_min must not exceed age_max")
+	if metadata.Age.Set {
+		if err := packfilter.ValidateAge(metadata.Age.Value); err != nil {
+			return err
+		}
 	}
 	if metadata.Difficulty.Set && metadata.Difficulty.Value != nil {
-		difficulty := *metadata.Difficulty.Value
-		if !validDifficulty(difficulty) {
-			return apperr.ErrBadRequest.WithMessage("difficulty must be easy, medium, or hard")
+		if err := packfilter.ValidateDifficulty(*metadata.Difficulty.Value); err != nil {
+			return err
 		}
 	}
 	return nil
-}
-
-func invalidAgeRange(metadata *FilterMetadataPatch) bool {
-	return metadata.AgeMin.Set && metadata.AgeMin.Value != nil &&
-		metadata.AgeMax.Set && metadata.AgeMax.Value != nil &&
-		*metadata.AgeMin.Value > *metadata.AgeMax.Value
 }
 
 func packError(err error) error {

@@ -11,6 +11,9 @@ import (
 // AuthHandlers contains the handlers exposed by the auth API.
 type AuthHandlers struct {
 	Auth *auth.Handler
+	// OAuth равен nil, когда провайдер не настроен: без client_id и секрета
+	// поднимать эндпоинты нечем.
+	OAuth *auth.OAuthHandler
 }
 
 // RegisterAuthRoutes registers login, refresh, password reset and email verification routes.
@@ -37,4 +40,10 @@ func RegisterAuthRoutes(
 	// Resend принимает адрес в теле и не требует токена: неподтверждённый
 	// пользователь может не пройти вход, и попросить письмо было бы нечем.
 	mux.Handle("POST /api/v1/auth/verify-email/resend", public(rl.VerifyResend, h.Auth.ResendEmail))
+
+	if h.OAuth == nil {
+		return
+	}
+	mux.Handle("GET /api/v1/auth/yandex/login", public(rl.Login, h.OAuth.YandexLogin))
+	mux.Handle("GET /api/v1/auth/yandex/callback", public(rl.Login, h.OAuth.YandexCallback))
 }

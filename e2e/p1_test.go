@@ -169,15 +169,15 @@ func TestE2E_P1UserJourney(t *testing.T) {
 			http.MethodPatch,
 			"/api/v1/packs/"+createdPack.ID.String(),
 			map[string]any{
-				"title": "Автоматизация звука Р", "age_min": 5, "age_max": 8,
+				"title": "Автоматизация звука Р", "age": 5,
 				"difficulty": "medium", "goals": []string{"speech"}, "notes": "Домашнее задание",
 			},
 		),
 		http.StatusOK,
 	)
 	assert.Equal(t, "Автоматизация звука Р", updatedPack.Title)
-	require.NotNil(t, updatedPack.AgeMin)
-	assert.Equal(t, 5, *updatedPack.AgeMin)
+	require.NotNil(t, updatedPack.Age)
+	assert.Equal(t, 5, *updatedPack.Age)
 
 	movedPack := e2eJSON[pack.Pack](
 		t,
@@ -208,6 +208,25 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	require.Len(t, contents.Items, 1)
 	assert.Equal(t, "pack", contents.Items[0].Type)
 	assert.Equal(t, createdPack.ID, contents.Items[0].ID)
+	require.NotNil(t, contents.Items[0].Age)
+	assert.Equal(t, 5, *contents.Items[0].Age)
+	require.NotNil(t, contents.Items[0].Difficulty)
+	assert.Equal(t, "medium", *contents.Items[0].Difficulty)
+
+	rangedContents := e2eJSON[folder.ContentsPage](
+		t,
+		e2eRequest(
+			t,
+			server,
+			ownerToken,
+			http.MethodGet,
+			"/api/v1/sections/my/contents?parent_id="+child.ID.String()+"&age_from=4&age_to=6",
+			nil,
+		),
+		http.StatusOK,
+	)
+	require.Len(t, rangedContents.Items, 1)
+	assert.Equal(t, createdPack.ID, rangedContents.Items[0].ID)
 
 	t.Run("section root is addressable without a folder id", func(t *testing.T) {
 		// «Мои наборы» — пункт меню, а не папка: id для корня не существует.
@@ -561,13 +580,13 @@ func e2eServer(
 	packRepo := pack.NewRepository(pool)
 	packService := pack.NewService(packRepo, nil)
 	packHandler := pack.NewHandler(packService)
-	mediaService := media.NewService(media.NewRepository(pool), objectStorage)
+	mediaService := media.NewService(media.NewRepository(pool), objectStorage, media.DefaultBatchDeleteLimit)
 	mediaHandler := media.NewHandler(mediaService)
 	contentHandler := pack.NewContentHandler(
 		pack.NewContentService(packRepo, objectStorage, mediaService, packService),
 	)
 	folderHandler := folder.NewHandler(folder.NewService(folder.NewRepository(pool)))
-	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto, objectStorage))
+	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto, objectStorage, mediaService))
 
 	mux := http.NewServeMux()
 	auth := middleware.NewAuthMW([]byte(e2eJWTSecret))
@@ -692,7 +711,7 @@ func testPNG(marker byte) []byte {
 	return append(data, marker)
 }
 
-func mediaIDs(items []media.File) []uuid.UUID {
+func mediaIDs(items []media.ListItem) []uuid.UUID {
 	ids := make([]uuid.UUID, len(items))
 	for i, item := range items {
 		ids[i] = item.ID

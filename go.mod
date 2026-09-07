@@ -1,13 +1,13 @@
 module github.com/Linka-masterskaya/zip-backend
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/minio/minio-go/v7 v7.3.0
-	github.com/nats-io/nats-server/v2 v2.14.5
+	github.com/nats-io/nats-server/v2 v2.14.6
 	github.com/nats-io/nats.go v1.53.1
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
@@ -21,13 +21,14 @@ require (
 	github.com/wneessen/go-mail v0.8.1
 	go.uber.org/mock v0.6.0
 	golang.org/x/crypto v0.55.0
-	golang.org/x/image v0.44.0
+	golang.org/x/image v0.45.0
 	golang.org/x/sync v0.22.0
 )
 
 require (
 	github.com/lib/pq v1.12.3
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (
@@ -111,10 +112,14 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 )
+
+tool go.uber.org/mock/mockgen

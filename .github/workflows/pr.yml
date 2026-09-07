@@ -20,7 +20,9 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Версия закреплена: с latest сборка краснела бы сама по себе при
+          # выходе линтера с новыми проверками.
+          version: v2.13.2
           args: --config=.golangci.yml
 
   migrations:
@@ -67,6 +69,12 @@ jobs:
 
       - name: Check OpenAPI route drift
         run: go test ./internal/httpapi -run '^TestOpenAPIRouteDrift$' -count=1
+
+      - name: Generate frontend types
+        run: bash scripts/generate-ts-types.sh
+
+      - name: Check generated frontend types are up to date
+        run: git diff --exit-code -- docs/api/openapi.types.ts
 
   test:
     name: Test

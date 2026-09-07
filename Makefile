@@ -1,4 +1,4 @@
-.PHONY: build run run-local test test-e2e lint mock dev-up dev-down dev-reset migrate migrate-down
+.PHONY: build run run-local test test-e2e lint oapi ts-types mock dev-up dev-down dev-reset migrate migrate-down
 
 # ── Environment ──────────────────────────────────────────────────────────────
 # Load variables from .env file (if exists) and export them for subprocesses
@@ -11,6 +11,7 @@ endif
 build:
 	go build -o bin/server ./cmd/server
 	go build -o bin/migrate ./cmd/migrate
+	go build -o bin/picturebank-seed ./cmd/picturebank-seed
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 run:
@@ -28,7 +29,7 @@ test:
 	go test ./... -race -count=1
 
 test-e2e:
-	go test -tags=e2e ./e2e -run '^TestE2E_' -race -count=1 -v
+	go test -tags=e2e ./e2e ./internal/picturebank -race -count=1 -v
 
 test-cover:
 	go test ./... -race -count=1 -coverprofile=coverage.out
@@ -37,6 +38,13 @@ test-cover:
 # ── Lint ─────────────────────────────────────────────────────────────────────
 lint:
 	golangci-lint run ./...
+
+# ── Codegen ─────────────────────────────────────────────────────────────────
+oapi:
+	bash scripts/generate-oapi.sh
+
+ts-types:
+	bash scripts/generate-ts-types.sh
 
 # ── Mocks (uber/gomock) ──────────────────────────────────────────────────────
 mock:

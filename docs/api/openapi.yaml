@@ -1,7 +1,7 @@
-openapi: 3.0.3
+openapi: 3.1.1
 info:
   title: Linka Backend API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     Auth + Profile для Linka Editor. Сверено с дизайном.
     Без username. Вход по email. Refresh — httpOnly cookie (SameSite=Strict). Access — Bearer JWT (HS256, 15m).
@@ -10,6 +10,7 @@ servers:
     description: API v1
 tags:
   - name: auth
+  - name: oauth
   - name: profile
   - name: folders
   - name: packs
@@ -114,12 +115,12 @@ components:
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
-        display_name: { type: string, nullable: true }
+        display_name: { type: [string, "null"] }
         avatar_url:
-          { type: string, nullable: true, description: presigned MinIO URL }
+          { type: [string, "null"], description: presigned MinIO URL }
         role: { type: string, enum: [defectologist, parent, viewer, admin] }
         email_verified: { type: boolean }
-        org_id: { type: string, format: uuid, nullable: true }
+        org_id: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
 
     AvatarResponse:
@@ -144,10 +145,10 @@ components:
         id: { type: string, format: uuid }
         org_id: { type: string, format: uuid }
         owner_id: { type: string, format: uuid }
-        parent_id: { type: string, format: uuid, nullable: true }
+        parent_id: { type: [string, "null"], format: uuid }
         section: { type: string, enum: [library, my, students] }
         kind: { type: string, enum: [folder, student] }
-        student_id: { type: string, format: uuid, nullable: true }
+        student_id: { type: [string, "null"], format: uuid }
         name: { type: string }
         depth: { type: integer, minimum: 0, maximum: 4 }
         created_at: { type: string, format: date-time }
@@ -236,13 +237,12 @@ components:
         org_id: { type: string, format: uuid }
         owner_id: { type: string, format: uuid }
         folder_id: { type: string, format: uuid }
-        library_folder_id: { type: string, format: uuid, nullable: true }
-        published_at: { type: string, format: date-time, nullable: true }
+        library_folder_id: { type: [string, "null"], format: uuid }
+        published_at: { type: [string, "null"], format: date-time }
         title: { type: string }
         status: { type: string, enum: [draft, published] }
-        age_min: { type: integer, minimum: 3, maximum: 18, nullable: true }
-        age_max: { type: integer, minimum: 3, maximum: 18, nullable: true }
-        difficulty: { type: string, enum: [easy, medium, hard], nullable: true }
+        age: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
         notes: { type: string }
         config: { type: object, additionalProperties: true }
@@ -259,18 +259,39 @@ components:
     DuplicatePackRequest:
       type: object
       properties:
-        folder_id: { type: string, format: uuid, nullable: true }
+        folder_id: { type: [string, "null"], format: uuid }
+
+    SharePackRequest:
+      type: object
+      required: [target_type, target_id]
+      additionalProperties: false
+      properties:
+        target_type:
+          type: string
+          enum: [folder, student]
+        target_id: { type: string, format: uuid }
+
+    PackShareTask:
+      type: object
+      required: [id, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [queued, processing, sent, failed]
+        message: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     UpdatePackRequest:
       type: object
       properties:
         title: { type: string }
         folder_id: { type: string, format: uuid }
-        age_min: { type: integer, minimum: 3, maximum: 18, nullable: true }
-        age_max: { type: integer, minimum: 3, maximum: 18, nullable: true }
-        difficulty: { type: string, enum: [easy, medium, hard], nullable: true }
+        age: { type: [integer, "null"], minimum: 3, maximum: 18 }
+        difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
-        notes: { type: string, nullable: true }
+        notes: { type: [string, "null"] }
 
     MovePackRequest:
       type: object
@@ -292,6 +313,17 @@ components:
               }
             is_favorite: { type: boolean }
             section: { type: string, enum: [library, my, students] }
+
+    PackListPage:
+      type: object
+      required: [items, limit, offset, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PackListItem' }
+        limit: { type: integer }
+        offset: { type: integer }
+        total: { type: integer, minimum: 0 }
 
     MediaFile:
       type: object
@@ -333,23 +365,82 @@ components:
                 description: Временная presigned MinIO URL,
               }
 
+    MediaListItem:
+      allOf:
+        - $ref: '#/components/schemas/MediaFile'
+        - type: object
+          required: [can_delete]
+          properties:
+            can_delete:
+              type: boolean
+              description: Может ли вызывающий удалить файл. Список орг-скоупный, а удаление доступно только загрузившему.
+
     MediaPage:
       type: object
-      required: [items]
+      required: [items, total]
       description: Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`.
       properties:
         items:
           type: array
-          items: { $ref: '#/components/schemas/MediaFile' }
+          items: { $ref: '#/components/schemas/MediaListItem' }
+        total:
+          type: integer
+          minimum: 0
+          description: Всего файлов организации с учётом query, type и unused.
         next_cursor:
           type: string
           description: Курсор следующей страницы. Отсутствует, если страница последняя.
+
+    MediaBatchDeleteRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+          description: Идентификаторы media; повторы схлопываются. Размер пачки задаётся настройкой media.batch_delete_limit, по умолчанию 100.
+        dry_run:
+          type: boolean
+          default: false
+          description: Посчитать результат и ничего не удалять.
+
+    MediaSkippedFile:
+      type: object
+      required: [id, reason]
+      properties:
+        id: { type: string, format: uuid }
+        reason:
+          type: string
+          enum: [not_found, in_use]
+          description: 'not_found — файла нет, он чужой или загружен другим пользователем; in_use — на файл ссылается набор, аватар ученика или TTS-джоба'
+
+    MediaBatchDeleteResult:
+      type: object
+      required: [deleted, skipped, freed_bytes, dry_run]
+      description: Удалённые и пропущенные файлы одной пачки.
+      properties:
+        deleted:
+          type: array
+          items: { type: string, format: uuid }
+        skipped:
+          type: array
+          items: { $ref: '#/components/schemas/MediaSkippedFile' }
+        freed_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Сколько байт вернулось в квоту организации; при dry_run — сколько вернулось бы.
+        dry_run:
+          type: boolean
 
     PictureCategory:
       type: object
       required: [id, name]
       properties:
-        id: { type: string, format: uuid }
+        id:
+          type: string
+          description: Opaque adapter-specific category identifier; clients must not parse it as a UUID.
         name: { type: string }
 
     Picture:
@@ -390,29 +481,48 @@ components:
     Student:
       type: object
       required:
-        [id, email, email_verified, name, status, created_at, updated_at]
+        [id, email, email_verified, name, status, cards_shift, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
         email_verified: { type: boolean }
         name:           { type: string }
-        age:            { type: integer, minimum: 0, maximum: 100, nullable: true }
+        age:            { type: [integer, "null"], minimum: 0, maximum: 100 }
         status:         { type: string, enum: [active, paused, archived, one_time] }
-        last_lesson_at: { type: string, format: date, nullable: true, description: Дата последнего занятия }
-        avatar_media_id:
+        cards_shift:
           type: string
+          enum: [left, full, right]
+          default: full
+          description: Смещение карточек в наборах ученика.
+        last_lesson_at: { type: [string, "null"], format: date, description: Дата последнего занятия }
+        avatar_media_id:
+          type: [string, "null"]
           format: uuid
-          nullable: true
           description: Ссылка на файл из банка медиа; `null` — аватара нет.
         avatar_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: |
             Presigned-ссылка на аватар, выданная на это чтение и живущая 15 минут.
             Хранить её нельзя — при следующем чтении приходит новая. Если подпись
             не удалась, поле придёт `null`, а `avatar_media_id` останется.
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
+
+    StudentAvatarResponse:
+      type: object
+      required: [avatar_url, avatar_media_id]
+      properties:
+        avatar_url:
+          type: [string, "null"]
+          description: |
+            Presigned-ссылка на загруженный аватар, живёт 15 минут. `null`,
+            если подписать ссылку не удалось — файл при этом сохранён.
+        avatar_media_id:
+          type: string
+          format: uuid
+          description: |
+            Идентификатор созданного файла в банке медиа. Им же аватар
+            снимается или меняется через `PATCH /students/{id}`.
 
     StudentListResponse:
       type: object
@@ -432,9 +542,26 @@ components:
         type: { type: string, enum: [folder, pack] }
         id: { type: string, format: uuid }
         name: { type: string }
-        kind: { type: string, enum: [folder, student], nullable: true }
-        student_id: { type: string, format: uuid, nullable: true }
-        published: { type: boolean }
+        kind:
+          type: [string, "null"]
+          enum: [folder, student, null]
+          description: Тип папки; возвращается только для `type = folder`
+        student_id:
+          type: [string, "null"]
+          format: uuid
+          description: Идентификатор ученика; возвращается только для `type = folder`
+        published:
+          type: boolean
+          description: Признак публикации; возвращается только для `type = pack`
+        age:
+          type: [integer, "null"]
+          minimum: 3
+          maximum: 18
+          description: Рекомендуемый возраст; возвращается только для `type = pack`, может быть `null`
+        difficulty:
+          type: [string, "null"]
+          enum: [easy, medium, hard, null]
+          description: Сложность набора; возвращается только для `type = pack`, может быть `null`
         updated_at: { type: string, format: date-time }
 
     SettingsDocument:
@@ -606,6 +733,56 @@ paths:
         '202': { description: Запрос принят }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
+
+  /auth/yandex/login:
+    get:
+      tags: [oauth]
+      operationId: yandexLogin
+      summary: Начать вход через Яндекс
+      security: []
+      description: |
+        Отдаёт редирект на страницу согласия Яндекса. Одноразовый `state`
+        кладётся в хранилище и в cookie `oauth_state`, привязанную к пути
+        callback: без совпадения обоих значений callback вернёт `403`.
+        Эндпоинт поднимается только если провайдер настроен.
+      responses:
+        '307':
+          description: Редирект на oauth.yandex.ru
+          headers:
+            Location: { schema: { type: string } }
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly-cookie `oauth_state`, живёт 5 минут.
+        '404': { description: 'Провайдер не настроен, эндпоинт не поднят' }
+
+  /auth/yandex/callback:
+    get:
+      tags: [oauth]
+      operationId: yandexCallback
+      summary: Завершить вход через Яндекс
+      security: []
+      description: |
+        Принимает пользователя обратно от Яндекса и выдаёт ту же сессию, что и
+        обычный вход: refresh — в HttpOnly-cookie, access — во фрагменте
+        адреса фронтенда (`#access_token=...`), чтобы токен не попал в
+        `Referer`, историю браузера и логи прокси.
+
+        Если на почту из Яндекса уже заведён локальный аккаунт с паролем,
+        связка не создаётся: пользователь уходит на `/login?email_exists=true`.
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        '303':
+          description: Редирект на фронтенд с сессией
+          headers:
+            Location: { schema: { type: string } }
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly-cookie `refresh_token`.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { description: 'state не совпал, протух или уже использован' }
+        '404': { description: 'Провайдер не настроен, эндпоинт не поднят' }
 
   /auth/login:
     post:
@@ -856,10 +1033,10 @@ paths:
               type: object
               required: [section, kind, name]
               properties:
-                parent_id: { type: string, format: uuid, nullable: true }
+                parent_id: { type: [string, "null"], format: uuid }
                 section: { type: string, enum: [library, my, students] }
                 kind: { type: string, enum: [folder, student] }
-                student_id: { type: string, format: uuid, nullable: true }
+                student_id: { type: [string, "null"], format: uuid }
                 name: { type: string }
       responses:
         '201':
@@ -978,7 +1155,7 @@ paths:
               type: object
               required: [parent_id]
               properties:
-                { parent_id: { type: string, format: uuid, nullable: true } }
+                { parent_id: { type: [string, "null"], format: uuid } }
       responses:
         '200':
           {
@@ -1008,6 +1185,12 @@ paths:
         - { name: parent_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Папка внутри раздела. Не задан — корень раздела" }
         - { name: sort, in: query, schema: { type: string, enum: [name, updated_at], default: name } }
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { name: query, in: query, schema: { type: string }, description: "Подстрока названия папки или набора без учёта регистра" }
+        - { name: type, in: query, schema: { type: string, enum: [folder, pack] }, description: "Оставить только папки или только наборы" }
+        - { name: age, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to. У папок возраста нет, поэтому фильтр оставляет только наборы" }
+        - { name: age_from, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age" }
+        - { name: age_to, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age" }
+        - { name: difficulty, in: query, schema: { type: string, enum: [easy, medium, hard] }, description: "Свойство набора: папки отсеиваются" }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
@@ -1017,7 +1200,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, limit, offset]
+                required: [items, limit, offset, total]
                 properties:
                   items:
                     {
@@ -1026,6 +1209,7 @@ paths:
                     }
                   limit: { type: integer }
                   offset: { type: integer }
+                  total: { type: integer, minimum: 0 }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Папка не найдена или недоступна }
@@ -1049,6 +1233,13 @@ paths:
             required: false,
             schema: { type: string },
             description: 'Фильтр по media_type, например image или audio',
+          }
+        - {
+            name: unused,
+            in: query,
+            required: false,
+            schema: { type: boolean, default: false },
+            description: 'Только файлы, на которые не ссылаются ни media_usages, ни аватар ученика, ни TTS-джоба',
           }
         - {
             name: cursor,
@@ -1102,6 +1293,26 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '413': { description: Файл или квота превышены }
 
+  /media/batch-delete:
+    post:
+      tags: [media]
+      summary: Массовое удаление media одной пачкой
+      description: Идемпотентно — файл, которого нет, чужой или ещё используемый, попадает в `skipped` с причиной, остальные из пачки удаляются. Сделано методом POST, потому что тело у DELETE вырезают часть прокси и клиентов.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MediaBatchDeleteRequest' }
+      responses:
+        '200':
+          description: Что удалено и что пропущено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaBatchDeleteResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /media/{id}:
     get:
       tags: [media]
@@ -1146,8 +1357,8 @@ paths:
   /pictures/categories:
     get:
       tags: [pictures]
-      summary: Получить категории LINKa Pictures Bank через защищённый proxy
-      description: Ответ кэшируется; исходящие запросы глобально ограничены через Redis.
+      summary: Получить категории активного Pictures Bank через защищённый proxy
+      description: В local-режиме источник — PostgreSQL; в external-режиме ответ кэшируется, а исходящие запросы глобально ограничены через Redis. Response contract одинаков для обоих adapters.
       security: [{ bearerAuth: [] }]
       responses:
         '200':
@@ -1158,16 +1369,13 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/PictureCategory' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503':
-          {
-            description: Pictures Bank недоступен или исчерпан исходящий бюджет,
-          }
+        '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
 
   /pictures/search:
     get:
       tags: [pictures]
-      summary: Найти изображения в LINKa Pictures Bank
-      description: Одинаковые одновременные запросы объединяются, результаты кэшируются.
+      summary: Найти изображения в активном Pictures Bank
+      description: В local-режиме поиск выполняется по PostgreSQL; в external-режиме одинаковые запросы объединяются и результаты кэшируются. Response contract одинаков для обоих adapters; специальные символы запроса трактуются как обычный текст.
       security: [{ bearerAuth: [] }]
       parameters:
         - {
@@ -1186,16 +1394,13 @@ paths:
                 items: { $ref: '#/components/schemas/Picture' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503':
-          {
-            description: Pictures Bank недоступен или исчерпан исходящий бюджет,
-          }
+        '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
 
   /pictures/{id}/content:
     get:
       tags: [pictures]
-      summary: Получить изображение Pictures Bank через ограниченный proxy
-      description: Байты кэшируются в памяти процесса на `pictures_bank.cache_ttl`; ответ содержит согласованный `Cache-Control max-age`.
+      summary: Получить изображение активного Pictures Bank через защищённый proxy
+      description: Backend отдаёт бинарные данные сам и не раскрывает прямые external или MinIO URL. В external-режиме байты кэшируются в памяти процесса на `pictures_bank.cache_ttl`; local-режим читает системный объект из MinIO. Ответ содержит согласованный `Cache-Control max-age`.
       security: [{ bearerAuth: [] }]
       parameters:
         - {
@@ -1214,16 +1419,13 @@ paths:
             image/gif: { schema: { type: string, format: binary } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
-        '503':
-          {
-            description: 'Pictures Bank недоступен, ответ слишком большой или имеет неверный MIME',
-          }
+        '503': { description: 'Pictures Bank недоступен либо источник вернул некорректный/слишком большой объект' }
 
   /pictures/{id}/import:
     post:
       tags: [pictures]
-      summary: Получить ссылку на изображение Pictures Bank без локального копирования
-      description: Совместимый endpoint возвращает `source_picture_id` для config. Байты не скачиваются в MinIO и не расходуют квоту организации.
+      summary: Получить ссылку на изображение активного Pictures Bank без пользовательского копирования
+      description: Совместимый endpoint возвращает `source_picture_id` для config. Изображение не копируется в user media и не расходует квоту организации.
       security: [{ bearerAuth: [] }]
       parameters:
         - {
@@ -1282,7 +1484,19 @@ paths:
             name: age,
             in: query,
             schema: { type: integer, minimum: 3, maximum: 18 },
-            description: age_min <= age <= age_max,
+            description: Точное совпадение с рекомендуемым возрастом набора. Нельзя сочетать с age_from или age_to,
+          }
+        - {
+            name: age_from,
+            in: query,
+            schema: { type: integer, minimum: 3, maximum: 18 },
+            description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age",
+          }
+        - {
+            name: age_to,
+            in: query,
+            schema: { type: integer, minimum: 3, maximum: 18 },
+            description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age",
           }
         - {
             name: difficulty,
@@ -1293,6 +1507,23 @@ paths:
             name: section,
             in: query,
             schema: { type: string, enum: [library, my, students] },
+          }
+        - name: student_id
+          in: query
+          schema: { type: string, format: uuid }
+          description: >-
+            Только наборы одного ученика: лежащие в его папке, во вложенных в
+            неё папках и выданные ему адаптации.
+        - {
+            name: sort_by,
+            in: query,
+            schema: { type: string, enum: [updated_at, created_at, title], default: updated_at },
+            description: Сортировка по title — без учёта регистра,
+          }
+        - {
+            name: order,
+            in: query,
+            schema: { type: string, enum: [asc, desc], default: desc },
           }
         - {
             name: limit,
@@ -1310,8 +1541,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/PackListItem' }
+                $ref: '#/components/schemas/PackListPage'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
@@ -1420,6 +1650,63 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Исходный набор не найден или недоступен }
+
+  /packs/{id}/share:
+    post:
+      tags: [packs]
+      summary: Поделиться набором с папкой или учеником
+      description: >-
+        Для target_type=folder переиспользует общую операцию дублирования,
+        создаёт независимую draft-копию в target_id и сохраняет исходное
+        название без суффикса «(копия)». Для target_type=student проверяет
+        владение учеником и паком, затем создаёт durable outbox-задачу в PostgreSQL.
+        Worker забирает queued-задачи с lease через FOR UPDATE SKIP LOCKED, поэтому
+        принятый 202 переживает рестарт/deploy и может быть продолжен другим инстансом.
+        Вложение ограничено 15 MiB по умолчанию; для больших архивов задача завершится
+        failed и клиенту следует использовать прямой GET /packs/{id}/export.
+        Статус доставки доступен по task id.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SharePackRequest' }
+      responses:
+        '201':
+          description: target_type=folder — независимая draft-копия создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pack' }
+        '202':
+          description: target_type=student — задача доставки принята
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackShareTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Набор или ученик не найден/недоступен }
+        '429': { description: Исчерпан суточный лимит email-отправок }
+        '503': { description: Durable outbox недоступен или сервис останавливается }
+
+  /pack-share-tasks/{id}:
+    get:
+      tags: [packs]
+      summary: Получить статус отправки пака ученику
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Текущий статус фоновой доставки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackShareTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Задача не найдена или принадлежит другому пользователю }
 
   /packs/{id}/move:
     post:
@@ -1832,8 +2119,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/PackListItem' }
+                $ref: '#/components/schemas/PackListPage'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
@@ -1852,12 +2138,18 @@ paths:
               properties:
                 email:  { type: string, format: email }
                 name:   { type: string }
-                age:    { type: integer, minimum: 0, maximum: 100, nullable: true }
+                age:    { type: [integer, "null"], minimum: 0, maximum: 100 }
                 status: { type: string, enum: [active, paused, archived, one_time], default: active }
-                avatar_media_id:
+                cards_shift:
                   type: string
+                  enum: [left, full, right]
+                  default: full
+                  description: |
+                    Смещение карточек в наборах. Поле необязательное: без него
+                    ученик получает `full`. Значение вне списка — `400`.
+                avatar_media_id:
+                  type: [string, "null"]
                   format: uuid
-                  nullable: true
                   description: |
                     Идентификатор файла, ранее загруженного через `POST /media`.
                     Файл должен принадлежать организации текущего пользователя,
@@ -1891,6 +2183,43 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /students/{id}/avatar:
+    put:
+      tags: [students]
+      operationId: replaceStudentAvatar
+      summary: Загрузить аватар ученика
+      description: |
+        Симметрично `PUT /profile/me/avatar`. Файл кладётся в банк медиа
+        организации (как через `POST /media`) и сразу становится аватаром
+        ученика. Принимаются png, jpeg и webp до 2 МБ. Снять аватар можно
+        через `PATCH /students/{id}` с `avatar_media_id: null`.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - {
+            name: id,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+          }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties: { file: { type: string, format: binary } }
+      responses:
+        '200':
+          description: Аватар загружен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentAvatarResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Ученик не найден }
+        '413': { description: Файл слишком большой }
+
   /students/{id}:
     patch:
       tags: [students]
@@ -1915,10 +2244,16 @@ paths:
                 age:    { type: integer, minimum: 0, maximum: 100 }
                 status: { type: string, enum: [active, paused, archived, one_time] }
                 last_lesson_at: { type: string, format: date, description: Дата последнего занятия }
+                cards_shift:
+                  type: [string, "null"]
+                  enum: [left, full, right, null]
+                  description: |
+                    Смещение карточек в наборах. Отсутствие поля оставляет
+                    текущее значение; явный `null` сбрасывает к `full`.
+                    Значение вне списка — `400`.
                 avatar_media_id:
-                  type: string
+                  type: [string, "null"]
                   format: uuid
-                  nullable: true
                   description: |
                     Идентификатор файла из `POST /media`. Явный `null` снимает
                     аватар; отсутствие поля оставляет текущий. Файл чужой
@@ -1937,7 +2272,14 @@ paths:
         '404': { description: Ученик не найден }
     delete:
       tags: [students]
-      summary: Архивировать ученика; запрещено при наличии student folder
+      summary: Архивировать ученика; с force=true — удалить насовсем
+      description: |
+        По умолчанию — soft-delete, и он запрещён при наличии student folder
+        (`409`). С `force=true` ученик удаляется полностью: вместе с его
+        папкой, вложенными папками, наборами внутри них и адаптациями.
+        Операция необратима и выполняется одной транзакцией. Опубликованный
+        набор в папке ученика её отменяет (`409`) — сначала снимают
+        публикацию. Аватар остаётся в банке медиа: файл удаляют отдельно.
       security: [{ bearerAuth: [] }]
       parameters:
         - {
@@ -1946,8 +2288,16 @@ paths:
             required: true,
             schema: { type: string, format: uuid },
           }
+        - {
+            name: force,
+            in: query,
+            required: false,
+            schema: { type: boolean, default: false },
+            description: Удалить ученика полностью вместе с папкой и наборами,
+          }
       responses:
-        '204': { description: Soft-delete выполнен }
+        '204': { description: Удалено }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { description: Ученик не найден }
         '409': { $ref: '#/components/responses/Conflict' }
 

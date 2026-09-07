@@ -32,7 +32,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	assert.Equal(t, folderID, created.FolderID)
 	assert.JSONEq(t, string(config), string(created.Config))
 
-	ageMin, ageMax := 5, 8
+	age := 5
 	difficulty := "medium"
 	notes := "notes"
 	goals := []string{"speech", "attention"}
@@ -40,8 +40,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	updated, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
 		Title: &title,
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true, Value: &ageMin},
-			AgeMax:     NullablePatch[int]{Set: true, Value: &ageMax},
+			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
 			Goals:      &goals,
 		},
@@ -54,20 +53,18 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 
 	cleared, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true},
-			AgeMax:     NullablePatch[int]{Set: true},
+			Age:        NullablePatch[int]{Set: true},
 			Difficulty: NullablePatch[string]{Set: true},
 		},
 		Notes: NullablePatch[string]{Set: true},
 	})
 	require.NoError(t, err)
-	assert.Nil(t, cleared.AgeMin)
-	assert.Nil(t, cleared.AgeMax)
+	assert.Nil(t, cleared.Age)
 	assert.Nil(t, cleared.Difficulty)
 	assert.Empty(t, cleared.Notes)
 	assert.JSONEq(t, string(config), string(cleared.Config))
 
-	listed, err := repo.List(context.Background(), userID, ListInput{Limit: 50})
+	listed, _, err := repo.ListWithTotal(context.Background(), userID, ListInput{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created.ID, listed[0].ID)
@@ -101,7 +98,7 @@ func TestRepositoryEnforcesUserAndFolderAccess(t *testing.T) {
 	assert.ErrorIs(t, err, ErrFolderNotAllowed)
 	_, err = repo.Get(context.Background(), foreignUserID, created.ID)
 	assert.ErrorIs(t, err, ErrPackNotFound)
-	listed, err := repo.List(context.Background(), ownerID, ListInput{Limit: 50})
+	listed, _, err := repo.ListWithTotal(context.Background(), ownerID, ListInput{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created.ID, listed[0].ID)
@@ -116,7 +113,7 @@ func TestRepositoryEnforcesUserAndFolderAccess(t *testing.T) {
 	assert.ErrorIs(t, repo.Delete(context.Background(), foreignUserID, created.ID), ErrPackNotFound)
 }
 
-func TestRepositoryListUsesLimitAndOffset(t *testing.T) {
+func TestRepositoryListWithTotalReturnsItemsAndTotal(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	_, userID, folderID := seedPackOwner(t, pool, "pagination org")
@@ -136,11 +133,76 @@ func TestRepositoryListUsesLimitAndOffset(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	listed, err := repo.List(context.Background(), userID, ListInput{Limit: 1, Offset: 1})
+	t.Run("page", func(t *testing.T) {
+		items, total, err := repo.ListWithTotal(
+			t.Context(), userID, ListInput{Limit: 1, Offset: 1},
+		)
 
+		require.NoError(t, err)
+		require.Len(t, items, 1)
+		assert.Equal(t, created[1].ID, items[0].ID)
+		assert.Equal(t, 3, total)
+	})
+
+	t.Run("offset past end", func(t *testing.T) {
+		items, total, err := repo.ListWithTotal(
+			t.Context(), userID, ListInput{Limit: 2, Offset: 100},
+		)
+
+		require.NoError(t, err)
+		assert.Empty(t, items)
+		assert.Equal(t, 3, total)
+	})
+}
+
+func TestRepositoryListWithTotalFallbackReadsTotalFromSameSnapshot(t *testing.T) {
+	pool := newPackTestDB(t)
+	writerRepo := NewRepository(pool)
+	_, userID, folderID := seedPackOwner(t, pool, "pagination snapshot org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	_, err := writerRepo.Create(t.Context(), userID, CreateInput{
+		Title: "first", FolderID: folderID, Config: config,
+	})
 	require.NoError(t, err)
-	require.Len(t, listed, 1)
-	assert.Equal(t, created[1].ID, listed[0].ID)
+
+	gate := testutil.NewQueryGate()
+	readerPoolConfig := pool.Config()
+	readerPoolConfig.ConnConfig.Tracer = gate
+	readerPool, err := pgxpool.NewWithConfig(t.Context(), readerPoolConfig)
+	require.NoError(t, err)
+	defer readerPool.Close()
+	readerRepo := NewRepository(readerPool)
+
+	type listPageResult struct {
+		items []*ListItem
+		total int
+		err   error
+	}
+	resultCh := make(chan listPageResult, 1)
+	go func() {
+		items, total, listErr := readerRepo.ListWithTotal(
+			t.Context(), userID, ListInput{Limit: 50, Offset: 100},
+		)
+		resultCh <- listPageResult{items: items, total: total, err: listErr}
+	}()
+	defer gate.Release()
+	gate.Wait(t, 5*time.Second)
+
+	_, err = writerRepo.Create(t.Context(), userID, CreateInput{
+		Title: "second", FolderID: folderID, Config: config,
+	})
+	require.NoError(t, err)
+	gate.Release()
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		assert.Empty(t, result.items)
+		assert.Equal(t, 1, result.total)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListWithTotal fallback did not return after the count query was released")
+	}
 }
 
 func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
@@ -154,20 +216,20 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	foreignLibraryID := seedPackLibraryFolder(t, pool, foreignID)
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
 
-	ownPack := createFilteredPack(t, repo, userID, myFolderID, "Speech Easy", 4, 6, "easy", config)
-	studentPack := createFilteredPack(t, repo, userID, studentFolderID, "Reading Hard", 5, 9, "hard", config)
-	privateColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "Speech Private", 4, 7, "easy", config)
-	publishedColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "SPEECH Medium", 5, 8, "medium", config)
+	ownPack := createFilteredPack(t, repo, userID, myFolderID, "Speech Easy", 5, "easy", config)
+	studentPack := createFilteredPack(t, repo, userID, studentFolderID, "Reading Hard", 7, "hard", config)
+	privateColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "Speech Private", 5, "easy", config)
+	publishedColleague := createFilteredPack(t, repo, colleagueID, colleagueFolderID, "SPEECH Medium", 5, "medium", config)
 	_, err := repo.Publish(t.Context(), colleagueID, publishedColleague.ID, libraryFolderID, false)
 	require.NoError(t, err)
-	foreignPack := createFilteredPack(t, repo, foreignID, foreignFolderID, "Speech Foreign", 4, 8, "easy", config)
+	foreignPack := createFilteredPack(t, repo, foreignID, foreignFolderID, "Speech Foreign", 5, "easy", config)
 	_, err = repo.Publish(t.Context(), foreignID, foreignPack.ID, foreignLibraryID, false)
 	require.NoError(t, err)
 	_, err = pool.Exec(t.Context(), `INSERT INTO favorite_packs (user_id, pack_id) VALUES ($1, $2)`, userID, ownPack.ID)
 	require.NoError(t, err)
 
 	age := 5
-	listed, err := repo.List(t.Context(), userID, ListInput{Query: "sPeEcH", Age: &age, Limit: 50})
+	listed, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Query: "sPeEcH", Age: &age, Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, listed, 2)
 	items := listItemsByID(listed)
@@ -182,39 +244,55 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	assert.NotContains(t, items, privateColleague.ID)
 	assert.NotContains(t, items, foreignPack.ID)
 
-	easy, err := repo.List(t.Context(), userID, ListInput{Difficulty: "easy", Limit: 50})
+	easy, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Difficulty: "easy", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, easy, 1)
 	assert.Equal(t, ownPack.ID, easy[0].ID)
-	medium, err := repo.List(t.Context(), userID, ListInput{Difficulty: "medium", Limit: 50})
+	medium, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Difficulty: "medium", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, medium, 1)
 	assert.Equal(t, publishedColleague.ID, medium[0].ID)
-	hard, err := repo.List(t.Context(), userID, ListInput{Difficulty: "hard", Limit: 50})
+	hard, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Difficulty: "hard", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, hard, 1)
 	assert.Equal(t, studentPack.ID, hard[0].ID)
 
-	for _, boundaryAge := range []int{4, 6} {
-		boundary, boundaryErr := repo.List(t.Context(), userID, ListInput{
-			Query: "Speech Easy", Age: &boundaryAge, Limit: 50,
-		})
-		require.NoError(t, boundaryErr)
-		require.Len(t, boundary, 1)
-		assert.Equal(t, ownPack.ID, boundary[0].ID)
-	}
+	nonMatchingAge := 4
+	notMatched, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		Query: "Speech Easy", Age: &nonMatchingAge, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, notMatched)
 
-	my, err := repo.List(t.Context(), userID, ListInput{Section: "my", Limit: 50})
+	ageFrom, ageTo := 6, 7
+	inRange, inRangeTotal, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		AgeFrom: &ageFrom, AgeTo: &ageTo, Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, inRange, 1)
+	assert.Equal(t, studentPack.ID, inRange[0].ID)
+	assert.Equal(t, 1, inRangeTotal)
+
+	fromOnly, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{AgeFrom: &ageFrom, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, fromOnly, 1)
+	assert.Equal(t, studentPack.ID, fromOnly[0].ID)
+	toOnly := 5
+	upToAge, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{AgeTo: &toOnly, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, upToAge, 2)
+
+	my, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Section: "my", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, my, 1)
 	assert.Equal(t, ownPack.ID, my[0].ID)
 
-	library, err := repo.List(t.Context(), userID, ListInput{Section: "library", Limit: 50})
+	library, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Section: "library", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, library, 1)
 	assert.Equal(t, publishedColleague.ID, library[0].ID)
 
-	students, err := repo.List(t.Context(), userID, ListInput{Section: "students", Limit: 50})
+	students, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Section: "students", Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, students, 1)
 	assert.Equal(t, studentPack.ID, students[0].ID)
@@ -230,7 +308,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
 
 	created := createFilteredPack(
-		t, repo, userID, myFolderID, "Placement Speech", 4, 7, "easy", config,
+		t, repo, userID, myFolderID, "Placement Speech", 5, "easy", config,
 	)
 	_, err := repo.Publish(t.Context(), userID, created.ID, libraryFolderID, false)
 	require.NoError(t, err)
@@ -241,7 +319,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	require.NoError(t, err)
 
 	age := 5
-	listed, err := repo.List(t.Context(), userID, ListInput{
+	listed, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		Query: "pLaCeMeNt", Age: &age, Difficulty: "easy", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -261,7 +339,7 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	}
 	assert.Empty(t, expectedSections)
 
-	students, err := repo.List(t.Context(), userID, ListInput{
+	students, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		Query: "Placement Speech", Section: "students", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -272,11 +350,11 @@ func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	)
 
 	direct := createFilteredPack(
-		t, repo, userID, studentOneFolderID, "Direct Student Pack", 5, 8, "hard", config,
+		t, repo, userID, studentOneFolderID, "Direct Student Pack", 5, "hard", config,
 	)
 	_, err = repo.Assign(t.Context(), userID, direct.ID, []uuid.UUID{studentOneID})
 	require.NoError(t, err)
-	directPlacements, err := repo.List(t.Context(), userID, ListInput{
+	directPlacements, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
 		Query: "Direct Student Pack", Section: "students", Limit: 50,
 	})
 	require.NoError(t, err)
@@ -349,14 +427,11 @@ func TestRepositoryMapsMetadataConstraintViolation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ageMax := 5
+	invalidAge := 19
 	_, err = repo.Update(context.Background(), userID, created.ID, UpdateInput{
-		FilterMetadata: &FilterMetadataPatch{AgeMax: NullablePatch[int]{Set: true, Value: &ageMax}},
-	})
-	require.NoError(t, err)
-	ageMin := 8
-	_, err = repo.Update(context.Background(), userID, created.ID, UpdateInput{
-		FilterMetadata: &FilterMetadataPatch{AgeMin: NullablePatch[int]{Set: true, Value: &ageMin}},
+		FilterMetadata: &FilterMetadataPatch{
+			Age: NullablePatch[int]{Set: true, Value: &invalidAge},
+		},
 	})
 	assert.ErrorIs(t, err, ErrInvalidPackMetadata)
 }
@@ -733,7 +808,7 @@ func createFilteredPack(
 	repo *Repository,
 	userID, folderID uuid.UUID,
 	title string,
-	ageMin, ageMax int,
+	age int,
 	difficulty string,
 	config []byte,
 ) *Pack {
@@ -744,8 +819,7 @@ func createFilteredPack(
 	require.NoError(t, err)
 	updated, err := repo.Update(t.Context(), userID, created.ID, UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true, Value: &ageMin},
-			AgeMax:     NullablePatch[int]{Set: true, Value: &ageMax},
+			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
 		},
 	})
@@ -774,4 +848,278 @@ func seedPackLibraryFolder(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) 
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+// TestRepositoryListFiltersByStudent: наборы ученика — это и его папка, и
+// вложенные в неё папки, и адаптации из чужих разделов.
+func TestRepositoryListFiltersByStudent(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, userID, myFolderID := seedPackOwner(t, pool, "student filter org")
+	studentA, folderA := seedPackStudentFolder(t, pool, userID, "Аня")
+	studentB, folderB := seedPackStudentFolder(t, pool, userID, "Боря")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	var nestedID uuid.UUID
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		INSERT INTO folders (org_id, owner_id, parent_id, section, kind, name, depth)
+		SELECT org_id, id, $2, 'students', 'folder', 'Занятия', 1
+		FROM users WHERE id = $1
+		RETURNING id`, userID, folderA).Scan(&nestedID))
+
+	direct, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: "Прямо в папке", FolderID: folderA, Config: config,
+	})
+	require.NoError(t, err)
+	nested, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: "Во вложенной", FolderID: nestedID, Config: config,
+	})
+	require.NoError(t, err)
+	other, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: "У другого ученика", FolderID: folderB, Config: config,
+	})
+	require.NoError(t, err)
+	mine, err := repo.Create(t.Context(), userID, CreateInput{
+		Title: "Мой набор", FolderID: myFolderID, Config: config,
+	})
+	require.NoError(t, err)
+	_, err = repo.Assign(t.Context(), userID, mine.ID, []uuid.UUID{studentA})
+	require.NoError(t, err)
+
+	listed, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{StudentID: &studentA, Limit: 50})
+	require.NoError(t, err)
+	items := listItemsByID(listed)
+	assert.Contains(t, items, direct.ID)
+	assert.Contains(t, items, nested.ID, "вложенная папка принадлежит тому же ученику")
+	assert.Contains(t, items, mine.ID, "адаптация из «Моих наборов» тоже относится к ученику")
+	assert.NotContains(t, items, other.ID)
+
+	forB, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{StudentID: &studentB, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, forB, 1)
+	assert.Equal(t, other.ID, forB[0].ID)
+
+	// Фильтр складывается с разделом. Адаптация числится в разделе
+	// students по папке ученика, хотя сам набор лежит в «Моих наборах»,
+	// поэтому из выдачи она не выпадает.
+	scoped, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		StudentID: &studentA, Section: "students", Limit: 50,
+	})
+	require.NoError(t, err)
+	scopedItems := listItemsByID(scoped)
+	assert.Contains(t, scopedItems, direct.ID)
+	assert.Contains(t, scopedItems, nested.ID)
+	require.Contains(t, scopedItems, mine.ID)
+	assert.Equal(t, "students", scopedItems[mine.ID].Section)
+
+	inMy, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		StudentID: &studentA, Section: "my", Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, inMy, "в «Моих наборах» у набора нет ученика")
+
+	unknown := uuid.New()
+	empty, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{StudentID: &unknown, Limit: 50})
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+// TestRepositoryListSorts проверяет белый список сортировок: колонка и
+// направление приходят от клиента, но в SQL попадают только свои.
+func TestRepositoryListSorts(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, userID, folderID := seedPackOwner(t, pool, "sort org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	titles := []string{"Собака", "азбука", "Мячик"}
+	created := make([]*Pack, 0, len(titles))
+	for _, title := range titles {
+		pack, err := repo.Create(t.Context(), userID, CreateInput{
+			Title: title, FolderID: folderID, Config: config,
+		})
+		require.NoError(t, err)
+		created = append(created, pack)
+	}
+
+	byTitle, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		SortBy: "title", Order: "asc", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, byTitle, 3)
+	assert.Equal(t, []string{"азбука", "Мячик", "Собака"},
+		[]string{byTitle[0].Title, byTitle[1].Title, byTitle[2].Title})
+
+	desc, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		SortBy: "title", Order: "desc", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, desc, 3)
+	assert.Equal(t, "Собака", desc[0].Title)
+
+	byCreated, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{
+		SortBy: "created_at", Order: "asc", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, byCreated, 3)
+	assert.Equal(t, created[0].ID, byCreated[0].ID)
+
+	// По умолчанию — свежие сверху, как было до появления сортировок.
+	byDefault, _, err := repo.ListWithTotal(t.Context(), userID, ListInput{Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, byDefault, 3)
+	assert.Equal(t, created[2].ID, byDefault[0].ID)
+}
+
+func TestRepositoryPackShareOutboxPersistsAndReclaimsLease(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, _ := seedPackOwner(t, pool, "share outbox org")
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	job := shareJobRecord{
+		ID:            uuid.New(),
+		OwnerID:       ownerID,
+		PackID:        uuid.New(),
+		StudentID:     uuid.New(),
+		RequestID:     "req-1",
+		Status:        ShareTaskQueued,
+		NextAttemptAt: now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+
+	stored, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskQueued, stored.Status)
+	assert.Equal(t, ownerID, stored.OwnerID)
+	assert.Equal(t, "req-1", stored.RequestID)
+
+	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 5)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	assert.Equal(t, job.ID, claimed.ID)
+	assert.Equal(t, ShareTaskProcessing, claimed.Status)
+	assert.NotEqual(t, uuid.Nil, claimed.LeaseToken)
+	assert.Equal(t, 1, claimed.Attempts)
+
+	second, err := repo.ClaimShareJob(t.Context(), time.Minute, 5)
+	require.NoError(t, err)
+	assert.Nil(t, second, "an active lease must prevent duplicate processing")
+
+	_, err = pool.Exec(t.Context(), `
+		UPDATE pack_share_jobs
+		SET lease_until = now() - interval '1 second'
+		WHERE id = $1
+	`, job.ID)
+	require.NoError(t, err)
+
+	reclaimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 5)
+	require.NoError(t, err)
+	require.NotNil(t, reclaimed)
+	assert.Equal(t, job.ID, reclaimed.ID)
+	assert.NotEqual(t, claimed.LeaseToken, reclaimed.LeaseToken)
+	assert.Equal(t, 2, reclaimed.Attempts)
+
+	require.ErrorIs(t,
+		repo.CompleteShareJob(t.Context(), job.ID, claimed.LeaseToken),
+		errShareJobLeaseLost,
+		"a stale worker must not finalize a job after another worker reclaimed it",
+	)
+
+	require.NoError(t, repo.RequeueShareJob(
+		t.Context(),
+		job.ID,
+		reclaimed.LeaseToken,
+		"retry after restart",
+		"context deadline exceeded",
+		0,
+	))
+
+	requeued, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskQueued, requeued.Status)
+	assert.Equal(t, "retry after restart", requeued.Message)
+
+	claimedAgain, err := repo.ClaimShareJob(t.Context(), time.Minute, 5)
+	require.NoError(t, err)
+	require.NotNil(t, claimedAgain)
+	require.NoError(t, repo.CompleteShareJob(t.Context(), job.ID, claimedAgain.LeaseToken))
+
+	completed, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskSent, completed.Status)
+
+	deleted, err := repo.PruneShareJobs(t.Context(), time.Now().UTC().Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+	_, err = repo.GetShareJob(t.Context(), job.ID)
+	assert.ErrorIs(t, err, errShareJobNotFound)
+}
+
+func TestRepositoryPackShareOutboxStopsAfterMaxAttempts(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, _ := seedPackOwner(t, pool, "share max attempts org")
+
+	now := time.Now().UTC()
+	job := shareJobRecord{
+		ID: uuid.New(), OwnerID: ownerID, PackID: uuid.New(), StudentID: uuid.New(),
+		Status: ShareTaskQueued, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+
+	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.Equal(t, 1, claimed.Attempts)
+	require.NoError(t, repo.RequeueShareJob(
+		t.Context(), job.ID, claimed.LeaseToken,
+		"email delivery failed; retrying", "context deadline exceeded", 0,
+	))
+
+	next, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
+	require.NoError(t, err)
+	assert.Nil(t, next, "exhausted job must not be claimed again")
+
+	stored, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskFailed, stored.Status)
+	assert.Equal(t, 1, stored.Attempts)
+	assert.Equal(t, "context deadline exceeded", stored.LastError)
+}
+
+func TestRepositoryPackShareOutboxDoesNotResendAfterSMTPWasAccepted(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, _ := seedPackOwner(t, pool, "share smtp accepted org")
+
+	now := time.Now().UTC()
+	job := shareJobRecord{
+		ID: uuid.New(), OwnerID: ownerID, PackID: uuid.New(), StudentID: uuid.New(),
+		Status: ShareTaskQueued, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+
+	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.NoError(t, repo.MarkShareJobEmailSent(t.Context(), job.ID, claimed.LeaseToken))
+
+	_, err = pool.Exec(t.Context(), `
+		UPDATE pack_share_jobs SET lease_until = now() - interval '1 second' WHERE id = $1
+	`, job.ID)
+	require.NoError(t, err)
+
+	reclaimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
+	require.NoError(t, err)
+	require.NotNil(t, reclaimed)
+	require.NotNil(t, reclaimed.EmailSentAt)
+	assert.Equal(t, 1, reclaimed.Attempts, "finalization reclaim must not consume another delivery attempt")
+	require.NoError(t, repo.CompleteShareJob(t.Context(), job.ID, reclaimed.LeaseToken))
+
+	stored, err := repo.GetShareJob(t.Context(), job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ShareTaskSent, stored.Status)
 }

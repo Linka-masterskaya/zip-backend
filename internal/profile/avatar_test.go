@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/Linka-masterskaya/zip-backend/internal/avatar"
 	"image"
 	"image/color"
 	"image/png"
@@ -149,7 +150,7 @@ func TestUploadAvatar_FileOver2MBReturns413(t *testing.T) {
 	sessions := &testRevoker{}
 	handler := NewHandler(NewService(repo, store, emailSender, crypto, sessions, cfg))
 
-	oversized := bytes.Repeat([]byte{'x'}, int(MaxAvatarSizeBytes)+1)
+	oversized := bytes.Repeat([]byte{'x'}, int(avatar.MaxSizeBytes)+1)
 	rec := performAvatarUpload(t, handler, oversized, "avatar.png")
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected status 413, got %d: %s", rec.Code, rec.Body.String())
@@ -167,7 +168,7 @@ func TestDetectAvatarMIME_AllowsPNGJPEGWEBP(t *testing.T) {
 	}
 
 	for want, data := range cases {
-		if got := detectAvatarMIME(data); got != want {
+		if got := avatar.DetectMIME(data); got != want {
 			t.Fatalf("expected %s, got %q", want, got)
 		}
 	}

@@ -9,20 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/avatar"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
-)
-
-// Avatar constants.
-const (
-	MaxAvatarSizeBytes      int64 = 2 * 1024 * 1024
-	avatarMultipartOverhead int64 = 64 * 1024
-	maxAvatarBodyBytes      int64 = MaxAvatarSizeBytes + avatarMultipartOverhead
 )
 
 // Handler handles HTTP requests for profile operations.
@@ -150,10 +143,10 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxAvatarBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, avatar.MaxBodyBytes)
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		return avatarReadError(err)
+		return avatar.ReadError(err)
 	}
 	defer func() {
 		if err := file.Close(); err != nil {
@@ -166,18 +159,18 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) error {
 		}
 	}()
 
-	data, err := io.ReadAll(io.LimitReader(file, MaxAvatarSizeBytes+1))
+	data, err := io.ReadAll(io.LimitReader(file, avatar.MaxSizeBytes+1))
 	if err != nil {
-		return avatarReadError(err)
+		return avatar.ReadError(err)
 	}
-	if int64(len(data)) > MaxAvatarSizeBytes {
+	if int64(len(data)) > avatar.MaxSizeBytes {
 		return apperr.ErrPayloadTooLarge
 	}
 	if len(data) == 0 {
 		return apperr.ErrBadRequest.WithMessage("avatar file is empty")
 	}
 
-	mimeType := detectAvatarMIME(data)
+	mimeType := avatar.DetectMIME(data)
 	if mimeType == "" {
 		return apperr.ErrBadRequest.WithMessage("avatar must be png, jpeg, or webp image")
 	}
@@ -288,20 +281,4 @@ func (h *Handler) ConfirmEmailChange(w http.ResponseWriter, r *http.Request) err
 
 	w.WriteHeader(http.StatusNoContent)
 	return nil
-}
-
-func avatarReadError(err error) error {
-	var maxBytesErr *http.MaxBytesError
-	if errors.As(err, &maxBytesErr) || strings.Contains(err.Error(), "request body too large") {
-		return apperr.ErrPayloadTooLarge
-	}
-	return apperr.ErrBadRequest
-}
-
-func detectAvatarMIME(data []byte) string {
-	mimeType := http.DetectContentType(data)
-	if mimeType == "image/png" || mimeType == "image/jpeg" || mimeType == "image/webp" {
-		return mimeType
-	}
-	return ""
 }

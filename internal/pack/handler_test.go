@@ -56,14 +56,17 @@ func TestHandlerListPacks(t *testing.T) {
 	folderID := uuid.New()
 	packID := uuid.New()
 	age := 5
-	service.listFn = func(_ context.Context, input ListInput) ([]*ListItem, error) {
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
 		assert.Equal(t, ListInput{
 			Query: "speech", Age: &age, Difficulty: "medium",
 			Section: "students", Limit: 25, Offset: 10,
 		}, input)
-		return []*ListItem{{
-			ID: packID, FolderID: folderID, IsFavorite: true, Section: "students",
-		}}, nil
+		return &ListPage{
+			Items: []*ListItem{{
+				ID: packID, FolderID: folderID, IsFavorite: true, Section: "students",
+			}},
+			Limit: 25, Offset: 10, Total: 42,
+		}, nil
 	}
 	handler := NewHandler(service)
 
@@ -72,13 +75,16 @@ func TestHandlerListPacks(t *testing.T) {
 		nil, "")
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var result []*ListItem
+	var result ListPage
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
-	require.Len(t, result, 1)
-	assert.Equal(t, packID, result[0].ID)
-	assert.True(t, result[0].IsFavorite)
-	assert.Equal(t, folderID, result[0].FolderID)
-	assert.Equal(t, "students", result[0].Section)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, packID, result.Items[0].ID)
+	assert.True(t, result.Items[0].IsFavorite)
+	assert.Equal(t, folderID, result.Items[0].FolderID)
+	assert.Equal(t, "students", result.Items[0].Section)
+	assert.Equal(t, 25, result.Limit)
+	assert.Equal(t, 10, result.Offset)
+	assert.Equal(t, 42, result.Total)
 }
 
 func TestHandlerUpdateRejectsConfigField(t *testing.T) {
@@ -98,15 +104,15 @@ func TestHandlerUpdateMapsFilterMetadata(t *testing.T) {
 	service.updateFn = func(_ context.Context, gotPackID uuid.UUID, input UpdateInput) (*Pack, error) {
 		assert.Equal(t, packID, gotPackID)
 		require.NotNil(t, input.FilterMetadata)
-		assert.True(t, input.FilterMetadata.AgeMin.Set)
-		require.NotNil(t, input.FilterMetadata.AgeMin.Value)
+		assert.True(t, input.FilterMetadata.Age.Set)
+		require.NotNil(t, input.FilterMetadata.Age.Value)
 		require.NotNil(t, input.FilterMetadata.Goals)
-		assert.Equal(t, 5, *input.FilterMetadata.AgeMin.Value)
+		assert.Equal(t, 5, *input.FilterMetadata.Age.Value)
 		assert.Equal(t, []string{"speech", "attention"}, *input.FilterMetadata.Goals)
 		return &Pack{ID: packID}, nil
 	}
 	handler := NewHandler(service)
-	body := []byte(`{"age_min":5,"goals":["speech","attention"]}`)
+	body := []byte(`{"age":5,"goals":["speech","attention"]}`)
 
 	rec := performPackRequest(t, handler.UpdatePack, http.MethodPatch, "/api/v1/packs/"+packID.String(), body, packID.String())
 
@@ -119,8 +125,8 @@ func TestHandlerUpdatePreservesExplicitNull(t *testing.T) {
 	packID := uuid.New()
 	service.updateFn = func(_ context.Context, _ uuid.UUID, input UpdateInput) (*Pack, error) {
 		require.NotNil(t, input.FilterMetadata)
-		assert.True(t, input.FilterMetadata.AgeMin.Set)
-		assert.Nil(t, input.FilterMetadata.AgeMin.Value)
+		assert.True(t, input.FilterMetadata.Age.Set)
+		assert.Nil(t, input.FilterMetadata.Age.Value)
 		assert.True(t, input.FilterMetadata.Difficulty.Set)
 		assert.Nil(t, input.FilterMetadata.Difficulty.Value)
 		assert.True(t, input.Notes.Set)
@@ -128,7 +134,7 @@ func TestHandlerUpdatePreservesExplicitNull(t *testing.T) {
 		return &Pack{ID: packID}, nil
 	}
 	handler := NewHandler(service)
-	body := []byte(`{"age_min":null,"difficulty":null,"notes":null}`)
+	body := []byte(`{"age":null,"difficulty":null,"notes":null}`)
 
 	rec := performPackRequest(t, handler.UpdatePack, http.MethodPatch, "/api/v1/packs/"+packID.String(), body, packID.String())
 
@@ -138,9 +144,9 @@ func TestHandlerUpdatePreservesExplicitNull(t *testing.T) {
 
 func TestHandlerListAllowsEmptyFilters(t *testing.T) {
 	service := &fakePackService{}
-	service.listFn = func(_ context.Context, input ListInput) ([]*ListItem, error) {
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
 		assert.Equal(t, ListInput{Limit: 50}, input)
-		return []*ListItem{{FolderID: uuid.New(), Section: "my"}}, nil
+		return &ListPage{Items: []*ListItem{{FolderID: uuid.New(), Section: "my"}}, Limit: 50, Total: 1}, nil
 	}
 	handler := NewHandler(service)
 
@@ -172,12 +178,38 @@ func TestHandlerListRejectsInvalidPagination(t *testing.T) {
 	}
 }
 
-func TestHandlerListRejectsInvalidAge(t *testing.T) {
+func TestHandlerListPacksReadsAgeRange(t *testing.T) {
+	service := &fakePackService{}
+	ageFrom, ageTo := 5, 8
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
+		require.NotNil(t, input.AgeFrom)
+		require.NotNil(t, input.AgeTo)
+		assert.Equal(t, ageFrom, *input.AgeFrom)
+		assert.Equal(t, ageTo, *input.AgeTo)
+		return &ListPage{}, nil
+	}
+
+	rec := performPackRequest(t, NewHandler(service).ListPacks, http.MethodGet,
+		"/api/v1/packs?age_from=5&age_to=8", nil, "")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHandlerListRejectsInvalidAgeFilters(t *testing.T) {
 	handler := NewHandler(&fakePackService{})
-
-	rec := performPackRequest(t, handler.ListPacks, http.MethodGet, "/api/v1/packs?age=invalid", nil, "")
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	for _, query := range []string{
+		"age=invalid",
+		"age_from=invalid",
+		"age_to=invalid",
+		"age=5&age_from=5",
+		"age_from=8&age_to=5",
+	} {
+		t.Run(query, func(t *testing.T) {
+			rec := performPackRequest(t, handler.ListPacks, http.MethodGet,
+				"/api/v1/packs?"+query, nil, "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
 }
 
 func TestHandlerDeletePack(t *testing.T) {
@@ -306,7 +338,7 @@ type fakePackService struct {
 	createFn      func(context.Context, string, uuid.UUID) (*Pack, error)
 	duplicateFn   func(context.Context, uuid.UUID, DuplicateInput) (*Pack, error)
 	getFn         func(context.Context, uuid.UUID) (*Pack, error)
-	listFn        func(context.Context, ListInput) ([]*ListItem, error)
+	listFn        func(context.Context, ListInput) (*ListPage, error)
 	updateFn      func(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn      func(context.Context, uuid.UUID) error
 	moveFn        func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
@@ -337,11 +369,11 @@ func (f *fakePackService) Get(ctx context.Context, packID uuid.UUID) (*Pack, err
 	return &Pack{}, nil
 }
 
-func (f *fakePackService) List(ctx context.Context, input ListInput) ([]*ListItem, error) {
+func (f *fakePackService) List(ctx context.Context, input ListInput) (*ListPage, error) {
 	if f.listFn != nil {
 		return f.listFn(ctx, input)
 	}
-	return []*ListItem{}, nil
+	return &ListPage{Items: []*ListItem{}}, nil
 }
 
 func (f *fakePackService) Update(ctx context.Context, packID uuid.UUID, input UpdateInput) (*Pack, error) {
@@ -373,4 +405,37 @@ func (f *fakePackService) Publish(context.Context, uuid.UUID, uuid.UUID) (*Pack,
 
 func (f *fakePackService) Unpublish(context.Context, uuid.UUID) error {
 	return nil
+}
+
+func TestHandlerListPacksReadsStudentAndSort(t *testing.T) {
+	service := &fakePackService{}
+	studentID := uuid.New()
+	service.listFn = func(_ context.Context, input ListInput) (*ListPage, error) {
+		require.NotNil(t, input.StudentID)
+		assert.Equal(t, studentID, *input.StudentID)
+		assert.Equal(t, "title", input.SortBy)
+		assert.Equal(t, "asc", input.Order)
+		return &ListPage{}, nil
+	}
+
+	rec := performPackRequest(t, NewHandler(service).ListPacks, http.MethodGet,
+		"/api/v1/packs?section=students&student_id="+studentID.String()+"&sort_by=title&order=asc",
+		nil, "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHandlerListPacksRejectsBadStudentAndSort(t *testing.T) {
+	handler := NewHandler(&fakePackService{})
+
+	rec := performPackRequest(t, handler.ListPacks, http.MethodGet,
+		"/api/v1/packs?student_id=not-a-uuid", nil, "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	rec = performPackRequest(t, handler.ListPacks, http.MethodGet,
+		"/api/v1/packs?sort_by=colour", nil, "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	rec = performPackRequest(t, handler.ListPacks, http.MethodGet,
+		"/api/v1/packs?order=sideways", nil, "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }

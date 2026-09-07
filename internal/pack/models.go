@@ -18,8 +18,7 @@ type Pack struct {
 	PublishedAt     *time.Time      `json:"published_at,omitempty"`
 	Title           string          `json:"title"`
 	Status          string          `json:"status"`
-	AgeMin          *int            `json:"age_min,omitempty"`
-	AgeMax          *int            `json:"age_max,omitempty"`
+	Age             *int            `json:"age,omitempty"`
 	Difficulty      *string         `json:"difficulty,omitempty"`
 	Goals           []string        `json:"goals"`
 	Notes           string          `json:"notes"`
@@ -58,7 +57,8 @@ type CreateInput struct {
 
 // DuplicateInput contains optional destination settings for a pack copy.
 type DuplicateInput struct {
-	FolderID *uuid.UUID
+	FolderID      *uuid.UUID
+	PreserveTitle bool
 }
 
 // ListItem describes one pack placement returned by the global pack list.
@@ -71,8 +71,7 @@ type ListItem struct {
 	PublishedAt     *time.Time      `json:"published_at,omitempty"`
 	Title           string          `json:"title"`
 	Status          string          `json:"status"`
-	AgeMin          *int            `json:"age_min,omitempty"`
-	AgeMax          *int            `json:"age_max,omitempty"`
+	Age             *int            `json:"age,omitempty"`
 	Difficulty      *string         `json:"difficulty,omitempty"`
 	Goals           []string        `json:"goals"`
 	Notes           string          `json:"notes"`
@@ -83,14 +82,28 @@ type ListItem struct {
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
+type ListPage struct {
+	Items  []*ListItem `json:"items"`
+	Limit  int         `json:"limit"`
+	Offset int         `json:"offset"`
+	Total  int         `json:"total"`
+}
+
 // ListInput contains filters and offset pagination parameters for placement listing.
 type ListInput struct {
 	Query      string
 	Age        *int
+	AgeFrom    *int
+	AgeTo      *int
 	Difficulty string
 	Section    string
-	Limit      int
-	Offset     int
+	// StudentID сужает выдачу до наборов одного ученика: его собственной
+	// папки, вложенных в неё папок и адаптаций.
+	StudentID *uuid.UUID
+	SortBy    string
+	Order     string
+	Limit     int
+	Offset    int
 }
 
 // NullablePatch distinguishes an omitted PATCH field from an explicit null.
@@ -101,8 +114,7 @@ type NullablePatch[T any] struct {
 
 // FilterMetadataPatch contains optional list-filter metadata changes.
 type FilterMetadataPatch struct {
-	AgeMin     NullablePatch[int]
-	AgeMax     NullablePatch[int]
+	Age        NullablePatch[int]
 	Difficulty NullablePatch[string]
 	Goals      *[]string
 }

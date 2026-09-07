@@ -4,13 +4,14 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/httpquery"
 	"github.com/google/uuid"
 )
 
 type favoriteService interface {
 	Favorite(context.Context, uuid.UUID) error
 	Unfavorite(context.Context, uuid.UUID) error
-	ListFavorites(context.Context, ListInput) ([]*ListItem, error)
+	ListFavorites(context.Context, ListInput) (*ListPage, error)
 }
 
 type FavoriteHandler struct {
@@ -46,11 +47,11 @@ func (h *FavoriteHandler) DeleteFavorite(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *FavoriteHandler) ListFavorites(w http.ResponseWriter, r *http.Request) error {
-	limit, err := optionalQueryInt(r, "limit")
+	limit, err := httpquery.Int(r, "limit")
 	if err != nil {
 		return err
 	}
-	offset, err := optionalQueryInt(r, "offset")
+	offset, err := httpquery.Int(r, "offset")
 	if err != nil {
 		return err
 	}

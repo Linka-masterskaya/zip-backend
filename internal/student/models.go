@@ -16,6 +16,7 @@ type Student struct {
 	Name          string     `json:"name"`
 	Age           *int       `json:"age"`
 	Status        string     `json:"status"`
+	CardsShift    *string    `json:"cards_shift"`
 	LastLessonAt  *time.Time `json:"last_lesson_at"`
 	AvatarMediaID *uuid.UUID `json:"avatar_media_id"`
 	// AvatarURL — presigned-ссылка, выданная на это чтение. Хранить её
@@ -33,6 +34,7 @@ type storedStudent struct {
 	Name           string
 	Age            *int
 	Status         string
+	CardsShift     string
 	LastLessonAt   *time.Time
 	AvatarMediaID  *uuid.UUID
 	// AvatarKey — ключ объекта в MinIO, подтянутый join'ом к media_files.
@@ -48,6 +50,7 @@ type CreateInput struct {
 	Name          string     `json:"name"`
 	Age           *int       `json:"age"`
 	Status        string     `json:"status"`
+	CardsShift    *string    `json:"cards_shift"`
 	AvatarMediaID *uuid.UUID `json:"avatar_media_id"`
 }
 
@@ -57,6 +60,9 @@ type UpdateInput struct {
 	Age          *int       `json:"age"`
 	Status       *string    `json:"status"`
 	LastLessonAt *time.Time `json:"last_lesson_at"`
+	// CardsShift: отсутствие поля не трогает раскладку, null возвращает
+	// её к значению по умолчанию.
+	CardsShift nullableField[string] `json:"cards_shift"`
 	// AvatarMediaID различает «поле не передали» и «передали null»:
 	// null снимает аватар.
 	AvatarMediaID nullableField[uuid.UUID] `json:"avatar_media_id"`
@@ -90,10 +96,19 @@ type storedUpdate struct {
 	Name             *string
 	Age              *int
 	Status           *string
+	CardsShift       *string
 	LastLessonAt     *time.Time
 	LastLessonSet    bool
 	AvatarMediaID    *uuid.UUID
 	AvatarMediaIDSet bool
+}
+
+// avatarResponse отвечает на PUT /students/{id}/avatar. Кроме ссылки
+// возвращаем и идентификатор файла: им клиент потом снимает или меняет
+// аватар через PATCH.
+type avatarResponse struct {
+	AvatarURL     *string    `json:"avatar_url"`
+	AvatarMediaID *uuid.UUID `json:"avatar_media_id"`
 }
 
 type ListInput struct {

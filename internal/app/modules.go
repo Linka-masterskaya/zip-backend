@@ -10,6 +10,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/Linka-masterskaya/zip-backend/internal/cron"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/health"
@@ -24,6 +25,8 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/tts"
 	"github.com/Linka-masterskaya/zip-backend/internal/ttsapi"
 	"github.com/Linka-masterskaya/zip-backend/internal/worker"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/yandex"
 )
 
 // Час — компромисс: retention измеряется днями, поэтому чаще незачем, а реже
@@ -49,8 +52,17 @@ type modules struct {
 	ttsCleaner     *cron.TTSCleaner
 }
 
+func buildPicturesSource(in *infra) (picturebank.Source, error) {
+	return picturebank.NewSource(
+		in.cfg.FeatureFlags.LocalBank,
+		in.cfg.PicturesBank,
+		in.redis,
+		picturebank.LocalDependencies{DB: in.db, Storage: in.storage},
+	)
+}
+
 // buildModules wires every domain module on top of the infrastructure.
-func buildModules(in *infra) (*modules, error) {
+func buildModules(in *infra, closer *Closer) (*modules, error) {
 	cfg := in.cfg
 
 	resendPolicy := middleware.RateLimitPolicy{
@@ -63,16 +75,13 @@ func buildModules(in *infra) (*modules, error) {
 	packService := pack.NewService(packRepo, in.pub)
 	favoriteService := pack.NewFavoriteService(packRepo)
 	mediaRepo := media.NewRepository(in.db)
-	mediaService := media.NewService(mediaRepo, in.storage)
+	mediaService := media.NewService(mediaRepo, in.storage, in.cfg.Media.BatchDeleteLimit)
 
 	folderRepo := folder.NewRepository(in.db)
 	studentRepo := student.NewRepository(in.db)
+	studentService := student.NewService(studentRepo, in.crypto, in.storage, mediaService)
 
-	picturesSource, err := picturebank.NewSource(
-		cfg.FeatureFlags.LocalBank,
-		cfg.PicturesBank,
-		in.redis,
-	)
+	picturesSource, err := buildPicturesSource(in)
 	if err != nil {
 		return nil, fmt.Errorf("pictures bank source: %w", err)
 	}
@@ -94,7 +103,26 @@ func buildModules(in *infra) (*modules, error) {
 			return image.Data, image.ContentType, nil
 		},
 	)
-
+	shareService := pack.NewShareServiceWithOutbox(
+		packService,
+		contentService,
+		studentService,
+		in.mailer,
+		packRepo,
+		in.redis,
+		pack.ShareConfig{
+			Workers:            cfg.PackShare.Workers,
+			PollInterval:       cfg.PackShare.PollInterval,
+			JobTimeout:         cfg.PackShare.JobTimeout,
+			DailySendsPerUser:  cfg.PackShare.DailySendsPerUser,
+			DailyBytesPerUser:  cfg.PackShare.DailyBytesPerUser,
+			MaxAttachmentBytes: cfg.PackShare.MaxAttachmentBytes,
+			SendRetries:        cfg.PackShare.SendRetries,
+			MaxAttempts:        cfg.PackShare.MaxAttempts,
+			SendTimeout:        cfg.PackShare.SendTimeout,
+			RetryBackoff:       cfg.PackShare.RetryBackoff,
+		},
+	)
 	authCfg := auth.Config{
 		JWTSecret:                cfg.JWT.Secret,
 		FrontendURL:              cfg.App.FrontendURL,
@@ -154,6 +182,13 @@ func buildModules(in *infra) (*modules, error) {
 		return nil, fmt.Errorf("health checker init: %w", err)
 	}
 
+	shareService.Start()
+	closer.Add("pack share worker", func(ctx context.Context) error {
+		shareCtx, cancel := context.WithTimeout(ctx, cfg.PackShare.ShutdownTimeout)
+		defer cancel()
+		return shareService.Shutdown(shareCtx)
+	})
+
 	ttsClient := ttsapi.NewClient(
 		cfg.TTS.ServiceURL,
 		cfg.TTS.Timeout,
@@ -181,6 +216,7 @@ func buildModules(in *infra) (*modules, error) {
 		ttsClient,
 		in.storage,
 		ttsRepo,
+		cfg.TTS.MimeType,
 	)
 
 	ttsConsumer := broker.NewConsumer(
@@ -205,6 +241,7 @@ func buildModules(in *infra) (*modules, error) {
 	return &modules{
 		packs: httpapi.PackHandlers{
 			Pack:     pack.NewHandler(packService),
+			Share:    pack.NewShareHandler(shareService),
 			Content:  pack.NewContentHandler(contentService),
 			Favorite: pack.NewFavoriteHandler(favoriteService),
 		},
@@ -217,12 +254,11 @@ func buildModules(in *infra) (*modules, error) {
 			),
 		},
 		students: httpapi.StudentHandlers{
-			Student: student.NewHandler(
-				student.NewService(studentRepo, in.crypto, in.storage),
-			),
+			Student: student.NewHandler(studentService),
 		},
 		auth: httpapi.AuthHandlers{
-			Auth: auth.NewHandler(authService, authCfg),
+			Auth:  auth.NewHandler(authService, authCfg),
+			OAuth: newYandexOAuthHandler(cfg, authService),
 		},
 		profile: httpapi.ProfileHandlers{
 			Profile:        profile.NewHandler(profileService),
@@ -246,4 +282,29 @@ func buildModules(in *infra) (*modules, error) {
 		voiceRefresher: voiceRefresher,
 		ttsCleaner:     ttsCleaner,
 	}, nil
+}
+
+// newYandexOAuthHandler возвращает nil, если провайдер не настроен: тогда
+// роуты входа через Яндекс просто не поднимаются, а остальной auth работает
+// как работал.
+func newYandexOAuthHandler(
+	cfg *config.Config,
+	service auth.OAuthService,
+) *auth.OAuthHandler {
+	if cfg.Yandex.ClientID == "" || cfg.Yandex.ClientSecret == "" {
+		return nil
+	}
+	return auth.NewOAuthHandler(
+		service,
+		&oauth2.Config{
+			ClientID:     cfg.Yandex.ClientID,
+			ClientSecret: cfg.Yandex.ClientSecret,
+			RedirectURL:  cfg.Yandex.RedirectURL,
+			Scopes:       []string{"login:email", "login:info"},
+			Endpoint:     yandex.Endpoint,
+		},
+		cfg.App.FrontendURL,
+		cfg.Auth.CookieSecure,
+		cfg.Auth.RefreshTokenTTL,
+	)
 }

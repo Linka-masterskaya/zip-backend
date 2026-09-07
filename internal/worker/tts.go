@@ -27,25 +27,30 @@ type uploader interface {
 }
 
 type audioBank interface {
-	CompleteJob(context.Context, uuid.UUID, string, string, int64) error
 	PutToBank(context.Context, *tts.BankEntry) error
-	UpdateStatusTTS(ctx context.Context, jobID uuid.UUID, status string) error
+	UpdateStatusTTS(context.Context, uuid.UUID, string) error
+	CreateMediaAndCompleteJob(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, tts.MediaFileInput) (uuid.UUID, error)
 }
 
 type TTS struct {
-	client  synthesizer
-	storage uploader
-	repo    audioBank
+	client   synthesizer
+	storage  uploader
+	repo     audioBank
+	mimeType string
 }
 
-func NewTTS(ttsapi synthesizer, storage uploader, repo audioBank) *TTS {
-	return &TTS{client: ttsapi, storage: storage, repo: repo}
+func NewTTS(ttsapi synthesizer, storage uploader, repo audioBank, mimeType string) *TTS {
+	return &TTS{
+		client:   ttsapi,
+		storage:  storage,
+		repo:     repo,
+		mimeType: mimeType,
+	}
 }
 
 func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool) error {
-	jobID, err := uuid.Parse(job.JobId)
-	if err != nil {
-		slog.ErrorContext(ctx, "worker.Handle: bad job id in message", "job_id", job.JobId, "err", err)
+	jobID, orgID, userID, ok := w.parseJob(ctx, job)
+	if !ok {
 		return nil
 	}
 
@@ -71,14 +76,27 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 	}
 	keyHash := sha256.Sum256(data)
 	key := "tts/" + hex.EncodeToString(keyHash[:])
-	err = w.storage.PutObject(ctx, key, bytes.NewReader(audio), audioSize, "audio/mpeg")
+	err = w.storage.PutObject(ctx, key, bytes.NewReader(audio), audioSize, w.mimeType)
 	if err != nil {
 		return w.handleRetryable(ctx, jobID, "PutObject", isLastAttempt, err)
 	}
 
-	err = w.repo.CompleteJob(ctx, jobID, key, digest, audioSize)
+	_, err = w.repo.CreateMediaAndCompleteJob(ctx, jobID, orgID, userID, tts.MediaFileInput{
+		MinioKey:  key,
+		SHA256:    digest,
+		SizeBytes: audioSize,
+		MimeType:  w.mimeType,
+		Name:      tts.TruncateName(job.Text, 50),
+	})
 	if err != nil {
-		return w.handleRetryable(ctx, jobID, "CompleteJob", isLastAttempt, err)
+		if errors.Is(err, tts.ErrQuotaExceeded) {
+			w.handleQuotaExceeded(ctx, jobID, &tts.BankEntry{
+				Text: job.Text, Voice: job.Voice,
+				MinioKey: key, SHA256: digest, SizeBytes: audioSize,
+			})
+			return nil
+		}
+		return w.handleRetryable(ctx, jobID, "CreateMediaAndCompleteJob", isLastAttempt, err)
 	}
 
 	err = w.repo.PutToBank(ctx, &tts.BankEntry{
@@ -89,7 +107,8 @@ func (w *TTS) Handle(ctx context.Context, job broker.TTSJob, isLastAttempt bool)
 		SizeBytes: audioSize,
 	})
 	if err != nil {
-		return w.handleRetryable(ctx, jobID, "PutToBank", isLastAttempt, err)
+		slog.ErrorContext(ctx, "worker.Handle: put to bank failed, skipping cache",
+			"job_id", jobID, "err", err)
 	}
 
 	return nil
@@ -123,4 +142,40 @@ func (w *TTS) handleRetryable(ctx context.Context, jobID uuid.UUID, opName strin
 	slog.WarnContext(ctx, "worker.Handle: job marked failed after final delivery",
 		"job_id", jobID, "op", opName, "op_err", opErr)
 	return nil
+}
+
+func (w *TTS) handleQuotaExceeded(ctx context.Context, jobID uuid.UUID, entry *tts.BankEntry) {
+	if err := w.repo.PutToBank(ctx, entry); err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: put to bank after quota exceeded",
+			"job_id", jobID, "err", err)
+	}
+	if err := w.markFailedWithRetry(ctx, jobID); err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: mark failed after quota exceeded",
+			"job_id", jobID, "db_err", err)
+	}
+}
+
+func (w *TTS) parseJob(ctx context.Context, job broker.TTSJob) (jobID, orgID, userID uuid.UUID, ok bool) {
+	jobID, err := uuid.Parse(job.JobId)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: bad job id", "job_id", job.JobId, "err", err)
+		return uuid.Nil, uuid.Nil, uuid.Nil, false
+	}
+	orgID, err = uuid.Parse(job.OrgID)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: bad org id", "org_id", job.OrgID, "err", err)
+		if fErr := w.markFailedWithRetry(ctx, jobID); fErr != nil {
+			slog.ErrorContext(ctx, "worker.Handle: mark failed", "job_id", jobID, "err", fErr)
+		}
+		return uuid.Nil, uuid.Nil, uuid.Nil, false
+	}
+	userID, err = uuid.Parse(job.UserID)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.Handle: bad user id", "user_id", job.UserID, "err", err)
+		if fErr := w.markFailedWithRetry(ctx, jobID); fErr != nil {
+			slog.ErrorContext(ctx, "worker.Handle: mark failed", "job_id", jobID, "err", fErr)
+		}
+		return uuid.Nil, uuid.Nil, uuid.Nil, false
+	}
+	return jobID, orgID, userID, true
 }

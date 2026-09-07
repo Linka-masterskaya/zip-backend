@@ -15,7 +15,7 @@ import (
 type fakeFavoriteService struct {
 	favoriteFn      func(context.Context, uuid.UUID) error
 	unfavoriteFn    func(context.Context, uuid.UUID) error
-	listFavoritesFn func(context.Context, ListInput) ([]*ListItem, error)
+	listFavoritesFn func(context.Context, ListInput) (*ListPage, error)
 }
 
 func (f *fakeFavoriteService) Favorite(ctx context.Context, packID uuid.UUID) error {
@@ -32,11 +32,11 @@ func (f *fakeFavoriteService) Unfavorite(ctx context.Context, packID uuid.UUID) 
 	return nil
 }
 
-func (f *fakeFavoriteService) ListFavorites(ctx context.Context, input ListInput) ([]*ListItem, error) {
+func (f *fakeFavoriteService) ListFavorites(ctx context.Context, input ListInput) (*ListPage, error) {
 	if f.listFavoritesFn != nil {
 		return f.listFavoritesFn(ctx, input)
 	}
-	return []*ListItem{}, nil
+	return &ListPage{Items: []*ListItem{}}, nil
 }
 
 func TestFavoriteHandlerPutFavorite(t *testing.T) {
@@ -98,9 +98,9 @@ func TestFavoriteHandlerDeleteFavorite(t *testing.T) {
 func TestFavoriteHandlerListFavorites(t *testing.T) {
 	packID := uuid.New()
 	service := &fakeFavoriteService{}
-	service.listFavoritesFn = func(_ context.Context, input ListInput) ([]*ListItem, error) {
+	service.listFavoritesFn = func(_ context.Context, input ListInput) (*ListPage, error) {
 		assert.Equal(t, ListInput{Limit: 25, Offset: 10}, input)
-		return []*ListItem{{ID: packID, IsFavorite: true}}, nil
+		return &ListPage{Items: []*ListItem{{ID: packID, IsFavorite: true}}, Limit: 25, Offset: 10, Total: 42}, nil
 	}
 	handler := NewFavoriteHandler(service)
 
@@ -110,9 +110,12 @@ func TestFavoriteHandlerListFavorites(t *testing.T) {
 	)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var result []*ListItem
+	var result ListPage
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
-	require.Len(t, result, 1)
-	assert.Equal(t, packID, result[0].ID)
-	assert.True(t, result[0].IsFavorite)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, packID, result.Items[0].ID)
+	assert.True(t, result.Items[0].IsFavorite)
+	assert.Equal(t, 25, result.Limit)
+	assert.Equal(t, 10, result.Offset)
+	assert.Equal(t, 42, result.Total)
 }

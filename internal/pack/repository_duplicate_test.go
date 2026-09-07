@@ -18,12 +18,11 @@ func TestRepositoryDuplicateCopiesPackAndReusesMedia(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ageMin, ageMax, difficulty := 5, 9, "medium"
+	age, difficulty := 5, "medium"
 	goals, notes := []string{"speech", "attention"}, "Исходные заметки"
 	source, err = repo.Update(t.Context(), ownerID, source.ID, UpdateInput{
 		FilterMetadata: &FilterMetadataPatch{
-			AgeMin:     NullablePatch[int]{Set: true, Value: &ageMin},
-			AgeMax:     NullablePatch[int]{Set: true, Value: &ageMax},
+			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
 			Goals:      &goals,
 		},
@@ -61,8 +60,7 @@ func TestRepositoryDuplicateCopiesPackAndReusesMedia(t *testing.T) {
 	assert.Equal(t, "draft", duplicated.Status)
 	assert.Nil(t, duplicated.PublishedAt)
 	assert.Nil(t, duplicated.LibraryFolderID)
-	assert.Equal(t, source.AgeMin, duplicated.AgeMin)
-	assert.Equal(t, source.AgeMax, duplicated.AgeMax)
+	assert.Equal(t, source.Age, duplicated.Age)
 	assert.Equal(t, source.Difficulty, duplicated.Difficulty)
 	assert.Equal(t, source.Goals, duplicated.Goals)
 	assert.Equal(t, source.Notes, duplicated.Notes)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/media"
 	"github.com/Linka-masterskaya/zip-backend/internal/testutil"
 	"github.com/Linka-masterskaya/zip-backend/migrations"
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
 	foreignID := seedStudentUser(t, pool, "foreign")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	created, err := service.Create(studentContext(ownerID), CreateInput{
 		Email: " Student@Example.com ", Name: " Анна ", Age: intPtr(7),
@@ -31,6 +32,15 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 	assert.Equal(t, "student@example.com", created.Email)
 	assert.Equal(t, "Анна", created.Name)
 	assert.Equal(t, "active", created.Status)
+
+	got, err := service.Get(studentContext(ownerID), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, got.ID)
+	assert.Equal(t, "student@example.com", got.Email)
+	assert.Equal(t, "Анна", got.Name)
+
+	_, err = service.Get(studentContext(foreignID), created.ID)
+	assertStudentStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 
 	ownerList, err := service.List(studentContext(ownerID), ListInput{})
 	require.NoError(t, err)
@@ -70,10 +80,70 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 func TestStudentCreateRequiresEmail(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	_, err := service.Create(studentContext(ownerID), CreateInput{Name: "No email"})
 	assertStudentStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+}
+
+func TestRepositoryListReturnsTotalWhenOffsetIsPastEnd(t *testing.T) {
+	pool := studentTestDB(t)
+	repo := NewRepository(pool)
+	ownerID := seedStudentUser(t, pool, "pagination owner")
+
+	for _, name := range []string{"first", "second", "third"} {
+		createTestStudent(t, repo, ownerID, name)
+	}
+
+	items, total, err := repo.List(t.Context(), ownerID, ListInput{
+		Limit: 2, Offset: 100,
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, items)
+	assert.Equal(t, 3, total)
+}
+
+func TestRepositoryListReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
+	pool := studentTestDB(t)
+	writerRepo := NewRepository(pool)
+	ownerID := seedStudentUser(t, pool, "pagination snapshot owner")
+	createTestStudent(t, writerRepo, ownerID, "first")
+
+	gate := testutil.NewQueryGate()
+	readerPoolConfig := pool.Config()
+	readerPoolConfig.ConnConfig.Tracer = gate
+	readerPool, err := pgxpool.NewWithConfig(t.Context(), readerPoolConfig)
+	require.NoError(t, err)
+	defer readerPool.Close()
+	readerRepo := NewRepository(readerPool)
+
+	type listResult struct {
+		items []storedStudent
+		total int
+		err   error
+	}
+	resultCh := make(chan listResult, 1)
+	go func() {
+		items, total, listErr := readerRepo.List(
+			t.Context(), ownerID, ListInput{Limit: 50},
+		)
+		resultCh <- listResult{items: items, total: total, err: listErr}
+	}()
+	defer gate.Release()
+	gate.Wait(t, 5*time.Second)
+
+	createTestStudent(t, writerRepo, ownerID, "second")
+	gate.Release()
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.NotEmpty(t, result.items)
+		assert.Equal(t, len(result.items), result.total)
+	case <-time.After(5 * time.Second):
+		t.Fatal("List did not return after the second query was released")
+	}
 }
 
 type identityCrypto struct{}
@@ -95,6 +165,33 @@ func (s stubStorage) PresignedURL(_ context.Context, key string, _ time.Duration
 		return "", s.err
 	}
 	return "https://minio.test/" + key + "?signature=stub", nil
+}
+
+// stubUploader подменяет банк медиа: запись кладётся прямо в таблицу,
+// MinIO для этого не нужен.
+type stubUploader struct{ pool *pgxpool.Pool }
+
+func (u *stubUploader) Upload(ctx context.Context, _ []byte, name string) (*media.Response, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mediaID := uuid.New()
+	key := "avatars/" + mediaID.String() + "-" + name
+	if _, err = u.pool.Exec(ctx, `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, sha256, mime_type, size_bytes, minio_key,
+			name, media_type
+		)
+		SELECT $1, u.org_id, u.id, $3, 'image/png', 10, $4, $5, 'image'
+		FROM users u WHERE u.id = $2`,
+		mediaID, userID, mediaID.String(), key, name); err != nil {
+		return nil, err
+	}
+	return &media.Response{
+		File: media.File{ID: mediaID, Name: name, MinIOKey: key},
+		URL:  "https://minio.test/" + key,
+	}, nil
 }
 
 func seedStudentMedia(t *testing.T, pool *pgxpool.Pool, uploaderID uuid.UUID, key string) uuid.UUID {
@@ -144,6 +241,15 @@ func seedStudentUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 	return userID
 }
 
+func createTestStudent(t *testing.T, repo *Repository, ownerID uuid.UUID, name string) {
+	t.Helper()
+	cardsShift := defaultCardsShift
+	_, err := repo.Create(t.Context(), ownerID, []byte(name+"@example.com"), CreateInput{
+		Name: name, Status: "active", CardsShift: &cardsShift,
+	})
+	require.NoError(t, err)
+}
+
 func studentContext(userID uuid.UUID) context.Context {
 	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
 	return authctx.SetRoleToCtx(ctx, "defectologist")
@@ -168,7 +274,7 @@ func TestStudentAvatarLifecycle(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
 	foreignID := seedStudentUser(t, pool, "foreign")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	mediaID := seedStudentMedia(t, pool, ownerID, "avatars/own.png")
 	foreignMediaID := seedStudentMedia(t, pool, foreignID, "avatars/foreign.png")
@@ -228,7 +334,7 @@ func TestStudentAvatarLifecycle(t *testing.T) {
 func TestStudentAvatarSurvivesPresignFailure(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{err: errors.New("minio is down")})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{err: errors.New("minio is down")}, &stubUploader{pool: pool})
 
 	mediaID := seedStudentMedia(t, pool, ownerID, "avatars/broken.png")
 	created, err := service.Create(studentContext(ownerID), CreateInput{
@@ -244,7 +350,7 @@ func TestStudentAvatarSurvivesPresignFailure(t *testing.T) {
 func TestStudentAvatarClearedWhenMediaDeleted(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
-	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{})
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
 
 	mediaID := seedStudentMedia(t, pool, ownerID, "avatars/doomed.png")
 	created, err := service.Create(studentContext(ownerID), CreateInput{
@@ -261,4 +367,242 @@ func TestStudentAvatarClearedWhenMediaDeleted(t *testing.T) {
 	require.Len(t, list.Items, 1)
 	assert.Nil(t, list.Items[0].AvatarMediaID)
 	assert.Nil(t, list.Items[0].AvatarURL)
+}
+
+// TestStudentCardsShiftLifecycle: значение по умолчанию, смена, сброс через
+// null и отказ для значения вне списка.
+func TestStudentCardsShiftLifecycle(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "shift@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.CardsShift)
+	assert.Equal(t, "full", *created.CardsShift, "по умолчанию — full")
+
+	left := "left"
+	updated, err := service.Update(studentContext(ownerID), created.ID, UpdateInput{
+		CardsShift: nullableField[string]{Set: true, Value: &left},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated.CardsShift)
+	assert.Equal(t, "left", *updated.CardsShift)
+
+	// Отсутствие поля раскладку не трогает.
+	newName := "Аня П."
+	untouched, err := service.Update(studentContext(ownerID), created.ID, UpdateInput{Name: &newName})
+	require.NoError(t, err)
+	require.NotNil(t, untouched.CardsShift)
+	assert.Equal(t, "left", *untouched.CardsShift)
+
+	// null возвращает значение по умолчанию.
+	reset, err := service.Update(studentContext(ownerID), created.ID, UpdateInput{
+		CardsShift: nullableField[string]{Set: true},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, reset.CardsShift)
+	assert.Equal(t, "full", *reset.CardsShift)
+
+	// Список отдаёт раскладку по каждому ученику.
+	list, err := service.List(studentContext(ownerID), ListInput{})
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	require.NotNil(t, list.Items[0].CardsShift)
+	assert.Equal(t, "full", *list.Items[0].CardsShift)
+
+	center := "center"
+	_, err = service.Update(studentContext(ownerID), created.ID, UpdateInput{
+		CardsShift: nullableField[string]{Set: true, Value: &center},
+	})
+	assertStudentStatus(t, err, 400)
+
+	_, err = service.Create(studentContext(ownerID), CreateInput{
+		Email: "bad-shift@example.com", Name: "Петя", CardsShift: &center,
+	})
+	assertStudentStatus(t, err, 400)
+}
+
+// pngBytes — минимальная картинка: важны только сигнатура PNG, по ней
+// определяется тип, и непустое тело.
+var pngBytes = append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+
+// TestStudentAvatarUpload проверяет ручку PUT /students/{id}/avatar:
+// картинка уезжает в банк медиа, ученик получает ссылку, чужой ученик и
+// не-картинка отбиваются до загрузки.
+func TestStudentAvatarUpload(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	foreignID := seedStudentUser(t, pool, "foreign")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "upload@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+	require.Nil(t, created.AvatarMediaID)
+
+	updated, err := service.ReplaceAvatar(studentContext(ownerID), created.ID, pngBytes, "photo.png")
+	require.NoError(t, err)
+	require.NotNil(t, updated.AvatarMediaID)
+	require.NotNil(t, updated.AvatarURL)
+	assert.Contains(t, *updated.AvatarURL, "photo.png")
+
+	// Замена аватара ставит новый файл.
+	replaced, err := service.ReplaceAvatar(studentContext(ownerID), created.ID, pngBytes, "second.png")
+	require.NoError(t, err)
+	require.NotNil(t, replaced.AvatarMediaID)
+	assert.NotEqual(t, *updated.AvatarMediaID, *replaced.AvatarMediaID)
+
+	// Не картинка — 400.
+	_, err = service.ReplaceAvatar(studentContext(ownerID), created.ID, []byte("not an image"), "note.txt")
+	assertStudentStatus(t, err, 400)
+
+	// Чужой ученик — 404, файл в банк не попадает.
+	var before int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM media_files`).Scan(&before))
+	_, err = service.ReplaceAvatar(studentContext(foreignID), created.ID, pngBytes, "stolen.png")
+	assertStudentStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+	var after int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM media_files`).Scan(&after))
+	assert.Equal(t, before, after, "битый id не должен оставлять файл в банке")
+}
+
+// seedStudentFolder заводит папку ученика с вложенной папкой и возвращает
+// их идентификаторы: корень и вложенную.
+func seedStudentFolder(t *testing.T, pool *pgxpool.Pool, ownerID, studentID uuid.UUID) (uuid.UUID, uuid.UUID) {
+	t.Helper()
+	var rootID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO folders (org_id, owner_id, section, kind, student_id, name, depth)
+		SELECT org_id, id, 'students', 'student', $2, 'Аня', 0
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID, studentID).Scan(&rootID))
+
+	var childID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO folders (org_id, owner_id, parent_id, section, kind, name, depth)
+		SELECT org_id, id, $2, 'students', 'folder', 'Занятия', 1
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID, rootID).Scan(&childID))
+	return rootID, childID
+}
+
+func seedStudentPack(t *testing.T, pool *pgxpool.Pool, ownerID, folderID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var packID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO packs (org_id, owner_id, folder_id, title)
+		SELECT org_id, id, $2, 'Набор'
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID, folderID).Scan(&packID))
+	return packID
+}
+
+// TestStudentForceDeleteRemovesFolderTree: force сносит ученика вместе с
+// папкой, вложенными папками, наборами и следами использования медиа.
+func TestStudentForceDeleteRemovesFolderTree(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "purge@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+
+	_, childID := seedStudentFolder(t, pool, ownerID, created.ID)
+	packID := seedStudentPack(t, pool, ownerID, childID)
+	mediaID := seedStudentMedia(t, pool, ownerID, "packs/picture.png")
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack', $2)`, mediaID, packID)
+	require.NoError(t, err)
+
+	// Без force ученик с папкой не удаляется.
+	assertStudentStatus(t, service.Delete(studentContext(ownerID), created.ID),
+		apperr.ErrConflict.HTTPStatus)
+
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), created.ID))
+
+	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM folders WHERE student_id = $1`, created.ID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM folders WHERE id = $1`, childID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM media_usages WHERE source_id = $1`, packID, 0)
+	// Сам файл остаётся в банке: его удаляют отдельно, зато теперь он
+	// больше ничем не занят.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, mediaID, 1)
+
+	// Повторный вызов — 404.
+	assertStudentStatus(t, service.ForceDelete(studentContext(ownerID), created.ID),
+		apperr.ErrNotFound.HTTPStatus)
+}
+
+// TestStudentForceDeleteRemovesPublishedPack: опубликованный набор в папке
+// ученика удаление не блокирует — иначе ручка упиралась бы ровно в тот
+// тупик, из-за которого её и просили.
+func TestStudentForceDeleteRemovesPublishedPack(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "published@example.com", Name: "Аня",
+	})
+	require.NoError(t, err)
+
+	_, childID := seedStudentFolder(t, pool, ownerID, created.ID)
+	packID := seedStudentPack(t, pool, ownerID, childID)
+
+	var libraryID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO folders (org_id, owner_id, section, kind, name, depth)
+		SELECT org_id, id, 'library', 'folder', 'Библиотека', 0
+		FROM users WHERE id = $1
+		RETURNING id`, ownerID).Scan(&libraryID))
+	_, err = pool.Exec(context.Background(), `
+		UPDATE packs
+		SET library_folder_id = $2, published_at = now(), status = 'published'
+		WHERE id = $1`, packID, libraryID)
+	require.NoError(t, err)
+
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), created.ID))
+
+	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 0)
+	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packID, 0)
+	// Библиотечная папка — не папка ученика, её удаление не касается.
+	assertCount(t, pool, `SELECT count(*) FROM folders WHERE id = $1`, libraryID, 1)
+}
+
+// TestStudentForceDeleteWithoutFolder: ученика без папки force тоже сносит
+// насовсем, а не архивирует.
+func TestStudentForceDeleteWithoutFolder(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	foreignID := seedStudentUser(t, pool, "foreign")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	created, err := service.Create(studentContext(ownerID), CreateInput{
+		Email: "plain@example.com", Name: "Петя",
+	})
+	require.NoError(t, err)
+
+	// Чужого ученика снести нельзя.
+	assertStudentStatus(t, service.ForceDelete(studentContext(foreignID), created.ID),
+		apperr.ErrNotFound.HTTPStatus)
+
+	require.NoError(t, service.ForceDelete(studentContext(ownerID), created.ID))
+	assertCount(t, pool, `SELECT count(*) FROM students WHERE id = $1`, created.ID, 0)
+}
+
+func assertCount(t *testing.T, pool *pgxpool.Pool, query string, arg uuid.UUID, want int) {
+	t.Helper()
+	var got int
+	require.NoError(t, pool.QueryRow(context.Background(), query, arg).Scan(&got))
+	assert.Equal(t, want, got, query)
 }

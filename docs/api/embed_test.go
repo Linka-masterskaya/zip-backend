@@ -18,7 +18,7 @@ func TestRegisterRoutes(t *testing.T) {
 		contains    string
 	}{
 		{docsPath, "text/html", "SwaggerUIBundle"},
-		{openAPIPath, "application/yaml", "openapi: 3.0.3"},
+		{openAPIPath, "application/yaml", "openapi: 3.1.1"},
 		{assetsPath + "swagger-ui.css", "text/css", ".swagger-ui"},
 		{assetsPath + "swagger-ui-bundle.js", "text/javascript", "SwaggerUIBundle"},
 	}

@@ -177,3 +177,15 @@ func newTestChecker(
 		bank:        PicturesBank{URL: "https://pictures.example"},
 	}
 }
+
+func TestCheckerRunLocalPicturesBankUsesPostgresAndMinIOHealth(t *testing.T) {
+	checker := newTestChecker(nil, nil, nil)
+	checker.bank = PicturesBank{Local: true}
+
+	status, body := checker.Run(context.Background())
+	result := body.(response)
+
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, StatusOK, result.Checks["pictures_bank"].Status)
+	assert.Equal(t, "local", result.Checks["pictures_bank"].Detail)
+}

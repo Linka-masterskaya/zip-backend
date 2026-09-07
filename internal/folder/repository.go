@@ -352,13 +352,21 @@ func (r *Repository) Contents(
 	userID uuid.UUID,
 	input ContentsInput,
 ) (*ContentsPage, error) {
-	if err := r.ensureParentVisible(ctx, userID, input); err != nil {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("folder contents begin: %w", err)
+	}
+	defer rollback(ctx, tx)
+
+	if err = r.ensureParentVisible(ctx, tx, userID, input); err != nil {
 		return nil, err
 	}
 
 	query, args := contentsQuery(userID, input)
-
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("folder contents: %w", err)
 	}
@@ -369,7 +377,7 @@ func (r *Repository) Contents(
 		var item ContentItem
 		if err = rows.Scan(
 			&item.Type, &item.ID, &item.Name, &item.Kind, &item.StudentID,
-			&item.Published, &item.UpdatedAt,
+			&item.Published, &item.UpdatedAt, &item.Age, &item.Difficulty,
 		); err != nil {
 			return nil, fmt.Errorf("folder contents scan: %w", err)
 		}
@@ -378,13 +386,23 @@ func (r *Repository) Contents(
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("folder contents rows: %w", err)
 	}
-	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset}, nil
+
+	countQuery, countArgs := contentsCountQuery(userID, input)
+	var total int
+	if err = tx.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("folder contents count: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("folder contents commit: %w", err)
+	}
+	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
 }
 
 // ensureParentVisible проверяет, что запрошенная папка существует и доступна.
 // Для корня раздела проверять нечего: он не строка в таблице.
 func (r *Repository) ensureParentVisible(
 	ctx context.Context,
+	tx pgx.Tx,
 	userID uuid.UUID,
 	input ContentsInput,
 ) error {
@@ -394,7 +412,7 @@ func (r *Repository) ensureParentVisible(
 
 	var section string
 	var ownerID uuid.UUID
-	err := r.pool.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
 		Scan(&section, &ownerID)
 	switch {
@@ -413,28 +431,53 @@ func (r *Repository) ensureParentVisible(
 }
 
 func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
+	base, args := contentsBaseQuery(userID, input)
+
 	orderColumn := "name"
 	if input.Sort == "updated_at" {
 		orderColumn = "updated_at"
 	}
+
 	direction := "ASC"
 	if input.Order == "desc" {
 		direction = "DESC"
 	}
-	order := "\n\t\tORDER BY " + orderColumn + " " + direction + ", id"
 
+	limitIndex := len(args) + 1
+	offsetIndex := len(args) + 2
+	query := base +
+		"\n\t\tORDER BY " + orderColumn + " " + direction + ", id" +
+		fmt.Sprintf("\n\t\tLIMIT $%d OFFSET $%d", limitIndex, offsetIndex)
+
+	args = append(args, input.Limit, input.Offset)
+	return query, args
+}
+
+func contentsCountQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
+	base, args := contentsBaseQuery(userID, input)
+	return "SELECT count(*) FROM (" + base + ") AS counted", args
+}
+
+func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 	if input.ParentID == nil {
 		// Корень раздела содержит только папки: packs.folder_id объявлен
 		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
 		query := `
-		SELECT 'folder'::text AS type, f.id, f.name, f.kind,
-		       f.student_id, false AS published, f.updated_at
-		FROM folders f
-		WHERE f.parent_id IS NULL
-		  AND f.section = $2
-		  AND ($2 = 'library' OR f.owner_id = $1)` + order + `
-		LIMIT $3 OFFSET $4`
-		return query, []any{userID, input.Section, input.Limit, input.Offset}
+		WITH items AS (
+			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
+			       f.student_id, false AS published, f.updated_at,
+			       NULL::int AS age,
+			       NULL::text AS difficulty
+			FROM folders f
+			WHERE f.parent_id IS NULL
+			  AND f.section = $2
+			  AND ($2 = 'library' OR f.owner_id = $1)
+		)
+		SELECT type, id, name, kind, student_id, published, updated_at,
+		       age, difficulty
+		FROM items`
+		args := []any{userID, input.Section}
+		return appendContentsFilters(query, args, input)
 	}
 
 	packFolderColumn := "p.folder_id"
@@ -443,37 +486,69 @@ func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		packFolderColumn = "p.library_folder_id"
 		packScope = "AND p.published_at IS NOT NULL"
 	}
+
 	studentAssignments := ""
 	if input.Section == SectionStudents {
 		studentAssignments = `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       false, p.updated_at
+			       false, p.updated_at, p.age, p.difficulty
 			FROM folders student_folder
+			JOIN students s ON s.id = student_folder.student_id
+			               AND s.deleted_at IS NULL
 			JOIN pack_adaptations pa ON pa.student_id = student_folder.student_id
 			JOIN packs p ON p.id = pa.pack_id
 			WHERE student_folder.id = $1
 			  AND student_folder.owner_id = $2
 			  AND p.folder_id <> $1`
 	}
+
 	query := `
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
-			       f.student_id, false AS published, f.updated_at
+			       f.student_id, false AS published, f.updated_at,
+			       NULL::int AS age,
+			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id = $1
 			  AND f.section = $3
 			  AND ($3 = 'library' OR f.owner_id = $2)
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       p.published_at IS NOT NULL, p.updated_at
+			       p.published_at IS NOT NULL, p.updated_at,
+			       p.age, p.difficulty
 			FROM packs p
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
-		SELECT type, id, name, kind, student_id, published, updated_at
-		FROM items` + order + `
-		LIMIT $4 OFFSET $5`
-	return query, []any{*input.ParentID, userID, input.Section, input.Limit, input.Offset}
+		SELECT type, id, name, kind, student_id, published, updated_at,
+		       age, difficulty
+		FROM items`
+	args := []any{*input.ParentID, userID, input.Section}
+	return appendContentsFilters(query, args, input)
+}
+
+// contentsFilters — общий хвост запроса: фильтры идут по одним и тем же
+// плейсхолдерам, поэтому их номера фиксированы относительно args, а не
+// считаются на лету. Возраст и сложность есть только у наборов, поэтому
+// такие фильтры сами по себе отсекают папки — у них эти поля пустые.
+func appendContentsFilters(query string, args []any, input ContentsInput) (string, []any) {
+	first := len(args) + 1
+	filters := fmt.Sprintf(`
+		WHERE ($%d::text = '' OR name ILIKE '%%' || $%d::text || '%%')
+		  AND ($%d::text = '' OR type = $%d::text)
+		  AND ($%d::int IS NULL OR age = $%d::int)
+		  AND ($%d::int IS NULL OR age >= $%d::int)
+		  AND ($%d::int IS NULL OR age <= $%d::int)
+		  AND ($%d::text = '' OR difficulty = $%d::text)`,
+		first, first,
+		first+1, first+1,
+		first+2, first+2,
+		first+3, first+3,
+		first+4, first+4,
+		first+5, first+5)
+
+	args = append(args, input.Query, input.Type, input.Age, input.AgeFrom, input.AgeTo, input.Difficulty)
+	return query + filters, args
 }
 
 func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {
