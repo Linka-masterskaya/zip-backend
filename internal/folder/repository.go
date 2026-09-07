@@ -444,8 +444,9 @@ func (r *Repository) ensureParentVisible(
 	defer rows.Close()
 
 	var current *CurrentFolder
+	found := false
 	// first самый дальний предок (т.е.корень, если цепочка полная).
-	var found, first bool = false, true
+	first := true
 	for rows.Next() {
 		var id uuid.UUID
 		var name, section string
