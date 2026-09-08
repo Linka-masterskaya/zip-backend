@@ -145,7 +145,7 @@ func listMedia(ctx context.Context, tx pgx.Tx, q ListQuery) ([]ListItem, error) 
 		cursorID = q.Cursor.ID
 	}
 	rows, err := tx.Query(ctx, listMediaQuery,
-		q.OrgID, q.Query, q.MediaType, cursorCreatedAt, cursorID, q.Unused, q.Limit, q.UserID)
+		q.OrgID, q.Query, q.MediaType, cursorCreatedAt, cursorID, q.Unused, q.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("media repository list: %w", err)
 	}
