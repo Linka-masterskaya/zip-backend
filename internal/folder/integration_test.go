@@ -746,3 +746,41 @@ func TestContentsStudentsBreadcrumbsAndNonExistentID(t *testing.T) {
 	})
 	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
+
+func TestContentsRejectsForeignAncestorInMiddleOfChain(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "middle chain owner")
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	root, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Root",
+	})
+	require.NoError(t, err)
+	animals, err := service.Create(ctx, CreateInput{
+		ParentID: &root.ID, Section: SectionMy, Kind: KindFolder, Name: "animals",
+	})
+	require.NoError(t, err)
+	pet, err := service.Create(ctx, CreateInput{
+		ParentID: &animals.ID, Section: SectionMy, Kind: KindFolder, Name: "pet",
+	})
+	require.NoError(t, err)
+
+	var ownerOrgID uuid.UUID
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT org_id FROM users WHERE id = $1`, ownerID).Scan(&ownerOrgID))
+	sameOrgForeignID := uuid.New()
+	_, err = pool.Exec(t.Context(),
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`,
+		sameOrgForeignID, ownerOrgID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(t.Context(),
+		`UPDATE folders SET owner_id = $1 WHERE id = $2`, sameOrgForeignID, animals.ID)
+	require.NoError(t, err)
+
+	_, err = service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &pet.ID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+}

@@ -12,6 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// maxFolderDepth is the highest allowed value of folders.depth (root = 0).
+const maxFolderDepth = 4
+
 var (
 	ErrNotFound       = errors.New("folder not found")
 	ErrParentInvalid  = errors.New("folder parent is invalid")
@@ -19,6 +22,7 @@ var (
 	ErrCycle          = errors.New("folder move creates a cycle")
 	ErrDepth          = errors.New("folder depth limit exceeded")
 	ErrNotEmpty       = errors.New("folder is not empty")
+	ErrNotRoot        = errors.New("folder ancestor chain did not reach root")
 )
 
 type Repository struct {
@@ -56,7 +60,7 @@ func (r *Repository) Create(
 			return nil, ErrParentInvalid
 		}
 		depth = parent.Depth + 1
-		if depth > 4 {
+		if depth > maxFolderDepth {
 			return nil, ErrDepth
 		}
 	}
@@ -416,8 +420,8 @@ func (r *Repository) ensureParentVisible(
 	tx pgx.Tx,
 	userID uuid.UUID,
 	input ContentsInput,
-) (*CurrentFolder, []Breadcrumbs, error) {
-	breadcrumbs := []Breadcrumbs{{Name: sectionLabel(input.Section)}}
+) (*CurrentFolder, []Breadcrumb, error) {
+	breadcrumbs := []Breadcrumb{{Name: sectionLabel(input.Section)}}
 	if input.ParentID == nil {
 		return nil, breadcrumbs, nil
 	}
@@ -434,10 +438,10 @@ func (r *Repository) ensureParentVisible(
 	     SELECT f.id, f.name, f.parent_id, f.section, f.owner_id, a.level + 1
 		 FROM folders f
 		 JOIN ancestors a ON f.id = a.parent_id
-		 WHERE f.org_id = $2 AND a.level < 5)
+		 WHERE f.org_id = $2 AND a.level < $3)
 		 SELECT id, name, parent_id, section, owner_id
 		 FROM ancestors
-		 ORDER BY level DESC`, *input.ParentID, orgID)
+		 ORDER BY level DESC`, *input.ParentID, orgID, maxFolderDepth)
 	if err != nil {
 		return nil, nil, fmt.Errorf("folder ancestors: %w", err)
 	}
@@ -461,8 +465,7 @@ func (r *Repository) ensureParentVisible(
 		if first {
 			first = false
 			if parentID != nil {
-				return nil, nil, fmt.Errorf(
-					"folder ancestors: chain for %s did not reach root", *input.ParentID)
+				return nil, nil, ErrNotRoot
 			}
 		}
 		// Папка из другого раздела или чужая (кроме library) считается
@@ -471,7 +474,7 @@ func (r *Repository) ensureParentVisible(
 		if section != input.Section || (section != SectionLibrary && ownerID != userID) {
 			return nil, nil, ErrNotFound
 		}
-		breadcrumbs = append(breadcrumbs, Breadcrumbs{ID: &id, Name: name})
+		breadcrumbs = append(breadcrumbs, Breadcrumb{ID: &id, Name: name})
 		current = &CurrentFolder{ID: id, Name: name, ParentID: parentID}
 		if id == *input.ParentID {
 			found = true
@@ -601,28 +604,24 @@ func appendContentsFilters(query string, args []any, input ContentsInput) (strin
 	return query + filters, args
 }
 
+// activeUserOrg блокирует строку пользователя (FOR UPDATE), поэтому подходит
+// для транзакций, которые дальше изменяют данные.
 func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {
-	var orgID uuid.UUID
-	err := tx.QueryRow(ctx, `
-		SELECT org_id FROM users
-		WHERE id = $1 AND org_id IS NOT NULL AND deleted_at IS NULL
-		FOR UPDATE`, userID).Scan(&orgID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, ErrNotFound
-	}
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("folder user org: %w", err)
-	}
-	return orgID, nil
+	return userOrg(ctx, tx, userID, true)
 }
 
-// currentUserOrg похож на activeUserOrg, но не требует FOR UPDATE, поэтому может выполняться
-// внутри транзакции Contents, используется только для чтения.
+// currentUserOrg используется только для чтения.
 func currentUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {
+	return userOrg(ctx, tx, userID, false)
+}
+
+func userOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID, forUpdate bool) (uuid.UUID, error) {
+	query := `SELECT org_id FROM users WHERE id = $1 AND org_id IS NOT NULL AND deleted_at IS NULL`
+	if forUpdate {
+		query += ` FOR UPDATE`
+	}
 	var orgID uuid.UUID
-	err := tx.QueryRow(ctx, `
-		SELECT org_id FROM users
-		WHERE id = $1 AND org_id IS NOT NULL AND deleted_at IS NULL`, userID).Scan(&orgID)
+	err := tx.QueryRow(ctx, query, userID).Scan(&orgID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, ErrNotFound
 	}

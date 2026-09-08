@@ -89,8 +89,9 @@ type ContentItem struct {
 }
 
 type ContentsPage struct {
+	// CurrentFolder duplicates the last element of Breadcrumbs for frontend convenience.
 	CurrentFolder *CurrentFolder `json:"current_folder"`
-	Breadcrumbs   []Breadcrumbs  `json:"breadcrumbs"`
+	Breadcrumbs   []Breadcrumb   `json:"breadcrumbs"`
 	Items         []ContentItem  `json:"items"`
 	Limit         int            `json:"limit"`
 	Offset        int            `json:"offset"`
@@ -102,7 +103,7 @@ type CurrentFolder struct {
 	Name     string     `json:"name"`
 	ParentID *uuid.UUID `json:"parent_id"`
 }
-type Breadcrumbs struct {
+type Breadcrumb struct {
 	ID   *uuid.UUID `json:"id"`
 	Name string     `json:"name"`
 }
