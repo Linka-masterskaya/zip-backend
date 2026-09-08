@@ -349,6 +349,9 @@ func LoadMigration(path string) (*MigrationConfig, error) {
 	if cfg.DB.URL == "" {
 		return nil, fmt.Errorf("validate migration config: db.url is required")
 	}
+	if cfg.DB.MigrateURL == "" {		
+		cfg.DB.MigrateURL = cfg.DB.URL
+	}
 	if isProductionEnvironment(cfg.App.Env) {
 		if err := validatePostgresProductionURL(cfg.DB.MigrateURL); err != nil {
 			return nil, fmt.Errorf("validate migration config: %w", err)

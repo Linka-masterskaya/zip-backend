@@ -51,14 +51,21 @@ mock:
 
 # ── Dev infra ────────────────────────────────────────────────────────────────
 dev-up:
-	docker compose -f compose.dev.yaml -f docker-compose.yml up -d
+	docker compose -f compose.dev.yaml up -d
+
+dev-full-up:
+	docker compose -f docker-compose.yml up -d
 
 dev-down:
 	docker compose -f compose.dev.yaml -f docker-compose.yml down
 
 dev-reset:
-	docker compose -f compose.dev.yaml -f docker-compose.yml down -v
-	docker compose -f compose.dev.yaml -f docker-compose.yml up -d
+	docker compose -f compose.dev.yaml down -v
+	docker compose -f compose.dev.yaml up -d
+
+dev-full-reset:
+	docker compose -f docker-compose.yml down -v
+	docker compose -f docker-compose.yml up -d	
 
 # ── Migrations (goose) ───────────────────────────────────────────────────────
 migrate:
