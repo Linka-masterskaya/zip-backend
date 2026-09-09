@@ -189,6 +189,8 @@ func mapError(err error) error {
 		return apperr.ErrBadRequest
 	case errors.Is(err, ErrCycle), errors.Is(err, ErrNotEmpty):
 		return apperr.ErrConflict
+	case errors.Is(err, ErrNotRoot):
+		return apperr.ErrInternal.WithError(err)
 	default:
 		return err
 	}
