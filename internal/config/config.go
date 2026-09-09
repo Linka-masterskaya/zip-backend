@@ -78,6 +78,7 @@ type AppConfig struct {
 // DBConfig contains database connection settings.
 type DBConfig struct {
 	URL               string        `mapstructure:"url"`
+	MigrateURL        string        `mapstructure:"migrate_url"`
 	MaxConns          int32         `mapstructure:"max_conns"`
 	MinConns          int32         `mapstructure:"min_conns"`
 	MaxConnLifetime   time.Duration `mapstructure:"max_conn_lifetime"`
@@ -348,8 +349,11 @@ func LoadMigration(path string) (*MigrationConfig, error) {
 	if cfg.DB.URL == "" {
 		return nil, fmt.Errorf("validate migration config: db.url is required")
 	}
+	if cfg.DB.MigrateURL == "" {
+		cfg.DB.MigrateURL = cfg.DB.URL
+	}
 	if isProductionEnvironment(cfg.App.Env) {
-		if err := validatePostgresProductionURL(cfg.DB.URL); err != nil {
+		if err := validatePostgresProductionURL(cfg.DB.MigrateURL); err != nil {
 			return nil, fmt.Errorf("validate migration config: %w", err)
 		}
 	}
