@@ -208,7 +208,7 @@ func (r *Repository) UpdateAdaptationConfig(
 	if err := validateMediaAccess(ctx, tx, orgID, mediaIDs); err != nil {
 		return nil, err
 	}
-	mediaRows, err := tx.Query(ctx, `SELECT media_id FROM media_usages WHERE source_id = $1`, adaptationID)
+	mediaRows, err := tx.Query(ctx, `SELECT media_id FROM media_usages WHERE source_type = 'pack_adaptation' AND source_id = $1`, adaptationID)
 	if err != nil {
 		return nil, fmt.Errorf("pack adaptation config collect media: %w", err)
 	}
@@ -364,7 +364,10 @@ func validateMediaAccess(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, mediaI
 }
 
 func collectAdaptationMedia(ctx context.Context, tx pgx.Tx, adaptationIDs []uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := tx.Query(ctx, `SELECT media_id FROM media_usages WHERE source_id = ANY($1::uuid[])`, adaptationIDs)
+	rows, err := tx.Query(ctx, `SELECT media_id FROM media_usages
+	WHERE source_type = 'pack_adaptation'
+	AND source_id = ANY($1::uuid[])`,
+	adaptationIDs)
 	if err != nil {
 		return nil, fmt.Errorf("collect adaptation media: %w", err)
 	}

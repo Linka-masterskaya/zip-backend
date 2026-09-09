@@ -533,9 +533,13 @@ const qualifiedPackColumns = `
 	p.created_at, p.updated_at`
 
 const collectPackMediaQuery = `
-		SELECT media_id FROM media_usages WHERE source_id = $1
-		UNION ALL
-		SELECT media_id FROM media_usages WHERE source_id = ANY($2::uuid[])`
+SELECT media_id FROM media_usages
+	WHERE source_type = 'pack'
+	AND source_id = $1
+UNION ALL
+SELECT media_id FROM media_usages
+	WHERE source_type = 'pack_adaptation'
+	AND source_id = ANY($2::uuid[])`
 
 const deleteOrphanedMediaQuery = `
 	WITH deleted AS (
