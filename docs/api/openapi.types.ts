@@ -609,7 +609,7 @@ export interface paths {
                     query?: string;
                     /** @description Фильтр по media_type, например image или audio */
                     type?: string;
-                    /** @description Только файлы, на которые не ссылаются ни media_usages, ни аватар ученика, ни TTS-джоба */
+                    /** @description Только файлы, на которые не ссылаются ни media_usages, ни аватар активного ученика, ни активная TTS-джоба (pending/in_progress). Неиспользуемые файлы появляются только в результате сбоя или бага. Фильтр предназначен для ручной очистки таких остатков. */
                     unused?: boolean;
                     /** @description Курсор из next_cursor предыдущей страницы */
                     cursor?: string;
@@ -3006,7 +3006,7 @@ export interface components {
             url: string;
         };
         MediaListItem: components["schemas"]["MediaFile"] & {
-            /** @description Может ли вызывающий удалить файл. Список орг-скоупный, а удаление доступно только загрузившему. */
+            /** @description true, если файл не используется ни в media_usages, ни как аватар активного ученика, ни в активной TTS-джобе (pending/in_progress). Совпадает с проверкой при DELETE. */
             can_delete: boolean;
         };
         /** @description Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`. */
