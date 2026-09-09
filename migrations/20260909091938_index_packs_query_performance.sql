@@ -1,8 +1,6 @@
 -- +goose Up
 -- +goose NO TRANSACTION
-CREATE INDEX CONCURRENTLY pack_adaptations_student_idx ON pack_adaptations(student_id);
-CREATE INDEX CONCURRENTLY packs_org_published_idx ON packs(org_id) WHERE published_at IS NOT NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS pack_adaptations_student_idx ON pack_adaptations(student_id);
 
 -- +goose Down
-DROP INDEX packs_org_published_idx;
-DROP INDEX pack_adaptations_student_idx;
+DROP INDEX CONCURRENTLY IF EXISTS pack_adaptations_student_idx;
