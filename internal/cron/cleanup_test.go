@@ -13,7 +13,7 @@ import (
 type fakeCleanupRepo struct {
 	getOldAudioFn    func(ctx context.Context, ttl time.Duration, limit int) ([]string, error)
 	deleteFromBankFn func(ctx context.Context, keys []string) error
-	deleteOldJobsFn  func(ctx context.Context, cutoff time.Time) error
+	cleanupOldJobsFn func(ctx context.Context, cutoff time.Time) error
 	deleteBankCalled bool
 	deleteJobsCalled bool
 }
@@ -33,10 +33,10 @@ func (f *fakeCleanupRepo) DeleteFromBank(ctx context.Context, keys []string) err
 	return nil
 }
 
-func (f *fakeCleanupRepo) DeleteOldJobs(ctx context.Context, cutoff time.Time) error {
+func (f *fakeCleanupRepo) CleanupOldJobs(ctx context.Context, cutoff time.Time) error {
 	f.deleteJobsCalled = true
-	if f.deleteOldJobsFn != nil {
-		return f.deleteOldJobsFn(ctx, cutoff)
+	if f.cleanupOldJobsFn != nil {
+		return f.cleanupOldJobsFn(ctx, cutoff)
 	}
 	return nil
 }
@@ -73,7 +73,7 @@ func TestCleanupOK(t *testing.T) {
 	}
 	reaper := &fakeStorageReaper{removedCount: 2}
 
-	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.NoError(t, err)
@@ -81,13 +81,13 @@ func TestCleanupOK(t *testing.T) {
 	assert.True(t, repo.deleteBankCalled)
 	assert.True(t, reaper.called)
 	assert.Equal(t, 5*time.Minute, reaper.gotGrace)
-	assert.Equal(t, 100, reaper.gotLimit)
+	assert.Equal(t, 1000, reaper.gotLimit)
 }
 
 func TestCleanupDeletesOldJobs(t *testing.T) {
 	var gotCutoff time.Time
 	repo := &fakeCleanupRepo{
-		deleteOldJobsFn: func(_ context.Context, cutoff time.Time) error {
+		cleanupOldJobsFn: func(_ context.Context, cutoff time.Time) error {
 			gotCutoff = cutoff
 			return nil
 		},
@@ -95,7 +95,7 @@ func TestCleanupDeletesOldJobs(t *testing.T) {
 	reaper := &fakeStorageReaper{}
 
 	jobsTTL := 72 * time.Hour
-	c := NewTTSCleaner(repo, reaper, 24*time.Hour, jobsTTL, 5*time.Minute, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, jobsTTL, 5*time.Minute, 100, 1000)
 
 	before := time.Now().Add(-jobsTTL)
 	err := c.Cleanup(context.Background())
@@ -114,7 +114,7 @@ func TestCleanupGetOldAudioError(t *testing.T) {
 	}
 	reaper := &fakeStorageReaper{}
 
-	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.Error(t, err)
@@ -140,7 +140,7 @@ func TestCleanupReaperPartialFailureIsNonFatal(t *testing.T) {
 		},
 	}
 
-	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestCleanupEmptyBankStillRunsStorageReaper(t *testing.T) {
 	}
 	reaper := &fakeStorageReaper{}
 
-	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.NoError(t, err)
@@ -168,7 +168,7 @@ func TestCleanupDeleteJobsErrorContinues(t *testing.T) {
 	keys := []string{"tts/aaa"}
 
 	repo := &fakeCleanupRepo{
-		deleteOldJobsFn: func(_ context.Context, _ time.Time) error {
+		cleanupOldJobsFn: func(_ context.Context, _ time.Time) error {
 			return fmt.Errorf("jobs table locked")
 		},
 		getOldAudioFn: func(_ context.Context, _ time.Duration, _ int) ([]string, error) {
@@ -177,7 +177,7 @@ func TestCleanupDeleteJobsErrorContinues(t *testing.T) {
 	}
 	reaper := &fakeStorageReaper{}
 
-	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.NoError(t, err)

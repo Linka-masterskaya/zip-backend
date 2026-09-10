@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
@@ -40,6 +41,10 @@ type TTS struct {
 }
 
 func NewTTS(ttsapi synthesizer, storage uploader, repo audioBank, mimeType string) *TTS {
+	mimeType = strings.TrimSpace(mimeType)
+	if mimeType == "" {
+		mimeType = "audio/mpeg"
+	}
 	return &TTS{
 		client:   ttsapi,
 		storage:  storage,

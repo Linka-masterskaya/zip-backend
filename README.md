@@ -75,7 +75,9 @@ cron:
     interval: 6h
     clean_period: 2160h  # 90 дней
     jobs_ttl: 72h
+    reaper_grace_period: 5m
     limit: 100
+    reaper_limit: 1000
 ```
 
 `TTSAPI_SERVICE_URL` — единственная переменная окружения, остальное в `config.prod.yml`.

@@ -55,6 +55,22 @@ SELECT pbi.minio_key,
 FROM picture_bank_images pbi
 ON CONFLICT (key) DO NOTHING;
 
+-- Legacy avatars predate storage_objects and do not persist MIME/hash metadata.
+-- Register their keys so a later avatar replacement can make the old blob visible
+-- to the global reaper. Unknown legacy size/MIME/hash values are represented by
+-- safe placeholders; live avatar quota reconciliation uses users.avatar_size_bytes
+-- (or MinIO StatObject) rather than these registry fields.
+INSERT INTO storage_objects (key, size, content_type, sha256, created_at, updated_at)
+SELECT u.avatar_key,
+       COALESCE(u.avatar_size_bytes, 0),
+       'application/octet-stream',
+       '',
+       u.created_at,
+       u.updated_at
+FROM users u
+WHERE u.avatar_key IS NOT NULL
+ON CONFLICT (key) DO NOTHING;
+
 -- +goose Down
 DROP INDEX IF EXISTS users_avatar_key_idx;
 DROP INDEX IF EXISTS media_files_minio_key_idx;

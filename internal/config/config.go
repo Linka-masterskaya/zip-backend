@@ -298,6 +298,7 @@ type TTSCleanupCron struct {
 	JobsTTL           time.Duration `mapstructure:"jobs_ttl"`
 	ReaperGracePeriod time.Duration `mapstructure:"reaper_grace_period"`
 	Limit             int           `mapstructure:"limit"`
+	ReaperLimit       int           `mapstructure:"reaper_limit"`
 }
 
 // Load reads application settings from a configuration file and applies
@@ -553,6 +554,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cron.tts_cleanup.jobs_ttl", "72h")       // 3 days
 	v.SetDefault("cron.tts_cleanup.reaper_grace_period", "5m")
 	v.SetDefault("cron.tts_cleanup.limit", 100)
+	v.SetDefault("cron.tts_cleanup.reaper_limit", 1000)
 }
 
 // validateConfig validates required configuration fields.
@@ -637,6 +639,8 @@ func validateTTSCleanupConfig(cfg *TTSCleanupCron) error {
 		return fmt.Errorf("cron.tts_cleanup.reaper_grace_period must be >= 0")
 	case cfg.Limit <= 0:
 		return fmt.Errorf("cron.tts_cleanup.limit must be > 0")
+	case cfg.ReaperLimit <= 0:
+		return fmt.Errorf("cron.tts_cleanup.reaper_limit must be > 0")
 	}
 	return nil
 }

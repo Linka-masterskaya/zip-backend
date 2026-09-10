@@ -10,7 +10,7 @@ import (
 const selectUnreferencedObjects = `
 SELECT so.key
 FROM storage_objects so
-WHERE so.updated_at < $1
+WHERE so.updated_at < now() - $1::interval
   AND NOT EXISTS (SELECT 1 FROM media_files mf WHERE mf.minio_key = so.key)
   AND NOT EXISTS (SELECT 1 FROM audio_bank ab WHERE ab.minio_key = so.key)
   AND NOT EXISTS (SELECT 1 FROM picture_bank_images pbi WHERE pbi.minio_key = so.key)
@@ -24,7 +24,7 @@ SELECT EXISTS (
     SELECT 1
     FROM storage_objects so
     WHERE so.key = $1
-      AND so.updated_at < $2
+      AND so.updated_at < now() - $2::interval
       AND NOT EXISTS (SELECT 1 FROM media_files mf WHERE mf.minio_key = so.key)
       AND NOT EXISTS (SELECT 1 FROM audio_bank ab WHERE ab.minio_key = so.key)
       AND NOT EXISTS (SELECT 1 FROM picture_bank_images pbi WHERE pbi.minio_key = so.key)
@@ -56,8 +56,8 @@ func (c *Client) ReapUnreferenced(ctx context.Context, gracePeriod time.Duration
 		return 0, err
 	}
 
-	cutoff := time.Now().Add(-gracePeriod)
-	rows, err := c.registry.Query(ctx, selectUnreferencedObjects, cutoff, limit)
+	graceInterval := gracePeriod.String()
+	rows, err := c.registry.Query(ctx, selectUnreferencedObjects, graceInterval, limit)
 	if err != nil {
 		return 0, fmt.Errorf("select unreferenced storage objects: %w", err)
 	}
@@ -91,7 +91,7 @@ func (c *Client) ReapUnreferenced(ctx context.Context, gracePeriod time.Duration
 		}
 
 		var stillUnreferenced bool
-		err = registryConn.QueryRow(ctx, storageObjectStillUnreferenced, key, cutoff).Scan(&stillUnreferenced)
+		err = registryConn.QueryRow(ctx, storageObjectStillUnreferenced, key, graceInterval).Scan(&stillUnreferenced)
 		if err != nil {
 			releaseLock()
 			reapErr = errors.Join(reapErr, fmt.Errorf("recheck storage object %q: %w", key, err))

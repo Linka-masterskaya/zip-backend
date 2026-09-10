@@ -196,6 +196,7 @@ cron:
     jobs_ttl: 72h
     reaper_grace_period: 5m
     limit: 100
+    reaper_limit: 1000
 
 media:
   batch_delete_limit: 100

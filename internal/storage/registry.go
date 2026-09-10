@@ -21,7 +21,10 @@ SET size = EXCLUDED.size,
     sha256 = EXCLUDED.sha256,
     updated_at = EXCLUDED.updated_at`
 
-const objectLockTimeout = 5 * time.Second
+const (
+	objectLockTimeout      = 5 * time.Second
+	objectUploadProtection = 15 * time.Minute
+)
 
 type registryExecutor interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -50,13 +53,30 @@ func acquireObjectLock(ctx context.Context, pool *pgxpool.Pool, key string) (*pg
 		return nil, func() {}, nil
 	}
 
-	conn, err := pool.Acquire(ctx)
+	acquireCtx, cancelAcquire := context.WithTimeout(ctx, objectLockTimeout)
+	defer cancelAcquire()
+	conn, err := pool.Acquire(acquireCtx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("acquire storage registry connection for %q: %w", key, err)
 	}
 
 	lockID := objectLockID(key)
-	if _, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockID); err != nil {
+	if _, err = conn.Exec(acquireCtx, `SELECT set_config('lock_timeout', $1, false)`, objectLockTimeout.String()); err != nil {
+		// set_config is session-scoped. If the client lost the response after the
+		// server applied it, returning this connection to the pool would leak the
+		// timeout into an unrelated request. Close the session instead.
+		closeCtx, cancel := context.WithTimeout(context.Background(), objectLockTimeout)
+		defer cancel()
+		raw := conn.Hijack()
+		if closeErr := raw.Close(closeCtx); closeErr != nil {
+			return nil, nil, fmt.Errorf(
+				"configure storage object lock timeout for %q: %w; close hijacked connection: %v",
+				key, err, closeErr,
+			)
+		}
+		return nil, nil, fmt.Errorf("configure storage object lock timeout for %q: %w", key, err)
+	}
+	if _, err = conn.Exec(acquireCtx, `SELECT pg_advisory_lock($1)`, lockID); err != nil {
 		// The server may have acquired the session lock before the client observed
 		// a cancellation/transport error. Never return that session to the pool.
 		closeCtx, cancel := context.WithTimeout(context.Background(), objectLockTimeout)
@@ -69,6 +89,18 @@ func acquireObjectLock(ctx context.Context, pool *pgxpool.Pool, key string) (*pg
 			)
 		}
 		return nil, nil, fmt.Errorf("lock storage object %q: %w", key, err)
+	}
+	if _, err = conn.Exec(acquireCtx, `SELECT set_config('lock_timeout', '0', false)`); err != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), objectLockTimeout)
+		defer cancel()
+		raw := conn.Hijack()
+		if closeErr := raw.Close(closeCtx); closeErr != nil {
+			return nil, nil, fmt.Errorf(
+				"reset storage object lock timeout for %q: %w; close hijacked connection: %v",
+				key, err, closeErr,
+			)
+		}
+		return nil, nil, fmt.Errorf("reset storage object lock timeout for %q: %w", key, err)
 	}
 
 	released := false
@@ -99,6 +131,43 @@ func acquireObjectLock(ctx context.Context, pool *pgxpool.Pool, key string) (*pg
 	}
 
 	return conn, release, nil
+}
+
+// protectStorageObjectForUpload briefly serializes with a same-key reaper and
+// moves updated_at into the near future for an existing row. The advisory lock
+// and pool connection are released before MinIO I/O starts, so parallel uploads
+// cannot exhaust the PostgreSQL pool. The short lease also closes the race where
+// a reaper selected the old row just before the upload began.
+func protectStorageObjectForUpload(ctx context.Context, pool *pgxpool.Pool, key string) (bool, error) {
+	if pool == nil {
+		return false, nil
+	}
+
+	conn, releaseLock, err := acquireObjectLock(ctx, pool, key)
+	if err != nil {
+		return false, err
+	}
+	defer releaseLock()
+
+	tag, err := conn.Exec(ctx, `
+		UPDATE storage_objects
+		SET updated_at = GREATEST(updated_at, now() + $2::interval)
+		WHERE key = $1
+	`, key, objectUploadProtection.String())
+	if err != nil {
+		return false, fmt.Errorf("protect storage object %q before upload: %w", key, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func registryExecutorFor(conn *pgxpool.Conn, pool *pgxpool.Pool) registryExecutor {
+	if conn != nil {
+		return conn
+	}
+	if pool != nil {
+		return pool
+	}
+	return nil
 }
 
 func registerObject(

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -176,7 +177,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-func validatePutObjectArgs(c *Client, key string, reader io.Reader, size int64, contentType string) error {
+func validatePutObjectArgs(c *Client, key string, reader io.Reader, size int64) error {
 	switch {
 	case c == nil || c.client == nil:
 		return errors.New("minio client is not initialized")
@@ -186,35 +187,32 @@ func validatePutObjectArgs(c *Client, key string, reader io.Reader, size int64, 
 		return errors.New("object reader is required")
 	case size < 0:
 		return errors.New("object size must be non-negative")
-	case contentType == "":
-		return errors.New("object content type is required")
 	default:
 		return nil
 	}
 }
 
+func normalizeContentType(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return "application/octet-stream"
+	}
+	return contentType
+}
+
 // PutObject uploads an object to the configured bucket.
 func (c *Client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
-	if err := validatePutObjectArgs(c, key, reader, size, contentType); err != nil {
+	if err := validatePutObjectArgs(c, key, reader, size); err != nil {
 		return err
 	}
+	contentType = normalizeContentType(contentType)
 
-	registryConn, releaseLock, err := acquireObjectLock(ctx, c.registry, key)
+	// Do not pin a pgxpool connection while MinIO receives the object. Briefly
+	// protect an existing registry row first so a same-key reaper cannot delete
+	// the blob while this upload is in flight.
+	preexisting, err := protectStorageObjectForUpload(ctx, c.registry, key)
 	if err != nil {
 		return err
-	}
-	defer releaseLock()
-
-	// Remember whether this key was already a registered shared object. A failed
-	// metadata refresh must not compensate by deleting a pre-existing blob (TTS
-	// keys are deterministic and can legitimately be shared by many media rows).
-	preexisting := false
-	if registryConn != nil {
-		if err = registryConn.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM storage_objects WHERE key = $1)`, key,
-		).Scan(&preexisting); err != nil {
-			return fmt.Errorf("check existing storage object %q: %w", key, err)
-		}
 	}
 
 	hash := sha256.New()
@@ -225,14 +223,18 @@ func (c *Client) PutObject(ctx context.Context, key string, reader io.Reader, si
 	if err != nil {
 		return fmt.Errorf("put object %q: %w", key, err)
 	}
-
 	digest := hex.EncodeToString(hash.Sum(nil))
-	var registryExec registryExecutor
-	if registryConn != nil {
-		registryExec = registryConn
-	} else if c.registry != nil {
-		registryExec = c.registry
+
+	// Serialize only the registry mutation/compensation phase. This keeps the
+	// cross-instance lifecycle guard without consuming a pool slot for the much
+	// slower network upload.
+	registryConn, releaseLock, err := acquireObjectLock(ctx, c.registry, key)
+	if err != nil {
+		return c.handlePostUploadLockFailure(key, size, contentType, digest, preexisting, err)
 	}
+	defer releaseLock()
+
+	registryExec := registryExecutorFor(registryConn, c.registry)
 	if err = registerObject(ctx, registryExec, key, size, contentType, digest); err == nil {
 		return nil
 	}
@@ -265,6 +267,38 @@ func (c *Client) PutObject(ctx context.Context, key string, reader io.Reader, si
 		return errors.Join(err, cleanupRegistryErr)
 	}
 	return err
+}
+
+func (c *Client) handlePostUploadLockFailure(
+	key string,
+	size int64,
+	contentType, digest string,
+	preexisting bool,
+	cause error,
+) error {
+	lockErr := fmt.Errorf("lock storage object after upload %q: %w", key, cause)
+	// The blob is already in MinIO. Make it visible to the registry with a
+	// detached best-effort write so a lock timeout cannot create a permanent
+	// invisible orphan. The caller still gets the lock error and may retry.
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultMinIOTimeout)
+	defer cancel()
+	registryErr := registerObject(cleanupCtx, c.registry, key, size, contentType, digest)
+	if registryErr == nil {
+		return lockErr
+	}
+	if preexisting {
+		return errors.Join(lockErr, registryErr)
+	}
+
+	cleanupErr := c.client.RemoveObject(cleanupCtx, c.bucket, key, minio.RemoveObjectOptions{})
+	if cleanupErr != nil && !isNotFound(cleanupErr) {
+		return errors.Join(
+			lockErr,
+			registryErr,
+			fmt.Errorf("compensate unlocked uploaded object %q: %w", key, cleanupErr),
+		)
+	}
+	return errors.Join(lockErr, registryErr)
 }
 
 // RemoveObject deletes an object from the configured bucket.
@@ -304,12 +338,7 @@ func (c *Client) removeObjectLocked(ctx context.Context, key string, registryCon
 		return false, fmt.Errorf("remove object %q: %w", key, err)
 	}
 
-	var registryExec registryExecutor
-	if registryConn != nil {
-		registryExec = registryConn
-	} else if c.registry != nil {
-		registryExec = c.registry
-	}
+	registryExec := registryExecutorFor(registryConn, c.registry)
 	if err = unregisterObject(ctx, registryExec, key); err == nil {
 		return true, nil
 	}

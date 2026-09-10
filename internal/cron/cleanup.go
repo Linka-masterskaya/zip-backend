@@ -10,7 +10,7 @@ import (
 type cleanupRepo interface {
 	GetOldAudio(context.Context, time.Duration, int) ([]string, error)
 	DeleteFromBank(context.Context, []string) error
-	DeleteOldJobs(context.Context, time.Time) error
+	CleanupOldJobs(context.Context, time.Time) error
 }
 
 type storageReaper interface {
@@ -24,13 +24,14 @@ type TTSCleaner struct {
 	jobsTTL     time.Duration
 	reaperGrace time.Duration
 	limit       int
+	reaperLimit int
 }
 
 func NewTTSCleaner(
 	repo cleanupRepo,
 	reaper storageReaper,
 	cleanPeriod, jobsTTL, reaperGrace time.Duration,
-	limit int,
+	limit, reaperLimit int,
 ) *TTSCleaner {
 	return &TTSCleaner{
 		repo:        repo,
@@ -39,6 +40,7 @@ func NewTTSCleaner(
 		jobsTTL:     jobsTTL,
 		reaperGrace: reaperGrace,
 		limit:       limit,
+		reaperLimit: reaperLimit,
 	}
 }
 
@@ -59,7 +61,7 @@ func (c *TTSCleaner) Run(ctx context.Context, interval time.Duration) {
 
 func (c *TTSCleaner) Cleanup(ctx context.Context) error {
 	jobsCutoff := time.Now().Add(-c.jobsTTL)
-	if err := c.repo.DeleteOldJobs(ctx, jobsCutoff); err != nil {
+	if err := c.repo.CleanupOldJobs(ctx, jobsCutoff); err != nil {
 		slog.ErrorContext(ctx, "cron.Cleanup: cleanup old jobs failed", "err", err)
 	}
 
@@ -78,7 +80,7 @@ func (c *TTSCleaner) Cleanup(ctx context.Context) error {
 	}
 
 	if c.reaper != nil {
-		removed, reapErr := c.reaper.ReapUnreferenced(ctx, c.reaperGrace, c.limit)
+		removed, reapErr := c.reaper.ReapUnreferenced(ctx, c.reaperGrace, c.reaperLimit)
 		if reapErr != nil {
 			slog.ErrorContext(ctx, "storage reaper: cleanup failed", "removed", removed, "err", reapErr)
 		}
