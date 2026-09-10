@@ -312,5 +312,8 @@ func packError(err error) error {
 	if errors.Is(err, ErrPackPublished) || errors.Is(err, ErrAlreadyPublished) {
 		return apperr.ErrConflict
 	}
+	if errors.Is(err, ErrMediaNotFound) {
+		return apperr.ErrConflict.WithMessage("media was deleted")
+	}
 	return err
 }

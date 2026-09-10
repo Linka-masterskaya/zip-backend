@@ -10,7 +10,7 @@ import (
 type cleanupRepo interface {
 	GetOldAudio(context.Context, time.Duration, int) ([]string, error)
 	DeleteFromBank(context.Context, []string) error
-	DeleteOldJobs(context.Context, time.Time) error
+	CleanupOldJobs(context.Context, time.Time) error
 }
 
 type storage interface {
@@ -52,8 +52,8 @@ func (c *TTSCleaner) Run(ctx context.Context, interval time.Duration) {
 
 func (c *TTSCleaner) Cleanup(ctx context.Context) error {
 	jobsCutoff := time.Now().Add(-c.jobsTTL)
-	if err := c.repo.DeleteOldJobs(ctx, jobsCutoff); err != nil {
-		slog.ErrorContext(ctx, "cron.Cleanup: delete old jobs failed", "err", err)
+	if err := c.repo.CleanupOldJobs(ctx, jobsCutoff); err != nil {
+		slog.ErrorContext(ctx, "cron.Cleanup: cleanup old jobs failed", "err", err)
 	}
 
 	keys, err := c.repo.GetOldAudio(ctx, c.cleanPeriod, c.limit)
