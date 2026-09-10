@@ -12,6 +12,7 @@ type Source interface {
 	Categories(context.Context) ([]Category, error)
 	Search(context.Context, string) ([]Picture, error)
 	Image(context.Context, string) (*Image, error)
+	PicturesByCategory(context.Context, string) ([]Picture, error)
 }
 
 // NewSource selects the configured adapter without initializing the unused one.
@@ -37,3 +38,9 @@ func NewSource(
 		cfg.MaxImageBytes,
 	)
 }
+
+// MaxPicturesPerCategory ограничивает выдачу картинок одной категории.
+// Предел общий для обоих адаптеров: локальный режим применяет его в SQL,
+// внешний — к полученному ответу, иначе поведение источников
+// разъезжалось бы на больших категориях.
+const MaxPicturesPerCategory = 100

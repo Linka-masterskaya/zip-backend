@@ -997,6 +997,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pictures/category/{categoryId}/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Получить изображения конкретной категории Pictures Bank
+         * @description Возвращает список изображений, принадлежащих указанной категории. В external-режиме ответ кэшируется, а исходящие запросы ограничены через Redis.
+         *     Response contract идентичен /pictures/search.
+         *
+         *     Неизвестная категория — пустой список, а не ошибка: так ведут себя оба адаптера.
+         *     Выдача ограничена 100 изображениями; пагинации пока нет.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /**
+                     * @description Идентификатор категории ровно в том виде, в каком его вернул
+                     *     `GET /pictures/categories`. Формат задаёт источник: в локальном банке
+                     *     это имя категории, во внешнем — его собственный идентификатор.
+                     *     UUID не требуется.
+                     */
+                    categoryId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Список изображений категории */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Picture"][];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                429: components["responses"]["TooMany"];
+                /** @description Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/packs": {
         parameters: {
             query?: never;
@@ -3056,7 +3116,15 @@ export interface components {
             id: string;
             name: string;
             mimeType?: string;
+            /**
+             * @description Категории изображения — той же формы, что и в `GET /pictures/categories`.
+             *     Возвращается и идентификатор, и имя: по одному имени клиент не может
+             *     открыть листинг категории. `id` годится как `categoryId` для
+             *     `/pictures/category/{categoryId}/list`.
+             */
             categories: components["schemas"]["PictureCategory"][];
+            /** @description Защищённый proxy URL для получения контента через бэкенд (/api/v1/pictures/{id}/content) */
+            url: string;
         };
         PictureReference: {
             /** Format: uuid */

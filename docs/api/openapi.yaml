@@ -445,14 +445,22 @@ components:
 
     Picture:
       type: object
-      required: [id, name, categories]
+      required: [id, name, categories, url]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         mimeType: { type: string }
         categories:
           type: array
+          description: |
+            Категории изображения — той же формы, что и в `GET /pictures/categories`.
+            Возвращается и идентификатор, и имя: по одному имени клиент не может
+            открыть листинг категории. `id` годится как `categoryId` для
+            `/pictures/category/{categoryId}/list`.
           items: { $ref: '#/components/schemas/PictureCategory' }
+        url:
+          type: string
+          description: "Защищённый proxy URL для получения контента через бэкенд (/api/v1/pictures/{id}/content)"
 
     PictureReference:
       type: object
@@ -1481,6 +1489,41 @@ paths:
               schema: { $ref: '#/components/schemas/PictureReference' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
+
+  /pictures/category/{categoryId}/list:
+    get:
+      tags: [pictures]
+      summary: Получить изображения конкретной категории Pictures Bank
+      description: |
+        Возвращает список изображений, принадлежащих указанной категории. В external-режиме ответ кэшируется, а исходящие запросы ограничены через Redis.
+        Response contract идентичен /pictures/search.
+
+        Неизвестная категория — пустой список, а не ошибка: так ведут себя оба адаптера.
+        Выдача ограничена 100 изображениями; пагинации пока нет.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: categoryId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 256
+          description: |
+            Идентификатор категории ровно в том виде, в каком его вернул
+            `GET /pictures/categories`. Формат задаёт источник: в локальном банке
+            это имя категории, во внешнем — его собственный идентификатор.
+            UUID не требуется.
+      responses:
+        '200':
+          description: Список изображений категории
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Picture' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
 
   /packs:
     post:

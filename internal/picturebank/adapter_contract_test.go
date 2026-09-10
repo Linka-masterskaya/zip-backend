@@ -31,6 +31,11 @@ func TestSourceAdaptersShareReadContract(t *testing.T) {
 						ID: pictureID.String(), Name: "Кот", MIMEType: "image/png",
 						Categories: []Category{{ID: "animals", Name: "Животные"}},
 					}})
+				case "/picture/category/animals":
+					writeContractJSON(t, w, []Picture{{
+						ID: pictureID.String(), Name: "Кот", MIMEType: "image/png",
+						Categories: []Category{{ID: "animals", Name: "Животные"}},
+					}})
 				case "/picture/" + pictureID.String() + "/buffer":
 					w.Header().Set("Content-Type", "image/png")
 					_, err := w.Write(imageData)
@@ -85,6 +90,15 @@ func TestSourceAdaptersShareReadContract(t *testing.T) {
 				assert.Equal(t, "Животные", pictures[0].Categories[0].Name)
 				assert.Equal(t, adapter.categoryID, pictures[0].Categories[0].ID)
 			}
+			// Проверка PicturesByCategory
+			picturesByCat, err := source.PicturesByCategory(t.Context(), adapter.categoryID)
+			require.NoError(t, err)
+			require.Len(t, picturesByCat, 1)
+			assert.Equal(t, pictureID.String(), picturesByCat[0].ID)
+			assert.Equal(t, "Кот", picturesByCat[0].Name)
+			require.Len(t, picturesByCat[0].Categories, 1)
+			assert.Equal(t, "Животные", picturesByCat[0].Categories[0].Name)
+			assert.Equal(t, adapter.categoryID, picturesByCat[0].Categories[0].ID)
 
 			image, err := source.Image(t.Context(), pictureID.String())
 			require.NoError(t, err)
