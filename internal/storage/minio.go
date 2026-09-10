@@ -3,12 +3,17 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
@@ -22,8 +27,9 @@ var ErrObjectNotFound = errors.New("object not found")
 
 // Client provides access to MinIO object storage operations.
 type Client struct {
-	client *minio.Client
-	bucket string
+	client   *minio.Client
+	bucket   string
+	registry *pgxpool.Pool
 }
 
 // GetObject opens an object for streaming. The caller must close the returned reader.
@@ -52,7 +58,20 @@ func (c *Client) GetObject(ctx context.Context, key string) (io.ReadCloser, erro
 }
 
 // New creates a MinIO client, ensures the configured bucket exists, and keeps it private.
-func New(cfg config.MinIOConfig) (*Client, error) {
+// Production callers pass PostgreSQL as the storage-object registry. The
+// optional form without a registry is kept for isolated MinIO tests that do
+// not exercise object lifecycle bookkeeping.
+func New(cfg config.MinIOConfig, registries ...*pgxpool.Pool) (*Client, error) {
+	if len(registries) > 1 {
+		return nil, errors.New("only one storage object registry may be configured")
+	}
+	var registry *pgxpool.Pool
+	if len(registries) == 1 {
+		if registries[0] == nil {
+			return nil, errors.New("storage object registry database is required")
+		}
+		registry = registries[0]
+	}
 	if cfg.Endpoint == "" {
 		return nil, errors.New("minio endpoint is required")
 	}
@@ -90,8 +109,9 @@ func New(cfg config.MinIOConfig) (*Client, error) {
 	}
 
 	return &Client{
-		client: client,
-		bucket: cfg.Bucket,
+		client:   client,
+		bucket:   cfg.Bucket,
+		registry: registry,
 	}, nil
 }
 
@@ -157,28 +177,128 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+func validatePutObjectArgs(c *Client, key string, reader io.Reader, size int64) error {
+	switch {
+	case c == nil || c.client == nil:
+		return errors.New("minio client is not initialized")
+	case key == "":
+		return errors.New("object key is required")
+	case reader == nil:
+		return errors.New("object reader is required")
+	case size < 0:
+		return errors.New("object size must be non-negative")
+	default:
+		return nil
+	}
+}
+
+func normalizeContentType(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return "application/octet-stream"
+	}
+	return contentType
+}
+
 // PutObject uploads an object to the configured bucket.
 func (c *Client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
-	if c == nil || c.client == nil {
-		return errors.New("minio client is not initialized")
+	if err := validatePutObjectArgs(c, key, reader, size); err != nil {
+		return err
 	}
-	if key == "" {
-		return errors.New("object key is required")
-	}
-	if reader == nil {
-		return errors.New("object reader is required")
-	}
-	if size < 0 {
-		return errors.New("object size must be non-negative")
+	contentType = normalizeContentType(contentType)
+
+	// Do not pin a pgxpool connection while MinIO receives the object. Briefly
+	// protect an existing registry row first so a same-key reaper cannot delete
+	// the blob while this upload is in flight.
+	preexisting, err := protectStorageObjectForUpload(ctx, c.registry, key)
+	if err != nil {
+		return err
 	}
 
-	_, err := c.client.PutObject(ctx, c.bucket, key, reader, size, minio.PutObjectOptions{
+	hash := sha256.New()
+	hashedReader := io.TeeReader(reader, hash)
+	_, err = c.client.PutObject(ctx, c.bucket, key, hashedReader, size, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	if err != nil {
 		return fmt.Errorf("put object %q: %w", key, err)
 	}
-	return nil
+	digest := hex.EncodeToString(hash.Sum(nil))
+
+	// Serialize only the registry mutation/compensation phase. This keeps the
+	// cross-instance lifecycle guard without consuming a pool slot for the much
+	// slower network upload.
+	registryConn, releaseLock, err := acquireObjectLock(ctx, c.registry, key)
+	if err != nil {
+		return c.handlePostUploadLockFailure(key, size, contentType, digest, preexisting, err)
+	}
+	defer releaseLock()
+
+	registryExec := registryExecutorFor(registryConn, c.registry)
+	if err = registerObject(ctx, registryExec, key, size, contentType, digest); err == nil {
+		return nil
+	}
+
+	// The MinIO write succeeded but the registry write did not. Retry the
+	// metadata write with a detached bounded context first: cancellation of the
+	// request must not be allowed to create an invisible MinIO object.
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultMinIOTimeout)
+	defer cancel()
+	if retryErr := registerObject(cleanupCtx, registryExec, key, size, contentType, digest); retryErr == nil {
+		return nil
+	} else if preexisting {
+		// Preserve an already-registered shared key. Deleting it would break every
+		// domain row that still references it. The caller receives the registry
+		// failure and can retry the idempotent PutObject later.
+		return errors.Join(err, fmt.Errorf("retry register existing storage object %q: %w", key, retryErr))
+	}
+
+	// This was a new key. Remove the successfully uploaded blob so every failed
+	// PutObject converges to "no blob, no registry row" instead of creating an
+	// object the registry-driven reaper can never discover.
+	cleanupErr := c.client.RemoveObject(cleanupCtx, c.bucket, key, minio.RemoveObjectOptions{})
+	if cleanupErr != nil && !isNotFound(cleanupErr) {
+		return errors.Join(err, fmt.Errorf("compensate uploaded object %q: %w", key, cleanupErr))
+	}
+
+	// Exec errors can be ambiguous if the connection broke after PostgreSQL
+	// accepted the statement. Delete any possible row while the key lock is held.
+	if cleanupRegistryErr := unregisterObject(cleanupCtx, registryExec, key); cleanupRegistryErr != nil {
+		return errors.Join(err, cleanupRegistryErr)
+	}
+	return err
+}
+
+func (c *Client) handlePostUploadLockFailure(
+	key string,
+	size int64,
+	contentType, digest string,
+	preexisting bool,
+	cause error,
+) error {
+	lockErr := fmt.Errorf("lock storage object after upload %q: %w", key, cause)
+	// The blob is already in MinIO. Make it visible to the registry with a
+	// detached best-effort write so a lock timeout cannot create a permanent
+	// invisible orphan. The caller still gets the lock error and may retry.
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultMinIOTimeout)
+	defer cancel()
+	registryErr := registerObject(cleanupCtx, c.registry, key, size, contentType, digest)
+	if registryErr == nil {
+		return lockErr
+	}
+	if preexisting {
+		return errors.Join(lockErr, registryErr)
+	}
+
+	cleanupErr := c.client.RemoveObject(cleanupCtx, c.bucket, key, minio.RemoveObjectOptions{})
+	if cleanupErr != nil && !isNotFound(cleanupErr) {
+		return errors.Join(
+			lockErr,
+			registryErr,
+			fmt.Errorf("compensate unlocked uploaded object %q: %w", key, cleanupErr),
+		)
+	}
+	return errors.Join(lockErr, registryErr)
 }
 
 // RemoveObject deletes an object from the configured bucket.
@@ -190,11 +310,48 @@ func (c *Client) RemoveObject(ctx context.Context, key string) error {
 		return errors.New("object key is required")
 	}
 
-	err := c.client.RemoveObject(ctx, c.bucket, key, minio.RemoveObjectOptions{})
+	registryConn, releaseLock, err := acquireObjectLock(ctx, c.registry, key)
 	if err != nil {
-		return fmt.Errorf("remove object %q: %w", key, err)
+		return err
 	}
-	return nil
+	defer releaseLock()
+
+	blobDeleted, err := c.removeObjectLocked(ctx, key, registryConn)
+	if blobDeleted {
+		// A registry-only failure after a successful MinIO delete must not make a
+		// domain caller roll back quota/metadata as though the blob still existed.
+		// The stale row remains discoverable and is cleaned by a later reaper run.
+		if err != nil {
+			slog.WarnContext(ctx, "storage registry cleanup deferred", "key", key, "err", err)
+		}
+		return nil
+	}
+	return err
+}
+
+// removeObjectLocked removes a blob while the caller owns the per-key advisory
+// lock. blobDeleted is true once MinIO accepted (or had already applied) the
+// deletion; in that state a remaining error is registry-only.
+func (c *Client) removeObjectLocked(ctx context.Context, key string, registryConn *pgxpool.Conn) (blobDeleted bool, err error) {
+	err = c.client.RemoveObject(ctx, c.bucket, key, minio.RemoveObjectOptions{})
+	if err != nil && !isNotFound(err) {
+		return false, fmt.Errorf("remove object %q: %w", key, err)
+	}
+
+	registryExec := registryExecutorFor(registryConn, c.registry)
+	if err = unregisterObject(ctx, registryExec, key); err == nil {
+		return true, nil
+	}
+	firstRegistryErr := err
+
+	// The blob is already gone. Retry registry cleanup without inheriting request
+	// cancellation. If it still fails, keep the row for the idempotent reaper.
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), objectLockTimeout)
+	defer cancel()
+	if retryErr := unregisterObject(cleanupCtx, registryExec, key); retryErr != nil {
+		return true, errors.Join(firstRegistryErr, retryErr)
+	}
+	return true, nil
 }
 
 // ObjectSize returns object size in bytes.

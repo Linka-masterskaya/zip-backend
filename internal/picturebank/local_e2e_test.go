@@ -25,7 +25,7 @@ import (
 func TestE2E_LocalPicturesBankImportAndArchive(t *testing.T) {
 	pool := picturesE2EDatabase(t)
 	userID, folderID := picturesE2EUserAndFolder(t, pool)
-	objectStorage, cleanupStorage := testutil.NewMinIO(t)
+	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
 	t.Cleanup(cleanupStorage)
 	redisClient, cleanupRedis := testutil.NewRedis(t)
 	t.Cleanup(cleanupRedis)

@@ -39,7 +39,7 @@ type RepoInterface interface {
 	ReplaceAvatar(ctx context.Context, userID, expectedOldKey, newKey string, oldSize, storageDelta int64) (AvatarChange, error)
 	ClearAvatar(ctx context.Context, userID, expectedOldKey string, oldSize int64) (AvatarChange, error)
 	RestoreAvatarIfEmpty(ctx context.Context, userID string, oldKey string, oldSize int64) (bool, error)
-	AddOrgStorageUsage(ctx context.Context, orgID string, delta int64) error
+	ScheduleAvatarCleanupCompensation(ctx context.Context, objectKey, orgID string, size int64) error
 	CurrentAvatarKey(ctx context.Context, userID string) (string, error)
 	SoftDeleteUser(ctx context.Context, userID string) (AvatarChange, error)
 	ClaimAvatarCleanupJob(ctx context.Context, objectKey string) (*AvatarCleanupJob, error)

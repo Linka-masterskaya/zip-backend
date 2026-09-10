@@ -294,10 +294,12 @@ type VoiceRefreshCron struct {
 
 // TTSCleanupCron contains TTS cleanup job settings.
 type TTSCleanupCron struct {
-	Interval    time.Duration `mapstructure:"interval"`
-	CleanPeriod time.Duration `mapstructure:"clean_period"`
-	JobsTTL     time.Duration `mapstructure:"jobs_ttl"`
-	Limit       int           `mapstructure:"limit"`
+	Interval          time.Duration `mapstructure:"interval"`
+	CleanPeriod       time.Duration `mapstructure:"clean_period"`
+	JobsTTL           time.Duration `mapstructure:"jobs_ttl"`
+	ReaperGracePeriod time.Duration `mapstructure:"reaper_grace_period"`
+	Limit             int           `mapstructure:"limit"`
+	ReaperLimit       int           `mapstructure:"reaper_limit"`
 }
 
 // Load reads application settings from a configuration file and applies
@@ -554,7 +556,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cron.tts_cleanup.interval", "6h")
 	v.SetDefault("cron.tts_cleanup.clean_period", "2160h") // 90 days
 	v.SetDefault("cron.tts_cleanup.jobs_ttl", "72h")       // 3 days
+	v.SetDefault("cron.tts_cleanup.reaper_grace_period", "5m")
 	v.SetDefault("cron.tts_cleanup.limit", 100)
+	v.SetDefault("cron.tts_cleanup.reaper_limit", 1000)
 }
 
 // validateConfig validates required configuration fields.
@@ -603,6 +607,12 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 
+	// TTS cleanup validation. NewTicker panics on non-positive intervals, and
+	// the storage reaper requires a bounded positive batch size.
+	if err := validateTTSCleanupConfig(&cfg.Cron.TTSCleanup); err != nil {
+		return err
+	}
+
 	// TTSapi validation
 	if cfg.TTS.ServiceURL == "" {
 		return fmt.Errorf("ttsapi.service_url is required")
@@ -617,6 +627,24 @@ func validateConfig(cfg *Config) error {
 	// CORS validation
 	if err := validateCORSConfig(&cfg.CORS); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateTTSCleanupConfig(cfg *TTSCleanupCron) error {
+	switch {
+	case cfg.Interval <= 0:
+		return fmt.Errorf("cron.tts_cleanup.interval must be > 0")
+	case cfg.CleanPeriod <= 0:
+		return fmt.Errorf("cron.tts_cleanup.clean_period must be > 0")
+	case cfg.JobsTTL <= 0:
+		return fmt.Errorf("cron.tts_cleanup.jobs_ttl must be > 0")
+	case cfg.ReaperGracePeriod < 0:
+		return fmt.Errorf("cron.tts_cleanup.reaper_grace_period must be >= 0")
+	case cfg.Limit <= 0:
+		return fmt.Errorf("cron.tts_cleanup.limit must be > 0")
+	case cfg.ReaperLimit <= 0:
+		return fmt.Errorf("cron.tts_cleanup.reaper_limit must be > 0")
 	}
 	return nil
 }

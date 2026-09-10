@@ -155,8 +155,8 @@ func (s *Service) compensateOldObjectUsage(ctx context.Context, change AvatarCha
 	if !change.OrgID.Valid || change.OldSize == 0 {
 		return
 	}
-	if err := s.repo.AddOrgStorageUsage(ctx, change.OrgID.String, change.OldSize); err != nil {
-		slog.Error("old avatar storage usage compensation failed",
+	if err := s.repo.ScheduleAvatarCleanupCompensation(ctx, change.OldKey, change.OrgID.String, change.OldSize); err != nil {
+		slog.Error("schedule old avatar cleanup compensation failed",
 			"key", change.OldKey,
 			"old_size", change.OldSize,
 			"err", err,

@@ -406,18 +406,48 @@ func (r *Repository) RetryAvatarCleanup(ctx context.Context, jobID int64, cause 
 	return nil
 }
 
-// AddOrgStorageUsage adds delta to organization storage usage.
-func (r *Repository) AddOrgStorageUsage(ctx context.Context, orgID string, delta int64) error {
-	if orgID == "" || delta == 0 {
+// ScheduleAvatarCleanupCompensation atomically restores quota for a detached
+// avatar whose physical delete failed and creates the durable cleanup job that
+// will remove those bytes again after MinIO deletion succeeds. Keeping both
+// changes in one transaction prevents the global reaper from deleting the blob
+// without a matching organization quota correction.
+func (r *Repository) ScheduleAvatarCleanupCompensation(ctx context.Context, objectKey, orgID string, size int64) error {
+	if objectKey == "" || orgID == "" || size <= 0 {
 		return nil
 	}
-	_, err := r.db.Exec(ctx, `
-		UPDATE organizations
-		SET storage_used_bytes = GREATEST(storage_used_bytes + $2::bigint, 0::bigint)
-		WHERE id = $1
-	`, orgID, delta)
+
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("compensate organization storage usage: %w", err)
+		return fmt.Errorf("begin avatar cleanup compensation tx: %w", err)
+	}
+	defer rollbackAvatarTx(ctx, tx, "avatar cleanup compensation")
+
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO avatar_cleanup_jobs (object_key, org_id, object_size_bytes)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (object_key) DO UPDATE
+		SET org_id = EXCLUDED.org_id,
+			object_size_bytes = EXCLUDED.object_size_bytes,
+			quota_adjusted = FALSE,
+			attempts = 0,
+			next_attempt_at = now(),
+			last_error = NULL,
+			completed_at = NULL
+		WHERE avatar_cleanup_jobs.completed_at IS NOT NULL
+	`, objectKey, orgID, size)
+	if err != nil {
+		return fmt.Errorf("enqueue compensated avatar cleanup: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// A pending durable job already owns quota reconciliation for this key.
+		return tx.Commit(ctx)
+	}
+
+	if err = updateOrgStorageUsage(ctx, tx, orgID, size, false); err != nil {
+		return fmt.Errorf("restore organization usage for pending avatar cleanup: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit avatar cleanup compensation tx: %w", err)
 	}
 	return nil
 }

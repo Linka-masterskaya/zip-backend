@@ -449,6 +449,38 @@ func TestReplaceAvatar_ReturnsCurrentURLWhenConcurrentRequestWins(t *testing.T) 
 	}
 }
 
+func TestReplaceAvatar_DeleteFailureQueuesQuotaReconciliation(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeAvatarRepo()
+	store := newFakeObjectStorage()
+	oldKey := "avatars/user-1/retry-old"
+	oldData := []byte("old-avatar")
+	newData := pngAvatarBytes(32)
+
+	store.seed(oldKey, oldData, "image/png")
+	store.removeErrors[oldKey] = errors.New("temporary minio outage")
+	repo.avatarKey = oldKey
+	repo.avatarSize = sql.NullInt64{Int64: int64(len(oldData)), Valid: true}
+	repo.storageUsed = int64(len(oldData))
+
+	service := NewService(repo, store, &fakeEmailSender{}, newTestCryptox(t), &testRevoker{}, defaultEmailConfig())
+	_, err := service.ReplaceAvatar(ctx, "user-1", bytes.NewReader(newData), int64(len(newData)), "image/png")
+	require.NoError(t, err)
+	require.True(t, repo.cleanupPending(), "failed old-avatar delete must create a durable cleanup job")
+	require.True(t, store.hasObject(oldKey))
+	require.Equal(t, int64(len(newData)+len(oldData)), repo.storageUsedValue(),
+		"quota must include the physical orphan until cleanup actually deletes it")
+
+	delete(store.removeErrors, oldKey)
+	processed, err := service.processAvatarCleanup(ctx, oldKey)
+	require.NoError(t, err)
+	require.True(t, processed)
+	require.False(t, repo.cleanupPending())
+	require.False(t, store.hasObject(oldKey))
+	require.Equal(t, int64(len(newData)), repo.storageUsedValue(),
+		"cleanup must release the compensated orphan bytes exactly once")
+}
+
 func TestDeleteAvatar_RemovesObjectClearsKeyAndUpdatesUsage(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeAvatarRepo()
@@ -789,10 +821,22 @@ func (r *fakeAvatarRepo) RetryAvatarCleanup(_ context.Context, jobID int64, caus
 	return nil
 }
 
-func (r *fakeAvatarRepo) AddOrgStorageUsage(_ context.Context, _ string, delta int64) error {
+func (r *fakeAvatarRepo) ScheduleAvatarCleanupCompensation(_ context.Context, objectKey, _ string, size int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.addStorageUsage(delta)
+	if objectKey == "" || size <= 0 {
+		return nil
+	}
+	if r.cleanupJob != nil && r.cleanupJob.ObjectKey == objectKey {
+		return nil
+	}
+	r.cleanupJob = &AvatarCleanupJob{
+		ID:         2,
+		ObjectKey:  objectKey,
+		OrgID:      r.orgID,
+		ObjectSize: sql.NullInt64{Int64: size, Valid: true},
+	}
+	r.addStorageUsage(size)
 	return nil
 }
 

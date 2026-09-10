@@ -20,7 +20,7 @@ import (
 )
 
 // NewMinIO starts a private temporary object store and returns the application client.
-func NewMinIO(t *testing.T) (*storage.Client, func()) {
+func NewMinIO(t *testing.T, registries ...*pgxpool.Pool) (*storage.Client, func()) {
 	t.Helper()
 	ctx := context.Background()
 	const accessKey = "test-access-key"
@@ -57,7 +57,7 @@ func NewMinIO(t *testing.T) (*storage.Client, func()) {
 	var client *storage.Client
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		client, err = storage.New(storageConfig)
+		client, err = storage.New(storageConfig, registries...)
 		if err == nil || time.Now().After(deadline) {
 			break
 		}

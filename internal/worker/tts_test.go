@@ -80,6 +80,11 @@ func testJob() broker.TTSJob {
 	}
 }
 
+func TestNewTTS_DefaultsEmptyMIMEType(t *testing.T) {
+	w := NewTTS(nil, nil, nil, "   ")
+	assert.Equal(t, "audio/mpeg", w.mimeType)
+}
+
 func TestHandleOK(t *testing.T) {
 	audio := []byte("fake-mp3")
 	job := testJob()

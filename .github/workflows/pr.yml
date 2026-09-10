@@ -125,7 +125,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run end-to-end tests with race detector
-        run: go test -tags=e2e ./e2e ./internal/picturebank -race -count=1
+        run: go test -tags=e2e ./e2e ./internal/picturebank ./internal/storage -race -count=1
 
   rotation-integration:
     name: Crypto Rotation Integration

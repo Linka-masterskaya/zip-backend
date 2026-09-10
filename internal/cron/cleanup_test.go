@@ -41,17 +41,22 @@ func (f *fakeCleanupRepo) CleanupOldJobs(ctx context.Context, cutoff time.Time) 
 	return nil
 }
 
-type fakeStorage struct {
-	removeObjectFn func(ctx context.Context, key string) error
-	removedKeys    []string
+type fakeStorageReaper struct {
+	reapFn       func(ctx context.Context, limit int) (int, error)
+	called       bool
+	gotGrace     time.Duration
+	gotLimit     int
+	removedCount int
 }
 
-func (f *fakeStorage) RemoveObject(ctx context.Context, key string) error {
-	if f.removeObjectFn != nil {
-		return f.removeObjectFn(ctx, key)
+func (f *fakeStorageReaper) ReapUnreferenced(ctx context.Context, grace time.Duration, limit int) (int, error) {
+	f.called = true
+	f.gotGrace = grace
+	f.gotLimit = limit
+	if f.reapFn != nil {
+		return f.reapFn(ctx, limit)
 	}
-	f.removedKeys = append(f.removedKeys, key)
-	return nil
+	return f.removedCount, nil
 }
 
 func TestCleanupOK(t *testing.T) {
@@ -66,15 +71,17 @@ func TestCleanupOK(t *testing.T) {
 			return nil
 		},
 	}
-	stor := &fakeStorage{}
+	reaper := &fakeStorageReaper{removedCount: 2}
 
-	c := NewTTSCleaner(repo, stor, 24*time.Hour, 72*time.Hour, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.NoError(t, err)
 	assert.True(t, repo.deleteJobsCalled)
 	assert.True(t, repo.deleteBankCalled)
-	assert.Equal(t, keys, stor.removedKeys)
+	assert.True(t, reaper.called)
+	assert.Equal(t, 5*time.Minute, reaper.gotGrace)
+	assert.Equal(t, 1000, reaper.gotLimit)
 }
 
 func TestCleanupDeletesOldJobs(t *testing.T) {
@@ -85,10 +92,10 @@ func TestCleanupDeletesOldJobs(t *testing.T) {
 			return nil
 		},
 	}
-	stor := &fakeStorage{}
+	reaper := &fakeStorageReaper{}
 
 	jobsTTL := 72 * time.Hour
-	c := NewTTSCleaner(repo, stor, 24*time.Hour, jobsTTL, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, jobsTTL, 5*time.Minute, 100, 1000)
 
 	before := time.Now().Add(-jobsTTL)
 	err := c.Cleanup(context.Background())
@@ -105,16 +112,17 @@ func TestCleanupGetOldAudioError(t *testing.T) {
 			return nil, fmt.Errorf("db timeout")
 		},
 	}
-	stor := &fakeStorage{}
+	reaper := &fakeStorageReaper{}
 
-	c := NewTTSCleaner(repo, stor, 24*time.Hour, 72*time.Hour, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db timeout")
+	assert.False(t, reaper.called)
 }
 
-func TestCleanupMinioPartialFailure(t *testing.T) {
+func TestCleanupReaperPartialFailureIsNonFatal(t *testing.T) {
 	keys := []string{"tts/aaa", "tts/bbb", "tts/ccc"}
 
 	repo := &fakeCleanupRepo{
@@ -122,39 +130,38 @@ func TestCleanupMinioPartialFailure(t *testing.T) {
 			return keys, nil
 		},
 		deleteFromBankFn: func(_ context.Context, k []string) error {
-			assert.Equal(t, []string{"tts/aaa", "tts/ccc"}, k)
+			assert.Equal(t, keys, k)
 			return nil
 		},
 	}
-	stor := &fakeStorage{
-		removeObjectFn: func(_ context.Context, key string) error {
-			if key == "tts/bbb" {
-				return fmt.Errorf("minio unavailable")
-			}
-			return nil
+	reaper := &fakeStorageReaper{
+		reapFn: func(_ context.Context, _ int) (int, error) {
+			return 2, fmt.Errorf("minio unavailable")
 		},
 	}
 
-	c := NewTTSCleaner(repo, stor, 24*time.Hour, 72*time.Hour, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.NoError(t, err)
 	assert.True(t, repo.deleteBankCalled)
+	assert.True(t, reaper.called)
 }
 
-func TestCleanupEmptyKeys(t *testing.T) {
+func TestCleanupEmptyBankStillRunsStorageReaper(t *testing.T) {
 	repo := &fakeCleanupRepo{
 		getOldAudioFn: func(_ context.Context, _ time.Duration, _ int) ([]string, error) {
 			return nil, nil
 		},
 	}
-	stor := &fakeStorage{}
+	reaper := &fakeStorageReaper{}
 
-	c := NewTTSCleaner(repo, stor, 24*time.Hour, 72*time.Hour, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.NoError(t, err)
 	assert.False(t, repo.deleteBankCalled)
+	assert.True(t, reaper.called)
 }
 
 func TestCleanupDeleteJobsErrorContinues(t *testing.T) {
@@ -168,12 +175,12 @@ func TestCleanupDeleteJobsErrorContinues(t *testing.T) {
 			return keys, nil
 		},
 	}
-	stor := &fakeStorage{}
+	reaper := &fakeStorageReaper{}
 
-	c := NewTTSCleaner(repo, stor, 24*time.Hour, 72*time.Hour, 100)
+	c := NewTTSCleaner(repo, reaper, 24*time.Hour, 72*time.Hour, 5*time.Minute, 100, 1000)
 	err := c.Cleanup(context.Background())
 
 	require.NoError(t, err)
 	assert.True(t, repo.deleteBankCalled)
-	assert.Equal(t, keys, stor.removedKeys)
+	assert.True(t, reaper.called)
 }
