@@ -388,7 +388,6 @@ func TestContentsRejectsFolderFromAnotherSection(t *testing.T) {
 	})
 	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
-
 func TestContentsTotalIgnoresPaginationAndVisibility(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "total owner")
@@ -588,4 +587,229 @@ func TestContentsFilters(t *testing.T) {
 	rootPacks, err := service.Contents(ctx, ContentsInput{Section: SectionMy, Type: "pack"})
 	require.NoError(t, err)
 	assert.Empty(t, rootPacks.Items)
+}
+
+func TestContentsBreadcrumbsForFourLevelDepth(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "breadcrumb owner")
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	names := []string{"Root", "Level1", "Level2", "Level3", "Level4"}
+	chain := make([]*Folder, 0, len(names))
+	var parentID *uuid.UUID
+	for _, name := range names {
+		folder, err := service.Create(ctx, CreateInput{
+			ParentID: parentID, Section: SectionMy, Kind: KindFolder, Name: name,
+		})
+		require.NoError(t, err)
+		chain = append(chain, folder)
+		parentID = &folder.ID
+	}
+	require.Equal(t, 4, chain[4].Depth)
+
+	page, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &chain[4].ID,
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, page.CurrentFolder)
+	assert.Equal(t, chain[4].ID, page.CurrentFolder.ID)
+	assert.Equal(t, "Level4", page.CurrentFolder.Name)
+	require.NotNil(t, page.CurrentFolder.ParentID)
+	assert.Equal(t, chain[3].ID, *page.CurrentFolder.ParentID)
+
+	require.Len(t, page.Breadcrumbs, len(names)+1)
+	assert.Nil(t, page.Breadcrumbs[0].ID)
+	assert.Equal(t, sectionLabel(SectionMy), page.Breadcrumbs[0].Name)
+	for i, name := range names {
+		crumb := page.Breadcrumbs[i+1]
+		require.NotNil(t, crumb.ID)
+		assert.Equal(t, chain[i].ID, *crumb.ID)
+		assert.Equal(t, name, crumb.Name)
+	}
+}
+
+func TestContentsRootHasSectionOnlyBreadcrumbAndNoCurrentFolder(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "root breadcrumb owner")
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	page, err := service.Contents(ctx, ContentsInput{Section: SectionMy})
+	require.NoError(t, err)
+
+	assert.Nil(t, page.CurrentFolder)
+	require.Len(t, page.Breadcrumbs, 1)
+	assert.Nil(t, page.Breadcrumbs[0].ID)
+	assert.Equal(t, sectionLabel(SectionMy), page.Breadcrumbs[0].Name)
+}
+
+func TestContentsRejectsParentFromAnotherOrganization(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "cross-org owner")
+	foreignID := seedFolderUser(t, pool, "cross-org foreign")
+	service := NewService(NewRepository(pool))
+
+	foreignFolder, err := service.Create(folderContext(foreignID), CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Foreign root",
+	})
+	require.NoError(t, err)
+	_, err = service.Contents(folderContext(ownerID), ContentsInput{
+		Section: SectionMy, ParentID: &foreignFolder.ID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+}
+
+func TestContentsLibraryBreadcrumbsScopedToOrganization(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "library breadcrumb owner")
+	foreignID := seedFolderUser(t, pool, "library breadcrumb foreign")
+	service := NewService(NewRepository(pool))
+
+	libraryRoot, err := service.Create(folderContext(ownerID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Shared",
+	})
+	require.NoError(t, err)
+	child, err := service.Create(folderContext(ownerID), CreateInput{
+		ParentID: &libraryRoot.ID, Section: SectionLibrary, Kind: KindFolder, Name: "Child",
+	})
+	require.NoError(t, err)
+
+	var ownerOrgID uuid.UUID
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT org_id FROM users WHERE id = $1`, ownerID).Scan(&ownerOrgID))
+	sameOrgUserID := uuid.New()
+	_, err = pool.Exec(t.Context(),
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`,
+		sameOrgUserID, ownerOrgID)
+	require.NoError(t, err)
+
+	// Библиотека — общая на организацию: другой пользователь той же
+	// организации должен видеть путь до чужой папки библиотеки.
+	page, err := service.Contents(folderContext(sameOrgUserID), ContentsInput{
+		Section: SectionLibrary, ParentID: &child.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, page.CurrentFolder)
+	assert.Equal(t, child.ID, page.CurrentFolder.ID)
+	require.Len(t, page.Breadcrumbs, 3)
+	assert.Equal(t, libraryRoot.ID, *page.Breadcrumbs[1].ID)
+	assert.Equal(t, child.ID, *page.Breadcrumbs[2].ID)
+
+	// Но не пользователь чужой организации.
+	_, err = service.Contents(folderContext(foreignID), ContentsInput{
+		Section: SectionLibrary, ParentID: &child.ID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+}
+
+func TestContentsDataIntegrityErrorWhenBreakingTheChain(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "broken chain owner")
+	repo := NewRepository(pool)
+	service := NewService(repo)
+	ctx := folderContext(ownerID)
+
+	root, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Root",
+	})
+	require.NoError(t, err)
+	animals, err := service.Create(ctx, CreateInput{
+		ParentID: &root.ID, Section: SectionMy, Kind: KindFolder, Name: "animals",
+	})
+	require.NoError(t, err)
+	pet, err := service.Create(ctx, CreateInput{
+		ParentID: &animals.ID, Section: SectionMy, Kind: KindFolder, Name: "pet",
+	})
+	require.NoError(t, err)
+
+	// Ломаем цепочку. Папка pet будет родительской для папки animals
+	_, err = pool.Exec(context.Background(),
+		`UPDATE folders SET parent_id = $1 WHERE id = $2`, pet.ID, animals.ID)
+	require.NoError(t, err)
+
+	_, err = repo.Contents(t.Context(), ownerID, ContentsInput{
+		Section: SectionMy, ParentID: &pet.ID, Limit: 50,
+	})
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrNotFound),
+		"поломанная цепочка — это ошибка целостности данных, а не обычный 404")
+	assert.Contains(t, err.Error(), "did not reach root")
+}
+
+func TestContentsStudentsBreadcrumbsAndNonExistentID(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "students breadcrumb owner")
+	studentID := seedFolderStudent(t, pool, ownerID)
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	studentFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionStudents, Kind: KindStudent, StudentID: &studentID, Name: "Вика",
+	})
+	require.NoError(t, err)
+	animals, err := service.Create(ctx, CreateInput{
+		ParentID: &studentFolder.ID, Section: SectionStudents, Kind: KindFolder, Name: "animals",
+	})
+	require.NoError(t, err)
+
+	page, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &animals.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, page.CurrentFolder)
+	assert.Equal(t, animals.ID, page.CurrentFolder.ID)
+	require.Len(t, page.Breadcrumbs, 3)
+	assert.Nil(t, page.Breadcrumbs[0].ID)
+	assert.Equal(t, sectionLabel(SectionStudents), page.Breadcrumbs[0].Name)
+	require.NotNil(t, page.Breadcrumbs[1].ID)
+	assert.Equal(t, studentFolder.ID, *page.Breadcrumbs[1].ID)
+	assert.Equal(t, "Вика", page.Breadcrumbs[1].Name)
+	require.NotNil(t, page.Breadcrumbs[2].ID)
+	assert.Equal(t, animals.ID, *page.Breadcrumbs[2].ID)
+	//Проверка на несущ id.
+	nonexistentID := uuid.New()
+	_, err = service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &nonexistentID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+}
+
+func TestContentsRejectsForeignAncestorInMiddleOfChain(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "middle chain owner")
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	root, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Root",
+	})
+	require.NoError(t, err)
+	animals, err := service.Create(ctx, CreateInput{
+		ParentID: &root.ID, Section: SectionMy, Kind: KindFolder, Name: "animals",
+	})
+	require.NoError(t, err)
+	pet, err := service.Create(ctx, CreateInput{
+		ParentID: &animals.ID, Section: SectionMy, Kind: KindFolder, Name: "pet",
+	})
+	require.NoError(t, err)
+
+	var ownerOrgID uuid.UUID
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT org_id FROM users WHERE id = $1`, ownerID).Scan(&ownerOrgID))
+	sameOrgForeignID := uuid.New()
+	_, err = pool.Exec(t.Context(),
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`,
+		sameOrgForeignID, ownerOrgID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(t.Context(),
+		`UPDATE folders SET owner_id = $1 WHERE id = $2`, sameOrgForeignID, animals.ID)
+	require.NoError(t, err)
+
+	_, err = service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &pet.ID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }

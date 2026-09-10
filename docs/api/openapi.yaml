@@ -373,7 +373,9 @@ components:
           properties:
             can_delete:
               type: boolean
-              description: Может ли вызывающий удалить файл. Список орг-скоупный, а удаление доступно только загрузившему.
+              description: >-
+                true, если файл не используется ни в media_usages, ни как аватар активного ученика,
+                ни в активной TTS-джобе (pending/in_progress). Совпадает с проверкой при DELETE.
 
     MediaPage:
       type: object
@@ -445,14 +447,22 @@ components:
 
     Picture:
       type: object
-      required: [id, name, categories]
+      required: [id, name, categories, url]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         mimeType: { type: string }
         categories:
           type: array
+          description: |
+            Категории изображения — той же формы, что и в `GET /pictures/categories`.
+            Возвращается и идентификатор, и имя: по одному имени клиент не может
+            открыть листинг категории. `id` годится как `categoryId` для
+            `/pictures/category/{categoryId}/list`.
           items: { $ref: '#/components/schemas/PictureCategory' }
+        url:
+          type: string
+          description: "Защищённый proxy URL для получения контента через бэкенд (/api/v1/pictures/{id}/content)"
 
     PictureReference:
       type: object
@@ -563,6 +573,36 @@ components:
           enum: [easy, medium, hard, null]
           description: Сложность набора; возвращается только для `type = pack`, может быть `null`
         updated_at: { type: string, format: date-time }
+
+    CurrentFolder:
+      type: object
+      description: Запрошенная папка. Отсутствует (null), если запрошен корень раздела.
+      required: [id, name, parent_id]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        parent_id:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Родитель этой папки; null — папка лежит в корне раздела,
+          }
+
+    Breadcrumbs:
+      type: object
+      description: >-
+        Один узел пути от корня раздела до текущей папки. Первый элемент
+        breadcrumbs — всегда сам раздел: id = null, name = его подпись
+        («Мои наборы», «Библиотека», «Карточки учеников»).
+      required: [id, name]
+      properties:
+        id:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: null для узла-раздела (первый элемент пути),
+          }
+        name: { type: string }
 
     SettingsDocument:
       type: object
@@ -1175,7 +1215,7 @@ paths:
       summary: Содержимое узла дерева — папки и наборы одним списком
       description: >-
         Один эндпоинт на весь экран. Без `parent_id` возвращает корень раздела:
-        «Мои наборы», «Библиотека» и «Картотека учеников» — это пункты меню, а не
+        «Мои наборы», «Библиотека» и «Карточки учеников» — это пункты меню, а не
         папки, поэтому адресовать корень id папки нельзя. В корне лежат только
         папки: у набора `folder_id` объявлен NOT NULL, то есть набор всегда
         находится внутри какой-то папки.
@@ -1200,8 +1240,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, limit, offset, total]
+                required: [current_folder, breadcrumbs, items, limit, offset, total]
                 properties:
+                  current_folder:
+                    oneOf:
+                      - $ref: '#/components/schemas/CurrentFolder'
+                      - type: "null"
+                  breadcrumbs:
+                    {
+                      type: array,
+                      items: { $ref: '#/components/schemas/Breadcrumbs' },
+                    }
                   items:
                     {
                       type: array,
@@ -1239,7 +1288,7 @@ paths:
             in: query,
             required: false,
             schema: { type: boolean, default: false },
-            description: 'Только файлы, на которые не ссылаются ни media_usages, ни аватар ученика, ни TTS-джоба',
+            description: 'Только файлы, на которые не ссылаются ни media_usages, ни аватар активного ученика, ни активная TTS-джоба (pending/in_progress). Неиспользуемые файлы появляются только в результате сбоя или бага. Фильтр предназначен для ручной очистки таких остатков.',
           }
         - {
             name: cursor,
@@ -1443,6 +1492,41 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
 
+  /pictures/category/{categoryId}/list:
+    get:
+      tags: [pictures]
+      summary: Получить изображения конкретной категории Pictures Bank
+      description: |
+        Возвращает список изображений, принадлежащих указанной категории. В external-режиме ответ кэшируется, а исходящие запросы ограничены через Redis.
+        Response contract идентичен /pictures/search.
+
+        Неизвестная категория — пустой список, а не ошибка: так ведут себя оба адаптера.
+        Выдача ограничена 100 изображениями; пагинации пока нет.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: categoryId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 256
+          description: |
+            Идентификатор категории ровно в том виде, в каком его вернул
+            `GET /pictures/categories`. Формат задаёт источник: в локальном банке
+            это имя категории, во внешнем — его собственный идентификатор.
+            UUID не требуется.
+      responses:
+        '200':
+          description: Список изображений категории
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Picture' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
+
   /packs:
     post:
       tags: [packs]
@@ -1631,7 +1715,7 @@ paths:
         Свой набор без folder_id копируется в исходную папку. Для опубликованного
         набора другого пользователя той же организации folder_id обязателен.
         Целевая папка должна принадлежать пользователю и находиться в разделе
-        «Мои наборы» или «Картотека учеников». Копия всегда создаётся как draft.
+        «Мои наборы» или «Карточки учеников». Копия всегда создаётся как draft.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }

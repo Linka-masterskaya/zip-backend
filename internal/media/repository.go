@@ -145,7 +145,7 @@ func listMedia(ctx context.Context, tx pgx.Tx, q ListQuery) ([]ListItem, error) 
 		cursorID = q.Cursor.ID
 	}
 	rows, err := tx.Query(ctx, listMediaQuery,
-		q.OrgID, q.Query, q.MediaType, cursorCreatedAt, cursorID, q.Unused, q.Limit, q.UserID)
+		q.OrgID, q.Query, q.MediaType, cursorCreatedAt, cursorID, q.Unused, q.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("media repository list: %w", err)
 	}
@@ -189,7 +189,7 @@ func (r *Repository) Delete(
 	defer rollbackMediaTx(ctx, tx)
 
 	var result File
-	err = tx.QueryRow(ctx, lockOwnedMediaQuery, userID, mediaID).Scan(
+	err = tx.QueryRow(ctx, lockMediaQuery, userID, mediaID).Scan(
 		&result.ID, &result.OrgID, &result.UploaderID, &result.Name, &result.SHA256,
 		&result.MIMEType, &result.MediaType, &result.SizeBytes, &result.MinIOKey, &result.CreatedAt,
 	)
@@ -230,7 +230,7 @@ func (r *Repository) DeleteBatch(
 	}
 	defer rollbackMediaTx(ctx, tx)
 
-	owned, err := lockOwnedMediaBatch(ctx, tx, userID, ids)
+	owned, err := lockMediaBatch(ctx, tx, userID, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -274,8 +274,8 @@ type ownedMedia struct {
 	sizeBytes int64
 }
 
-func lockOwnedMediaBatch(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ids []uuid.UUID) ([]ownedMedia, error) {
-	rows, err := tx.Query(ctx, lockOwnedMediaBatchQuery, userID, ids)
+func lockMediaBatch(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ids []uuid.UUID) ([]ownedMedia, error) {
+	rows, err := tx.Query(ctx, lockMediaBatchQuery, userID, ids)
 	if err != nil {
 		return nil, fmt.Errorf("media repository batch delete lock: %w", err)
 	}

@@ -527,7 +527,7 @@ export interface paths {
         };
         /**
          * Содержимое узла дерева — папки и наборы одним списком
-         * @description Один эндпоинт на весь экран. Без `parent_id` возвращает корень раздела: «Мои наборы», «Библиотека» и «Картотека учеников» — это пункты меню, а не папки, поэтому адресовать корень id папки нельзя. В корне лежат только папки: у набора `folder_id` объявлен NOT NULL, то есть набор всегда находится внутри какой-то папки.
+         * @description Один эндпоинт на весь экран. Без `parent_id` возвращает корень раздела: «Мои наборы», «Библиотека» и «Карточки учеников» — это пункты меню, а не папки, поэтому адресовать корень id папки нельзя. В корне лежат только папки: у набора `folder_id` объявлен NOT NULL, то есть набор всегда находится внутри какой-то папки.
          */
         get: {
             parameters: {
@@ -566,6 +566,8 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            current_folder: components["schemas"]["CurrentFolder"] | null;
+                            breadcrumbs: components["schemas"]["Breadcrumbs"][];
                             items: components["schemas"]["ContentItem"][];
                             limit: number;
                             offset: number;
@@ -607,7 +609,7 @@ export interface paths {
                     query?: string;
                     /** @description Фильтр по media_type, например image или audio */
                     type?: string;
-                    /** @description Только файлы, на которые не ссылаются ни media_usages, ни аватар ученика, ни TTS-джоба */
+                    /** @description Только файлы, на которые не ссылаются ни media_usages, ни аватар активного ученика, ни активная TTS-джоба (pending/in_progress). Неиспользуемые файлы появляются только в результате сбоя или бага. Фильтр предназначен для ручной очистки таких остатков. */
                     unused?: boolean;
                     /** @description Курсор из next_cursor предыдущей страницы */
                     cursor?: string;
@@ -995,6 +997,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pictures/category/{categoryId}/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Получить изображения конкретной категории Pictures Bank
+         * @description Возвращает список изображений, принадлежащих указанной категории. В external-режиме ответ кэшируется, а исходящие запросы ограничены через Redis.
+         *     Response contract идентичен /pictures/search.
+         *
+         *     Неизвестная категория — пустой список, а не ошибка: так ведут себя оба адаптера.
+         *     Выдача ограничена 100 изображениями; пагинации пока нет.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /**
+                     * @description Идентификатор категории ровно в том виде, в каком его вернул
+                     *     `GET /pictures/categories`. Формат задаёт источник: в локальном банке
+                     *     это имя категории, во внешнем — его собственный идентификатор.
+                     *     UUID не требуется.
+                     */
+                    categoryId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Список изображений категории */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Picture"][];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                429: components["responses"]["TooMany"];
+                /** @description Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/packs": {
         parameters: {
             query?: never;
@@ -1202,7 +1264,7 @@ export interface paths {
         put?: never;
         /**
          * Создать независимую draft-копию набора
-         * @description Создаёт новую независимую draft-копию набора. Копируются config, фильтры, goals, notes и ссылки media usages; MinIO-объекты и adaptations не копируются. Название формируется как название исходного набора с добавлением суффикса ` (копия)`. При дублировании ранее созданной копии суффикс добавляется повторно. Пока скопированный media usage существует, соответствующий media-файл нельзя удалить. Каждый успешный запрос создаёт новый pack с новым ID; endpoint не является идемпотентным. Свой набор без folder_id копируется в исходную папку. Для опубликованного набора другого пользователя той же организации folder_id обязателен. Целевая папка должна принадлежать пользователю и находиться в разделе «Мои наборы» или «Картотека учеников». Копия всегда создаётся как draft.
+         * @description Создаёт новую независимую draft-копию набора. Копируются config, фильтры, goals, notes и ссылки media usages; MinIO-объекты и adaptations не копируются. Название формируется как название исходного набора с добавлением суффикса ` (копия)`. При дублировании ранее созданной копии суффикс добавляется повторно. Пока скопированный media usage существует, соответствующий media-файл нельзя удалить. Каждый успешный запрос создаёт новый pack с новым ID; endpoint не является идемпотентным. Свой набор без folder_id копируется в исходную папку. Для опубликованного набора другого пользователя той же организации folder_id обязателен. Целевая папка должна принадлежать пользователю и находиться в разделе «Мои наборы» или «Карточки учеников». Копия всегда создаётся как draft.
          */
         post: {
             parameters: {
@@ -3004,7 +3066,7 @@ export interface components {
             url: string;
         };
         MediaListItem: components["schemas"]["MediaFile"] & {
-            /** @description Может ли вызывающий удалить файл. Список орг-скоупный, а удаление доступно только загрузившему. */
+            /** @description true, если файл не используется ни в media_usages, ни как аватар активного ученика, ни в активной TTS-джобе (pending/in_progress). Совпадает с проверкой при DELETE. */
             can_delete: boolean;
         };
         /** @description Страница библиотеки media. Presigned URL не отдаются — их запрашивают поштучно через `/media/{id}`. */
@@ -3054,7 +3116,15 @@ export interface components {
             id: string;
             name: string;
             mimeType?: string;
+            /**
+             * @description Категории изображения — той же формы, что и в `GET /pictures/categories`.
+             *     Возвращается и идентификатор, и имя: по одному имени клиент не может
+             *     открыть листинг категории. `id` годится как `categoryId` для
+             *     `/pictures/category/{categoryId}/list`.
+             */
             categories: components["schemas"]["PictureCategory"][];
+            /** @description Защищённый proxy URL для получения контента через бэкенд (/api/v1/pictures/{id}/content) */
+            url: string;
         };
         PictureReference: {
             /** Format: uuid */
@@ -3161,6 +3231,26 @@ export interface components {
             difficulty?: "easy" | "medium" | "hard" | null;
             /** Format: date-time */
             updated_at: string;
+        };
+        /** @description Запрошенная папка. Отсутствует (null), если запрошен корень раздела. */
+        CurrentFolder: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description Родитель этой папки; null — папка лежит в корне раздела
+             */
+            parent_id: string | null;
+        };
+        /** @description Один узел пути от корня раздела до текущей папки. Первый элемент breadcrumbs — всегда сам раздел: id = null, name = его подпись («Мои наборы», «Библиотека», «Карточки учеников»). */
+        Breadcrumbs: {
+            /**
+             * Format: uuid
+             * @description null для узла-раздела (первый элемент пути)
+             */
+            id: string | null;
+            name: string;
         };
         /**
          * @description AB-48 v1 user-scoped site settings, persisted across relogin and devices.

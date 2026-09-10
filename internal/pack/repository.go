@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,6 +22,7 @@ var (
 	ErrPackPublished                = errors.New("pack is published")
 	ErrAlreadyPublished             = errors.New("pack is published in another folder")
 	ErrAdaptationNotFound           = errors.New("pack adaptation not found")
+	ErrMediaNotFound                = errors.New("media not found")
 )
 
 const duplicateTitleSuffix = " (копия)"
@@ -105,6 +107,9 @@ func (r *Repository) Duplicate(
 		return nil, fmt.Errorf("pack duplicate insert: %w", err)
 	}
 	if _, err = tx.Exec(ctx, copyDuplicateMediaUsagesQuery, sourcePackID, result.ID); err != nil {
+		if isMediaFKViolation(err) {
+			return nil, ErrMediaNotFound
+		}
 		return nil, fmt.Errorf("pack duplicate media usages: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -168,13 +173,20 @@ func (r *Repository) ListWithTotal(
 	}
 	defer rollbackPackTx(ctx, tx)
 
-	items, err := r.list(ctx, tx, userID, input)
+	items, total, err := r.list(ctx, tx, userID, input)
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := r.count(ctx, tx, userID, input)
-	if err != nil {
-		return nil, 0, err
+
+	// count(*) OVER() gives us total together with every returned row.
+	// If OFFSET moves the page past the end, there is no row to carry total,
+	// so fall back to the standalone count query only for that case.
+	_, offset := repositoryListBounds(input)
+	if len(items) == 0 && offset > 0 {
+		total, err = r.count(ctx, tx, userID, input)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, 0, fmt.Errorf("pack repository list page commit: %w", err)
@@ -188,7 +200,7 @@ func (r *Repository) list(
 	tx pgx.Tx,
 	userID uuid.UUID,
 	input ListInput,
-) ([]*ListItem, error) {
+) ([]*ListItem, int, error) {
 	limit, offset := repositoryListBounds(input)
 	rows, err := tx.Query(
 		ctx,
@@ -205,22 +217,24 @@ func (r *Repository) list(
 		offset,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("pack repository list: %w", err)
+		return nil, 0, fmt.Errorf("pack repository list: %w", err)
 	}
 	defer rows.Close()
 
 	packs := make([]*ListItem, 0)
+	total := 0
 	for rows.Next() {
-		item, scanErr := scanListItem(rows)
+		item, rowTotal, scanErr := scanListItemWithTotal(rows)
 		if scanErr != nil {
-			return nil, fmt.Errorf("pack repository list scan: %w", scanErr)
+			return nil, 0, fmt.Errorf("pack repository list scan: %w", scanErr)
 		}
+		total = rowTotal
 		packs = append(packs, item)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("pack repository list rows: %w", err)
+		return nil, 0, fmt.Errorf("pack repository list rows: %w", err)
 	}
-	return packs, nil
+	return packs, total, nil
 }
 
 // count returns the total number of placements using the caller's transaction.
@@ -319,23 +333,17 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 	if published {
 		return ErrPackPublished
 	}
-	adaptationIDs := make([]uuid.UUID, 0)
-	rows, queryErr := tx.Query(ctx, adaptationIDsForPackQuery, packID)
-	if queryErr != nil {
-		return fmt.Errorf("pack repository delete adaptations: %w", queryErr)
+	adaptRows, err := tx.Query(ctx, adaptationIDsForPackQuery, packID)
+	if err != nil {
+		return fmt.Errorf("pack repository delete adaptations: %w", err)
 	}
-	for rows.Next() {
-		var adaptationID uuid.UUID
-		if queryErr = rows.Scan(&adaptationID); queryErr != nil {
-			rows.Close()
-			return fmt.Errorf("pack repository delete adaptation scan: %w", queryErr)
-		}
-		adaptationIDs = append(adaptationIDs, adaptationID)
+	adaptationIDs, err := pgx.CollectRows(adaptRows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("pack repository delete adaptations: %w", err)
 	}
-	queryErr = rows.Err()
-	rows.Close()
-	if queryErr != nil {
-		return fmt.Errorf("pack repository delete adaptation rows: %w", queryErr)
+	mediaIDs, err := collectPackMedia(ctx, tx, packID, adaptationIDs)
+	if err != nil {
+		return fmt.Errorf("pack repository delete collect media: %w", err)
 	}
 	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, packID); err != nil {
 		return fmt.Errorf("pack repository delete media usages: %w", err)
@@ -347,6 +355,9 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 	}
 	if _, err = tx.Exec(ctx, deletePackQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete: %w", err)
+	}
+	if err = deleteOrphanedMedia(ctx, tx, mediaIDs); err != nil {
+		return fmt.Errorf("pack repository delete orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pack repository delete commit: %w", err)
@@ -498,18 +509,66 @@ func scanPack(row rowScanner) (*Pack, error) {
 	return &result, nil
 }
 
-func scanListItem(row rowScanner) (*ListItem, error) {
-	var result ListItem
-	err := row.Scan(
+func listItemScanTargets(result *ListItem) []any {
+	return []any{
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
 		&result.LibraryFolderID, &result.PublishedAt,
 		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.IsFavorite, &result.Section,
 		&result.CreatedAt, &result.UpdatedAt,
-	)
-	if err != nil {
+	}
+}
+
+func scanListItem(row rowScanner) (*ListItem, error) {
+	var result ListItem
+	if err := row.Scan(listItemScanTargets(&result)...); err != nil {
 		return nil, err
 	}
 	return &result, nil
+}
+
+func scanListItemWithTotal(row rowScanner) (*ListItem, int, error) {
+	var result ListItem
+	var total int
+	targets := append(listItemScanTargets(&result), &total)
+	if err := row.Scan(targets...); err != nil {
+		return nil, 0, err
+	}
+	return &result, total, nil
+}
+
+func deleteOrphanedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []uuid.UUID) error {
+	if len(mediaIDs) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) ORDER BY id FOR UPDATE", mediaIDs)
+	if err != nil {
+		return fmt.Errorf("select for update media: %w", err)
+	}
+	var count int64
+	var totalBytes int64
+	if err := tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {
+		return fmt.Errorf("delete orphaned media: %w", err)
+	}
+	if count > 0 {
+		slog.InfoContext(ctx, "orphaned media deleted",
+			"count", count,
+			"bytes", totalBytes,
+		)
+	}
+	return nil
+}
+
+func collectPackMedia(ctx context.Context, tx pgx.Tx, packID uuid.UUID, adaptationIDs []uuid.UUID) ([]uuid.UUID, error) {
+	mediaRows, err := tx.Query(ctx, collectPackMediaQuery, packID, adaptationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("pack collect media: %w", err)
+	}
+	return pgx.CollectRows(mediaRows, pgx.RowTo[uuid.UUID])
+}
+
+func isMediaFKViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }

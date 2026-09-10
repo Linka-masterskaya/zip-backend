@@ -21,6 +21,7 @@ server:
 db:
   # Required via DB_URL.
   url: ""
+  migrate_url: ""
   max_conns: 25
   min_conns: 5
   max_conn_lifetime: "1h"

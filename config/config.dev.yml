@@ -20,6 +20,7 @@ server:
 
 db:
   url: "postgres://linka:linka@localhost:5432/linka?sslmode=disable"
+  migrate_url: "postgres://linka:linka@localhost:5432/linka?sslmode=disable"
   max_conns: 25
   min_conns: 5
   max_conn_lifetime: "1h"

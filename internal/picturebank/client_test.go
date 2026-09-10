@@ -2,6 +2,7 @@ package picturebank
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Linka-masterskaya/zip-backend/internal/cache"
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -267,4 +269,47 @@ func (l *fakeDistributedLimiter) callCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.calls
+}
+
+// TestClientReturnsEmptyListForUnknownCategory — адаптеры обязаны вести
+// себя одинаково: локальный банк на неизвестную категорию отдаёт пустой
+// список, а внешний раньше отдавал ErrPictureNotFound, который наружу
+// превращался в 500.
+func TestClientReturnsEmptyListForUnknownCategory(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusGone} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			t.Cleanup(upstream.Close)
+			client := testClient(
+				t, upstream, &fakeDistributedLimiter{allowed: true}, testPicturesConfig(),
+			)
+
+			pictures, err := client.PicturesByCategory(t.Context(), "animals")
+
+			require.NoError(t, err)
+			assert.Empty(t, pictures)
+		})
+	}
+}
+
+// TestClientCapsPicturesPerCategory: внешний источник не ограничен, но
+// выдача должна совпадать с локальной, где предел задан в SQL.
+func TestClientCapsPicturesPerCategory(t *testing.T) {
+	oversized := make([]Picture, MaxPicturesPerCategory+5)
+	for i := range oversized {
+		oversized[i] = Picture{ID: uuid.New().String(), Name: "Кот"}
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(oversized))
+	}))
+	t.Cleanup(upstream.Close)
+	client := testClient(t, upstream, &fakeDistributedLimiter{allowed: true}, testPicturesConfig())
+
+	pictures, err := client.PicturesByCategory(t.Context(), "animals")
+
+	require.NoError(t, err)
+	assert.Len(t, pictures, MaxPicturesPerCategory)
 }

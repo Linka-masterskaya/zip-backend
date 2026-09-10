@@ -71,6 +71,8 @@ scratch/
 *~
 
 # ── Misc ─────────────────────────────────────────────────────────────────────
+# Побочный файл git fetch; в репозиторий попадать не должен
+FETCH_HEAD
 *.linka
 
 # Keep N5 Linka Looks compatibility fixture in Git

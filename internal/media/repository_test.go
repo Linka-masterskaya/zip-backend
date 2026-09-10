@@ -149,13 +149,13 @@ func TestRepositoryListMarksOnlyOwnFilesDeletable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, total, "список орг-скоупный, чужой файл в нём виден")
 
-	// can_delete отражает то же правило, по которому работает удаление.
+	// can_delete true когда файл не используется ни в одной из трёх таблиц.
 	deletable := map[uuid.UUID]bool{}
 	for _, item := range items {
 		deletable[item.ID] = item.CanDelete
 	}
 	assert.True(t, deletable[own.ID])
-	assert.False(t, deletable[mates.ID], "чужой файл помечен как неудаляемый")
+	assert.True(t, deletable[mates.ID], "чужой файл без ссылок тоже удаляем")
 }
 
 func TestRepositoryUnusedFilterCoversAvatarsAndTTS(t *testing.T) {
@@ -175,9 +175,9 @@ func TestRepositoryUnusedFilterCoversAvatarsAndTTS(t *testing.T) {
 	unused := ListQuery{OrgID: env.orgID, UserID: env.userID, Unused: true, Limit: 10}
 	items, total, err := env.repo.ListWithTotal(t.Context(), unused)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []uuid.UUID{free.ID, archived.ID}, idsOf(items),
-		"аватар активного ученика и результат TTS заняты, аватар архивированного свободен")
-	assert.Equal(t, 2, total, "счётчик считается тем же предикатом, что и выдача")
+	assert.ElementsMatch(t, []uuid.UUID{free.ID, archived.ID, voiced.ID}, idsOf(items),
+		"аватар активного ученика занят, succeeded TTS и аватар архивированного свободны")
+	assert.Equal(t, 3, total, "счётчик считается тем же предикатом, что и выдача")
 
 	all, allTotal, err := env.repo.ListWithTotal(t.Context(),
 		ListQuery{OrgID: env.orgID, UserID: env.userID, Limit: 10})
@@ -209,14 +209,14 @@ func TestRepositoryDeleteBatchSkipsEveryKindOfReference(t *testing.T) {
 		mates.ID, foreign.ID, missing,
 	}, false)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []uuid.UUID{free.ID, alsoFree.ID, archived.ID}, outcome.Deleted,
+	assert.ElementsMatch(t, []uuid.UUID{free.ID, alsoFree.ID, archived.ID, mates.ID, voiced.ID}, outcome.Deleted,
 		"аватар архивированного ученика удаляется наравне со свободными файлами")
-	assert.ElementsMatch(t, []uuid.UUID{usedByPack.ID, avatar.ID, voiced.ID}, outcome.InUse,
+	assert.ElementsMatch(t, []uuid.UUID{usedByPack.ID, avatar.ID}, outcome.InUse,
 		"аватар активного ученика и TTS пропускаются наравне с файлом из набора")
-	assert.Equal(t, int64(200), outcome.FreedBytes)
+	assert.Equal(t, int64(405), outcome.FreedBytes)
 
 	// Квота уменьшается ровно на сумму размеров реально удалённых файлов.
-	assert.Equal(t, int64(1205), env.storageUsed(env.orgID))
+	assert.Equal(t, int64(1000), env.storageUsed(env.orgID))
 	// Чужая организация не затронута ни строкой, ни квотой.
 	assert.Equal(t, int64(9), env.storageUsed(env.otherOrgID))
 
@@ -255,11 +255,11 @@ func TestRepositoryDeleteBatchOfForeignFilesOnly(t *testing.T) {
 	env := newMediaEnv(t)
 
 	own := env.seed(env.orgID, env.userID, "sha-own", 100)
-	mates := env.seed(env.orgID, env.mateID, "sha-mate", 40)
+	env.seed(env.orgID, env.mateID, "sha-mate", 40)
 	foreign := env.seed(env.otherOrgID, env.strangerID, "sha-foreign", 9)
 
 	outcome, err := env.repo.DeleteBatch(t.Context(), env.userID,
-		[]uuid.UUID{mates.ID, foreign.ID, uuid.New()}, false)
+		[]uuid.UUID{foreign.ID, uuid.New()}, false)
 	require.NoError(t, err)
 	assert.Empty(t, outcome.Deleted, "пачка целиком из чужих файлов ничего не удаляет")
 	assert.Empty(t, outcome.InUse)

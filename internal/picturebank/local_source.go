@@ -28,6 +28,7 @@ type localReadRepository interface {
 	Categories(context.Context) ([]string, error)
 	Search(context.Context, string) ([]localPictureMetadata, error)
 	Get(context.Context, uuid.UUID) (*localPictureMetadata, error)
+	PicturesByCategory(context.Context, string) ([]localPictureMetadata, error)
 }
 
 type localSource struct {
@@ -134,6 +135,23 @@ func (s *localSource) Image(ctx context.Context, pictureID string) (*Image, erro
 		return nil, fmt.Errorf("%w: unexpected local image content type", ErrInvalidResponse)
 	}
 	return &Image{Data: data, ContentType: contentType}, nil
+}
+
+func (s *localSource) PicturesByCategory(ctx context.Context, categoryID string) ([]Picture, error) {
+	stored, err := s.repo.PicturesByCategory(ctx, categoryID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: local pictures by category: %v", ErrUnavailable, err)
+	}
+	result := make([]Picture, 0, len(stored))
+	for _, picture := range stored {
+		result = append(result, Picture{
+			ID:         picture.ID.String(),
+			Name:       picture.Title,
+			MIMEType:   picture.MIMEType,
+			Categories: []Category{localCategory(picture.Category)},
+		})
+	}
+	return result, nil
 }
 
 func localCategory(name string) Category {

@@ -12,6 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// maxFolderDepth is the highest allowed value of folders.depth (root = 0).
+const maxFolderDepth = 4
+
 var (
 	ErrNotFound       = errors.New("folder not found")
 	ErrParentInvalid  = errors.New("folder parent is invalid")
@@ -19,6 +22,7 @@ var (
 	ErrCycle          = errors.New("folder move creates a cycle")
 	ErrDepth          = errors.New("folder depth limit exceeded")
 	ErrNotEmpty       = errors.New("folder is not empty")
+	ErrNotRoot        = errors.New("folder ancestor chain did not reach root")
 )
 
 type Repository struct {
@@ -56,7 +60,7 @@ func (r *Repository) Create(
 			return nil, ErrParentInvalid
 		}
 		depth = parent.Depth + 1
-		if depth > 4 {
+		if depth > maxFolderDepth {
 			return nil, ErrDepth
 		}
 	}
@@ -361,7 +365,8 @@ func (r *Repository) Contents(
 	}
 	defer rollback(ctx, tx)
 
-	if err = r.ensureParentVisible(ctx, tx, userID, input); err != nil {
+	current, breadcrumbs, err := r.ensureParentVisible(ctx, tx, userID, input)
+	if err != nil {
 		return nil, err
 	}
 
@@ -395,39 +400,93 @@ func (r *Repository) Contents(
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("folder contents commit: %w", err)
 	}
-	return &ContentsPage{Items: items, Limit: input.Limit, Offset: input.Offset, Total: total}, nil
+
+	return &ContentsPage{
+		CurrentFolder: current,
+		Breadcrumbs:   breadcrumbs,
+		Items:         items,
+		Limit:         input.Limit,
+		Offset:        input.Offset,
+		Total:         total,
+	}, nil
 }
 
-// ensureParentVisible проверяет, что запрошенная папка существует и доступна.
-// Для корня раздела проверять нечего: он не строка в таблице.
+// ensureParentVisible проверяет, что запрошенная папка существует и доступна,
+// и в том же запросе строит цепочку предков от корня раздела до неё самой.
+// Для корня раздела (ParentID == nil) проверять нечего — он не строка в
+// таблице, поэтому текущей папки нет, а путь состоит только из самого раздела.
 func (r *Repository) ensureParentVisible(
 	ctx context.Context,
 	tx pgx.Tx,
 	userID uuid.UUID,
 	input ContentsInput,
-) error {
+) (*CurrentFolder, []Breadcrumb, error) {
+	breadcrumbs := []Breadcrumb{{Name: sectionLabel(input.Section)}}
 	if input.ParentID == nil {
-		return nil
+		return nil, breadcrumbs, nil
 	}
+	orgID, err := currentUserOrg(ctx, tx, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := tx.Query(ctx, `
+         WITH RECURSIVE ancestors AS (
+		 SELECT id, name, parent_id, section, owner_id, 0 AS level
+		 FROM folders
+		 WHERE id = $1 AND org_id = $2
+		 UNION ALL
+	     SELECT f.id, f.name, f.parent_id, f.section, f.owner_id, a.level + 1
+		 FROM folders f
+		 JOIN ancestors a ON f.id = a.parent_id
+		 WHERE f.org_id = $2 AND a.level < $3)
+		 SELECT id, name, parent_id, section, owner_id
+		 FROM ancestors
+		 ORDER BY level DESC`, *input.ParentID, orgID, maxFolderDepth)
+	if err != nil {
+		return nil, nil, fmt.Errorf("folder ancestors: %w", err)
+	}
+	defer rows.Close()
 
-	var section string
-	var ownerID uuid.UUID
-	err := tx.QueryRow(ctx, `
-		SELECT section, owner_id FROM folders WHERE id = $1`, *input.ParentID).
-		Scan(&section, &ownerID)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return ErrNotFound
-	case err != nil:
-		return fmt.Errorf("folder contents access: %w", err)
-	// Папка из другого раздела считается отсутствующей: ответ не должен
-	// подтверждать, что она существует где-то ещё.
-	case section != input.Section:
-		return ErrNotFound
-	case section != SectionLibrary && ownerID != userID:
-		return ErrNotFound
+	var current *CurrentFolder
+	found := false
+	// first самый дальний предок (т.е.корень, если цепочка полная).
+	first := true
+	for rows.Next() {
+		var id uuid.UUID
+		var name, section string
+		var parentID *uuid.UUID
+		var ownerID uuid.UUID
+		if err = rows.Scan(&id, &name, &parentID, &section, &ownerID); err != nil {
+			return nil, nil, fmt.Errorf("folder ancestors scan: %w", err)
+		}
+		// level DESC первая строка, самый дальний найденный предок.
+		// Он должен быть корнем (parent_id IS NULL). Если это не так, значит цепочка
+		// оборвалась (испорченный parent_id) или упёрлась в лимит level < 5
+		if first {
+			first = false
+			if parentID != nil {
+				return nil, nil, ErrNotRoot
+			}
+		}
+		// Папка из другого раздела или чужая (кроме library) считается
+		// отсутствующей: ответ не должен подтверждать, что она существует
+		// где-то ещё. Проверяется каждго предка.
+		if section != input.Section || (section != SectionLibrary && ownerID != userID) {
+			return nil, nil, ErrNotFound
+		}
+		breadcrumbs = append(breadcrumbs, Breadcrumb{ID: &id, Name: name})
+		current = &CurrentFolder{ID: id, Name: name, ParentID: parentID}
+		if id == *input.ParentID {
+			found = true
+		}
 	}
-	return nil
+	if err = rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("folder ancestors rows: %w", err)
+	}
+	if !found {
+		return nil, nil, ErrNotFound
+	}
+	return current, breadcrumbs, nil
 }
 
 func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
@@ -551,12 +610,24 @@ func appendContentsFilters(query string, args []any, input ContentsInput) (strin
 	return query + filters, args
 }
 
+// activeUserOrg блокирует строку пользователя (FOR UPDATE), поэтому подходит
+// для транзакций, которые дальше изменяют данные.
 func activeUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {
+	return userOrg(ctx, tx, userID, true)
+}
+
+// currentUserOrg используется только для чтения.
+func currentUserOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (uuid.UUID, error) {
+	return userOrg(ctx, tx, userID, false)
+}
+
+func userOrg(ctx context.Context, tx pgx.Tx, userID uuid.UUID, forUpdate bool) (uuid.UUID, error) {
+	query := `SELECT org_id FROM users WHERE id = $1 AND org_id IS NOT NULL AND deleted_at IS NULL`
+	if forUpdate {
+		query += ` FOR UPDATE`
+	}
 	var orgID uuid.UUID
-	err := tx.QueryRow(ctx, `
-		SELECT org_id FROM users
-		WHERE id = $1 AND org_id IS NOT NULL AND deleted_at IS NULL
-		FOR UPDATE`, userID).Scan(&orgID)
+	err := tx.QueryRow(ctx, query, userID).Scan(&orgID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, ErrNotFound
 	}

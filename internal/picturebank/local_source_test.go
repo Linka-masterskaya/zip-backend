@@ -125,6 +125,57 @@ func TestLocalSourceMapsInfrastructureAndCorruptionErrorsLikeExternalAdapter(t *
 	})
 }
 
+func TestLocalSourcePicturesByCategory(t *testing.T) {
+	transportID := uuid.New()
+	cityID := uuid.New()
+	repo := &fakeLocalRepository{
+		categories: []string{"Транспорт", "Город"},
+		pictures: []localPictureMetadata{
+			{
+				ID: transportID, Category: "Транспорт", Title: "Троллейбус",
+				MIMEType: "image/png", SizeBytes: int64(len(testPNG())),
+				MinIOKey: LocalObjectPrefix + "/" + transportID.String(),
+			},
+			{
+				ID: cityID, Category: "Город", Title: "Улица",
+				MIMEType: "image/jpeg", SizeBytes: int64(len(testPNG())),
+				MinIOKey: LocalObjectPrefix + "/" + cityID.String(),
+			},
+		},
+	}
+	objectStorage := &fakeLocalStorage{objects: map[string][]byte{
+		repo.pictures[0].MinIOKey: testPNG(),
+		repo.pictures[1].MinIOKey: testPNG(),
+	}}
+	source, err := newLocalSource(repo, objectStorage, 1024*1024)
+	require.NoError(t, err)
+
+	t.Run("returns only pictures from requested category", func(t *testing.T) {
+		pictures, err := source.PicturesByCategory(t.Context(), "Транспорт")
+		require.NoError(t, err)
+		require.Len(t, pictures, 1)
+		assert.Equal(t, transportID.String(), pictures[0].ID)
+		assert.Equal(t, "Троллейбус", pictures[0].Name)
+		require.Len(t, pictures[0].Categories, 1)
+		assert.Equal(t, "Транспорт", pictures[0].Categories[0].Name)
+	})
+
+	t.Run("empty result for unknown category", func(t *testing.T) {
+		pictures, err := source.PicturesByCategory(t.Context(), "Несуществующая")
+		require.NoError(t, err)
+		assert.Empty(t, pictures)
+	})
+
+	t.Run("maps db error to ErrUnavailable", func(t *testing.T) {
+		failingRepo := &fakeLocalRepository{searchErr: errors.New("db down")}
+		src, err := newLocalSource(failingRepo, &fakeLocalStorage{}, 1024)
+		require.NoError(t, err)
+
+		_, err = src.PicturesByCategory(t.Context(), "Транспорт")
+		require.ErrorIs(t, err, ErrUnavailable)
+	})
+}
+
 type fakeLocalRepository struct {
 	categories    []string
 	categoriesErr error
@@ -158,6 +209,19 @@ func (r *fakeLocalRepository) Get(_ context.Context, id uuid.UUID) (*localPictur
 		}
 	}
 	return nil, ErrPictureNotFound
+}
+
+func (r *fakeLocalRepository) PicturesByCategory(_ context.Context, category string) ([]localPictureMetadata, error) {
+	if r.searchErr != nil {
+		return nil, r.searchErr
+	}
+	var result []localPictureMetadata
+	for _, p := range r.pictures {
+		if p.Category == category {
+			result = append(result, p)
+		}
+	}
+	return result, nil
 }
 
 type fakeLocalStorage struct {

@@ -51,11 +51,14 @@ const mediaUnreferencedPredicate = `
 	      SELECT 1 FROM students s
 	      WHERE s.avatar_media_id = media_files.id AND s.deleted_at IS NULL
 	    )
-	    AND NOT EXISTS (SELECT 1 FROM tts_jobs j WHERE j.media_id = media_files.id)`
+	    AND NOT EXISTS (SELECT 1 FROM tts_jobs j
+				WHERE j.media_id = media_files.id
+				AND j.status IN ('pending', 'in_progress'))`
 
 const listMediaQuery = `
 	SELECT id, org_id, uploader_id, name, sha256, mime_type, media_type,
-	       size_bytes, minio_key, created_at, uploader_id = $8::uuid AS can_delete
+	       size_bytes, minio_key, created_at,
+				 (` + mediaUnreferencedPredicate + `) AS can_delete
 	FROM media_files
 	WHERE org_id = $1
 	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%')
@@ -79,24 +82,26 @@ const countMediaQuery = `
 	    OR ` + mediaUnreferencedPredicate + `
 	  )`
 
-const lockOwnedMediaQuery = `
+const lockMediaQuery = `
 	SELECT m.id, m.org_id, m.uploader_id, m.name, m.sha256, m.mime_type, m.media_type,
 	       m.size_bytes, m.minio_key, m.created_at
 	FROM media_files m
 	JOIN users u ON u.id = $1 AND u.org_id = m.org_id AND u.deleted_at IS NULL
-	WHERE m.id = $2 AND m.uploader_id = u.id
+	WHERE m.id = $2
 	FOR UPDATE OF m, u`
 
-const lockOwnedMediaBatchQuery = `
+const lockMediaBatchQuery = `
 	SELECT m.id, m.org_id, m.size_bytes
 	FROM media_files m
 	JOIN users u ON u.id = $1 AND u.org_id = m.org_id AND u.deleted_at IS NULL
-	WHERE m.id = ANY($2::uuid[]) AND m.uploader_id = u.id
+	WHERE m.id = ANY($2::uuid[])
 	ORDER BY m.id
 	FOR UPDATE OF m, u`
 
 const mediaInUseQuery = `
-	SELECT EXISTS (SELECT 1 FROM media_usages WHERE media_id = $1)`
+	SELECT EXISTS (SELECT 1 FROM media_usages WHERE media_id = $1)
+			OR EXISTS (SELECT 1 FROM students WHERE avatar_media_id = $1 AND deleted_at IS NULL)
+			OR EXISTS (SELECT 1 FROM tts_jobs WHERE media_id = $1 AND status IN ('pending', 'in_progress'))`
 
 const referencedMediaBatchQuery = `
 	SELECT id FROM media_files
@@ -107,7 +112,7 @@ const referencedMediaBatchQuery = `
 	      SELECT 1 FROM students s
 	      WHERE s.avatar_media_id = media_files.id AND s.deleted_at IS NULL
 	    )
-	    OR EXISTS (SELECT 1 FROM tts_jobs j WHERE j.media_id = media_files.id)
+	    OR EXISTS (SELECT 1 FROM tts_jobs j WHERE j.media_id = media_files.id AND j.status IN ('pending', 'in_progress'))
 	  )`
 
 const deleteMediaQuery = `
