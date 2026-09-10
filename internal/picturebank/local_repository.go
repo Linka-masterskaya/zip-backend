@@ -130,8 +130,8 @@ func (r *localRepository) PicturesByCategory(ctx context.Context, category strin
 		FROM picture_bank_images
 		WHERE category = $1
 		ORDER BY lower(title), id
-		LIMIT 100
-	`, category)
+		LIMIT $2
+	`, category, MaxPicturesPerCategory)
 	if err != nil {
 		return nil, fmt.Errorf("local picture bank by category: %w", err)
 	}

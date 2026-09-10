@@ -109,7 +109,7 @@ func TestHandlerSetsCachingAndRetryHeaders(t *testing.T) {
 		assert.Equal(t, http.StatusOK, recorder.Code)
 		assert.Equal(t, "private, max-age=60", recorder.Header().Get("Cache-Control"))
 		assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
-		assert.Contains(t, recorder.Body.String(), `"categories":["Транспорт"]`)
+		assert.Contains(t, recorder.Body.String(), `"categories":[{"id":"transport","name":"Транспорт"}]`)
 		assert.Contains(t, recorder.Body.String(), `"url":"/api/v1/pictures/123e4567-e89b-12d3-a456-426614174000/content"`)
 	})
 }

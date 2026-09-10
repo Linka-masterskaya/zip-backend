@@ -375,8 +375,12 @@ components:
         mimeType: { type: string }
         categories:
           type: array
-          items: { type: string }
-          description: "Список названий категорий, к которым относится изображение"
+          description: |
+            Категории изображения — той же формы, что и в `GET /pictures/categories`.
+            Возвращается и идентификатор, и имя: по одному имени клиент не может
+            открыть листинг категории. `id` годится как `categoryId` для
+            `/pictures/category/{categoryId}/list`.
+          items: { $ref: '#/components/schemas/PictureCategory' }
         url:
           type: string
           description: "Защищённый proxy URL для получения контента через бэкенд (/api/v1/pictures/{id}/content)"
@@ -1331,6 +1335,9 @@ paths:
       description: |
         Возвращает список изображений, принадлежащих указанной категории. В external-режиме ответ кэшируется, а исходящие запросы ограничены через Redis.
         Response contract идентичен /pictures/search.
+
+        Неизвестная категория — пустой список, а не ошибка: так ведут себя оба адаптера.
+        Выдача ограничена 100 изображениями; пагинации пока нет.
       security: [{ bearerAuth: [] }]
       parameters:
         - name: categoryId
@@ -1338,8 +1345,12 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: UUID категории изображений
+            maxLength: 256
+          description: |
+            Идентификатор категории ровно в том виде, в каком его вернул
+            `GET /pictures/categories`. Формат задаёт источник: в локальном банке
+            это имя категории, во внешнем — его собственный идентификатор.
+            UUID не требуется.
       responses:
         '200':
           description: Список изображений категории

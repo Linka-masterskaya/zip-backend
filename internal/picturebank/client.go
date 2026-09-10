@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -143,11 +144,26 @@ func (c *Client) PicturesByCategory(ctx context.Context, categoryID string) ([]P
 
 	data, _, err := c.cachedGet(ctx, key, path, nil, c.maxMetadataBytes)
 	if err != nil {
+		// Неизвестная категория — это пустая выдача, а не ошибка: в
+		// локальном банке тот же случай возвращает пустой список, и
+		// адаптеры обязаны вести себя одинаково.
+		//
+		// Пишем в лог: тот же 404 приходит и при неверно настроенном
+		// адресе банка, и тогда пустой список — единственный внешний
+		// признак поломки.
+		if errors.Is(err, ErrPictureNotFound) {
+			slog.WarnContext(ctx, "pictures bank reports unknown category",
+				"category_id", categoryID, "err", err)
+			return []Picture{}, nil
+		}
 		return nil, err
 	}
 	var result []Picture
 	if err = json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("%w: decode pictures by category", ErrInvalidResponse)
+	}
+	if len(result) > MaxPicturesPerCategory {
+		result = result[:MaxPicturesPerCategory]
 	}
 	return result, nil
 }

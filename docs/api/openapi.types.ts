@@ -955,13 +955,21 @@ export interface paths {
          * Получить изображения конкретной категории Pictures Bank
          * @description Возвращает список изображений, принадлежащих указанной категории. В external-режиме ответ кэшируется, а исходящие запросы ограничены через Redis.
          *     Response contract идентичен /pictures/search.
+         *
+         *     Неизвестная категория — пустой список, а не ошибка: так ведут себя оба адаптера.
+         *     Выдача ограничена 100 изображениями; пагинации пока нет.
          */
         get: {
             parameters: {
                 query?: never;
                 header?: never;
                 path: {
-                    /** @description UUID категории изображений */
+                    /**
+                     * @description Идентификатор категории ровно в том виде, в каком его вернул
+                     *     `GET /pictures/categories`. Формат задаёт источник: в локальном банке
+                     *     это имя категории, во внешнем — его собственный идентификатор.
+                     *     UUID не требуется.
+                     */
                     categoryId: string;
                 };
                 cookie?: never;
@@ -2876,8 +2884,13 @@ export interface components {
             id: string;
             name: string;
             mimeType?: string;
-            /** @description Список названий категорий, к которым относится изображение */
-            categories: string[];
+            /**
+             * @description Категории изображения — той же формы, что и в `GET /pictures/categories`.
+             *     Возвращается и идентификатор, и имя: по одному имени клиент не может
+             *     открыть листинг категории. `id` годится как `categoryId` для
+             *     `/pictures/category/{categoryId}/list`.
+             */
+            categories: components["schemas"]["PictureCategory"][];
             /** @description Защищённый proxy URL для получения контента через бэкенд (/api/v1/pictures/{id}/content) */
             url: string;
         };

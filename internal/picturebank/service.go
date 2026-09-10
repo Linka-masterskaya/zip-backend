@@ -44,9 +44,21 @@ func (s *Service) Image(ctx context.Context, pictureID string) (*Image, error) {
 	return result, pictureBankError(err)
 }
 
+// maxCategoryIDLength ограничивает длину идентификатора категории: он
+// уезжает в путь внешнего запроса и в ключ кэша.
+const maxCategoryIDLength = 256
+
+// PicturesByCategory не требует UUID: идентификатор категории задаёт
+// источник, а не мы. В локальном банке это имя категории («Животные»),
+// во внешнем — строка вроде «animals». Проверка на UUID отвергала бы
+// любой идентификатор, выданный GET /pictures/categories.
 func (s *Service) PicturesByCategory(ctx context.Context, categoryID string) ([]Picture, error) {
-	if _, err := uuid.Parse(categoryID); err != nil {
-		return nil, apperr.ErrBadRequest.WithMessage("category id must be a valid UUID")
+	categoryID = strings.TrimSpace(categoryID)
+	if categoryID == "" {
+		return nil, apperr.ErrBadRequest.WithMessage("category id is required")
+	}
+	if len(categoryID) > maxCategoryIDLength {
+		return nil, apperr.ErrBadRequest.WithMessage("category id is too long")
 	}
 	result, err := s.client.PicturesByCategory(ctx, categoryID)
 	return result, pictureBankError(err)

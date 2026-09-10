@@ -82,3 +82,47 @@ func assertAppStatus(t *testing.T, err error, status int) {
 	require.True(t, errors.As(err, &appErr))
 	assert.Equal(t, status, appErr.HTTPStatus)
 }
+
+// TestServiceAcceptsNameBasedCategoryID — регрессия: сервис требовал UUID,
+// а локальный банк адресует категории именем («Животные»), которое и
+// отдаёт GET /pictures/categories. Из-за этого эндпоинт в local-режиме
+// отвергал любой идентификатор, выданный им же самим.
+func TestServiceAcceptsNameBasedCategoryID(t *testing.T) {
+	pictureID := uuid.New()
+	source, err := newLocalSource(
+		&fakeLocalRepository{
+			categories: []string{"Животные"},
+			pictures: []localPictureMetadata{{
+				ID: pictureID, Category: "Животные", Title: "Кот", MIMEType: "image/png",
+				MinIOKey: LocalObjectPrefix + "/" + pictureID.String(),
+			}},
+		},
+		&fakeLocalStorage{objects: map[string][]byte{}},
+		1024,
+	)
+	require.NoError(t, err)
+	service := NewService(source)
+
+	categories, err := service.Categories(t.Context())
+	require.NoError(t, err)
+	require.Len(t, categories, 1)
+
+	// Идентификатор берём ровно тот, что вернул список категорий.
+	pictures, err := service.PicturesByCategory(t.Context(), categories[0].ID)
+	require.NoError(t, err)
+	require.Len(t, pictures, 1)
+	assert.Equal(t, pictureID.String(), pictures[0].ID)
+	require.Len(t, pictures[0].Categories, 1)
+	assert.Equal(t, "Животные", pictures[0].Categories[0].ID)
+}
+
+func TestServiceRejectsEmptyAndOverlongCategoryID(t *testing.T) {
+	client := &fakePictureClient{}
+	service := NewService(client)
+
+	_, err := service.PicturesByCategory(t.Context(), "   ")
+	assertAppStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+	_, err = service.PicturesByCategory(t.Context(), string(make([]rune, maxCategoryIDLength+1)))
+	assertAppStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+	assert.Zero(t, client.calls, "невалидный идентификатор не должен доходить до источника")
+}

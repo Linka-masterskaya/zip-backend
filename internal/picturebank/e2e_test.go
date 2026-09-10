@@ -33,11 +33,11 @@ import (
 const picturesE2EJWTSecret = "pictures-e2e-only-secret"
 
 type e2ePictureResponse struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	MIMEType   string   `json:"mimeType"`
-	Categories []string `json:"categories"`
-	URL        string   `json:"url"`
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	MIMEType   string     `json:"mimeType"`
+	Categories []Category `json:"categories"`
+	URL        string     `json:"url"`
 }
 
 func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
@@ -126,7 +126,7 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 		require.Len(t, searchPictures, 1)
 		assert.Equal(t, pictureID.String(), searchPictures[0].ID)
 		assert.Equal(t, "Кот", searchPictures[0].Name)
-		assert.Equal(t, []string{"Животные"}, searchPictures[0].Categories)
+		assert.Equal(t, []Category{{ID: categoryID.String(), Name: "Животные"}}, searchPictures[0].Categories)
 		assert.Equal(t, "/api/v1/pictures/"+pictureID.String()+"/content", searchPictures[0].URL)
 	}
 
@@ -137,7 +137,7 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	require.Len(t, categoryPictures, 1)
 	assert.Equal(t, pictureID.String(), categoryPictures[0].ID)
 	assert.Equal(t, "Кот", categoryPictures[0].Name)
-	assert.Equal(t, []string{"Животные"}, categoryPictures[0].Categories)
+	assert.Equal(t, []Category{{ID: categoryID.String(), Name: "Животные"}}, categoryPictures[0].Categories)
 	assert.Equal(t, "/api/v1/pictures/"+pictureID.String()+"/content", categoryPictures[0].URL)
 	assert.EqualValues(t, 1, categoriesCalls.Load(), "categories response must be cached")
 	assert.EqualValues(t, 1, searchCalls.Load(), "search response must be cached")

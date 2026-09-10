@@ -1,17 +1,21 @@
 package picturebank
 
 type PictureResponse struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	MIMEType   string   `json:"mimeType,omitempty"`
-	Categories []string `json:"categories"`
-	URL        string   `json:"url"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	MIMEType string `json:"mimeType,omitempty"`
+	// Categories отдаёт и идентификатор, и имя: по одному имени клиент
+	// не может открыть листинг категории, а именно он и нужен после
+	// показа картинки. Форма совпадает с GET /pictures/categories.
+	Categories []Category `json:"categories"`
+	URL        string     `json:"url"`
 }
 
 func toPictureResponse(pic Picture) PictureResponse {
-	categories := make([]string, 0, len(pic.Categories))
-	for _, cat := range pic.Categories {
-		categories = append(categories, cat.Name)
+	// Пустой список вместо null: поле обязательное по контракту.
+	categories := pic.Categories
+	if categories == nil {
+		categories = []Category{}
 	}
 	return PictureResponse{
 		ID:         pic.ID,

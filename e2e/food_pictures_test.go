@@ -19,11 +19,11 @@ import (
 )
 
 type foodPictureResponse struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	MIMEType   string   `json:"mimeType"`
-	Categories []string `json:"categories"`
-	URL        string   `json:"url"`
+	ID         string                 `json:"id"`
+	Name       string                 `json:"name"`
+	MIMEType   string                 `json:"mimeType"`
+	Categories []picturebank.Category `json:"categories"`
+	URL        string                 `json:"url"`
 }
 
 func TestE2E_FoodPicturesFolderAssignedToStudent(t *testing.T) {
