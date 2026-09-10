@@ -41,19 +41,20 @@ const getAccessibleMediaQuery = `
 	    )
 	  )`
 
-// mediaUnreferencedPredicate закрывает все три внешние ссылки на media_files:
-// media_usages, аватар активного ученика и результат TTS-джобы. Аватар
-// архивированного ученика свободен, восстановления в API нет. Список и счётчик обязаны
-// делить один предикат, иначе total разъедется с items.
-const mediaUnreferencedPredicate = `
-	    NOT EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
-	    AND NOT EXISTS (
+// mediaReferencedPredicate is the single source of truth for whether a media file
+// is occupied. It is shared by list/unused, single delete and batch delete so the
+// three paths cannot drift apart.
+const mediaReferencedPredicate = `
+	    EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
+	    OR EXISTS (
 	      SELECT 1 FROM students s
 	      WHERE s.avatar_media_id = media_files.id AND s.deleted_at IS NULL
 	    )
-	    AND NOT EXISTS (SELECT 1 FROM tts_jobs j
+	    OR EXISTS (SELECT 1 FROM tts_jobs j
 				WHERE j.media_id = media_files.id
 				AND j.status IN ('pending', 'in_progress'))`
+
+const mediaUnreferencedPredicate = `NOT (` + mediaReferencedPredicate + `)`
 
 const listMediaQuery = `
 	SELECT id, org_id, uploader_id, name, sha256, mime_type, media_type,
@@ -99,21 +100,14 @@ const lockMediaBatchQuery = `
 	FOR UPDATE OF m, u`
 
 const mediaInUseQuery = `
-	SELECT EXISTS (SELECT 1 FROM media_usages WHERE media_id = $1)
-			OR EXISTS (SELECT 1 FROM students WHERE avatar_media_id = $1 AND deleted_at IS NULL)
-			OR EXISTS (SELECT 1 FROM tts_jobs WHERE media_id = $1 AND status IN ('pending', 'in_progress'))`
+	SELECT (` + mediaReferencedPredicate + `)
+	FROM media_files
+	WHERE id = $1`
 
 const referencedMediaBatchQuery = `
 	SELECT id FROM media_files
 	WHERE id = ANY($1::uuid[])
-	  AND (
-	    EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
-	    OR EXISTS (
-	      SELECT 1 FROM students s
-	      WHERE s.avatar_media_id = media_files.id AND s.deleted_at IS NULL
-	    )
-	    OR EXISTS (SELECT 1 FROM tts_jobs j WHERE j.media_id = media_files.id AND j.status IN ('pending', 'in_progress'))
-	  )`
+	  AND (` + mediaReferencedPredicate + `)`
 
 const deleteMediaQuery = `
 	DELETE FROM media_files WHERE id = $1`
