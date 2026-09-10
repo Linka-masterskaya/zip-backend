@@ -1512,3 +1512,124 @@ func TestRepositoryAssignCleansOrphanedMedia(t *testing.T) {
 		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
 	assert.Equal(t, int64(0), used)
 }
+
+func TestPublishGloballySetsFlagForAdmin(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "global publish org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := json.RawMessage(`{"blocks":[]}`)
+
+	created, err := repo.Create(t.Context(), ownerID,
+		CreateInput{Title: "Global Pack", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+
+	// admin=true → published_globally=true
+	published, err := repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, true)
+	require.NoError(t, err)
+	assert.Equal(t, "published", published.Status)
+
+	var global bool
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT published_globally FROM packs WHERE id = $1`, created.ID).Scan(&global))
+	assert.True(t, global, "admin publish sets published_globally")
+	_ = orgID
+}
+
+func TestPublishDoesNotSetGlobalFlagForRegularUser(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "regular publish org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := json.RawMessage(`{"blocks":[]}`)
+
+	created, err := repo.Create(t.Context(), ownerID,
+		CreateInput{Title: "Regular Pack", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+
+	// admin=false → published_globally=false
+	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, false)
+	require.NoError(t, err)
+
+	var global bool
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT published_globally FROM packs WHERE id = $1`, created.ID).Scan(&global))
+	assert.False(t, global, "regular user publish keeps published_globally false")
+}
+
+func TestUnpublishResetsGlobalFlag(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "unpublish global org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := json.RawMessage(`{"blocks":[]}`)
+
+	created, err := repo.Create(t.Context(), ownerID,
+		CreateInput{Title: "Will Unpublish", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+
+	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, true)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Unpublish(t.Context(), ownerID, created.ID, true))
+
+	var global bool
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT published_globally FROM packs WHERE id = $1`, created.ID).Scan(&global))
+	assert.False(t, global, "unpublish resets published_globally")
+}
+
+func TestGlobalPackVisibleToOtherOrg(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "global org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := json.RawMessage(`{"blocks":[]}`)
+
+	created, err := repo.Create(t.Context(), ownerID,
+		CreateInput{Title: "Global Visible", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, true)
+	require.NoError(t, err)
+
+	// Пользователь из другой орги
+	_, viewerID, _ := seedPackOwner(t, pool, "viewer org")
+
+	items, total, err := repo.ListWithTotal(t.Context(), viewerID,
+		ListInput{Section: "library", Limit: 10})
+	require.NoError(t, err)
+
+	ids := make([]uuid.UUID, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	assert.Contains(t, ids, created.ID, "global pack visible to other org in library")
+	assert.Equal(t, 1, total)
+}
+
+func TestGlobalPackNotVisibleInMyPacks(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "global my org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := json.RawMessage(`{"blocks":[]}`)
+
+	created, err := repo.Create(t.Context(), ownerID,
+		CreateInput{Title: "Global Hidden", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, true)
+	require.NoError(t, err)
+
+	// Другая орга, секция "my"
+	_, viewerID, _ := seedPackOwner(t, pool, "viewer my org")
+
+	items, _, err := repo.ListWithTotal(t.Context(), viewerID,
+		ListInput{Section: "my", Limit: 10})
+	require.NoError(t, err)
+
+	ids := make([]uuid.UUID, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	assert.NotContains(t, ids, created.ID, "global pack not in my packs for other org")
+}
