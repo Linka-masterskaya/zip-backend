@@ -44,6 +44,10 @@ const getAccessibleMediaQuery = `
 // mediaReferencedPredicate is the single source of truth for whether a media file
 // is occupied. It is shared by list/unused, single delete and batch delete so the
 // three paths cannot drift apart.
+//
+// An archived student does not keep avatar media referenced because archived
+// students cannot be restored through the API. TTS media is referenced only while
+// the job is pending or in progress; terminal jobs release the media.
 const mediaReferencedPredicate = `
 	    EXISTS (SELECT 1 FROM media_usages mu WHERE mu.media_id = media_files.id)
 	    OR EXISTS (
