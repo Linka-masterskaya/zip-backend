@@ -308,6 +308,11 @@ const countAccessibleMediaQuery = `
 const deletePackMediaUsagesQuery = `
 	DELETE FROM media_usages WHERE source_type = 'pack' AND source_id = $1`
 
+const deletePackVersionMediaUsagesQuery = `
+	DELETE FROM media_usages
+	WHERE source_type = 'pack_version'
+	  AND source_id IN (SELECT id FROM pack_versions WHERE pack_id = $1)`
+
 const insertPackMediaUsagesQuery = `
 	INSERT INTO media_usages (media_id, source_type, source_id)
 	SELECT unnest($1::uuid[]), 'pack', $2`
@@ -531,35 +536,3 @@ const qualifiedPackColumns = `
 	p.published_at, p.title, p.status,
 	p.age, p.difficulty, p.goals, p.notes, p.config,
 	p.created_at, p.updated_at`
-
-const collectPackMediaQuery = `
-SELECT media_id FROM media_usages
-	WHERE source_type = 'pack'
-	AND source_id = $1
-UNION ALL
-SELECT media_id FROM media_usages
-	WHERE source_type = 'pack_adaptation'
-	AND source_id = ANY($2::uuid[])`
-
-const deleteOrphanedMediaQuery = `
-	WITH deleted AS (
-		DELETE FROM media_files
-		WHERE id = ANY($1)
-				AND NOT EXISTS (
-						SELECT 1 FROM media_usages WHERE media_id = media_files.id
-				)
-				AND NOT EXISTS (
-					SELECT 1 FROM students WHERE avatar_media_id = media_files.id AND deleted_at IS NULL
-				)
-				AND NOT EXISTS (
-						SELECT 1 FROM tts_jobs WHERE media_id = media_files.id AND status IN ('pending', 'in_progress')
-				)
-		RETURNING org_id, size_bytes
-	),
-	updated AS (
-		UPDATE organizations o
-		SET storage_used_bytes = GREATEST(o.storage_used_bytes - d.total, 0)
-		FROM (SELECT org_id, SUM(size_bytes) AS total FROM deleted GROUP BY org_id) d
-		WHERE o.id = d.org_id
-	)
-	SELECT count(*), COALESCE(SUM(size_bytes), 0) FROM deleted`

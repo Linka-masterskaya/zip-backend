@@ -300,24 +300,6 @@ const studentColumnsWithAvatar = `
 	s.cards_shift, s.last_lesson_at, s.avatar_media_id, m.minio_key,
 	s.created_at, s.updated_at, s.deleted_at`
 
-// collectAffectedMediaQuery собирает media_id, затронутые удалением
-// ученика: из его паков, их адаптаций, версий и адаптаций чужих паков.
-const collectAffectedMediaQuery = `
-	SELECT DISTINCT mu.media_id FROM media_usages mu
-	WHERE mu.source_id IN (
-    SELECT id FROM packs WHERE folder_id = ANY($1)
-    UNION ALL
-    SELECT pa.id FROM pack_adaptations pa
-        JOIN packs p ON pa.pack_id = p.id
-        WHERE p.folder_id = ANY($1)
-    UNION ALL
-    SELECT pv.id FROM pack_versions pv
-        JOIN packs p ON pv.pack_id = p.id
-        WHERE p.folder_id = ANY($1)
-    UNION ALL
-    SELECT id FROM pack_adaptations WHERE student_id = $2
-)`
-
 // ForceDelete сносит ученика насовсем вместе с его папкой: soft delete
 // оставляет карточку в базе, а здесь нужно именно полное удаление. Всё в
 // одной транзакции — частично снесённая картотека хуже, чем не снесённая.
@@ -329,11 +311,10 @@ func (r *Repository) ForceDelete(ctx context.Context, ownerID, studentID uuid.UU
 	defer rollbackStudentTx(ctx, tx)
 
 	var locked uuid.UUID
-	var avatarMediaID *uuid.UUID
 	err = tx.QueryRow(ctx, `
-		SELECT id, avatar_media_id FROM students
+		SELECT id FROM students
 		WHERE id = $2 AND defectologist_id = $1
-		FOR UPDATE`, ownerID, studentID).Scan(&locked, &avatarMediaID)
+		FOR UPDATE`, ownerID, studentID).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -345,26 +326,7 @@ func (r *Repository) ForceDelete(ctx context.Context, ownerID, studentID uuid.UU
 	if err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, collectAffectedMediaQuery, folderIDs, studentID)
-	if err != nil {
-		return fmt.Errorf("student force delete collect media: %w", err)
-	}
-	mediaIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return fmt.Errorf("student force delete collect media: %w", err)
-	}
-	if avatarMediaID != nil {
-		mediaIDs = append(mediaIDs, *avatarMediaID)
-		if _, err = tx.Exec(ctx,
-			`UPDATE students SET avatar_media_id = NULL WHERE id = $1`,
-			studentID); err != nil {
-			return fmt.Errorf("student force delete clear avatar: %w", err)
-		}
-	}
 	if err = purgeStudentPacks(ctx, tx, studentID, folderIDs); err != nil {
-		return err
-	}
-	if err = deleteOrphanedMedia(ctx, tx, mediaIDs); err != nil {
 		return err
 	}
 	// Папки удаляются снизу вверх: folders.parent_id объявлен RESTRICT,
@@ -492,53 +454,6 @@ func purgeStudentPacks(
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM packs WHERE folder_id = ANY($1)`, folderIDs); err != nil {
 		return fmt.Errorf("student force delete packs: %w", err)
-	}
-	return nil
-}
-
-const deleteOrphanedMediaQuery = `
-	WITH deleted AS (
-		DELETE FROM media_files
-		WHERE id = ANY($1)
-				AND NOT EXISTS (
-						SELECT 1 FROM media_usages WHERE media_id = media_files.id
-				)
-				AND NOT EXISTS (
-					SELECT 1 FROM students WHERE avatar_media_id = media_files.id AND deleted_at IS NULL
-				)
-				AND NOT EXISTS (
-						SELECT 1 FROM tts_jobs WHERE media_id = media_files.id AND status IN ('pending', 'in_progress')
-				)
-		RETURNING org_id, size_bytes
-	),
-	updated AS (
-		UPDATE organizations o
-		SET storage_used_bytes = GREATEST(o.storage_used_bytes - d.total, 0)
-		FROM (SELECT org_id, SUM(size_bytes) AS total FROM deleted GROUP BY org_id) d
-		WHERE o.id = d.org_id
-	)
-	SELECT count(*), COALESCE(SUM(size_bytes), 0) FROM deleted`
-
-// deleteOrphanedMedia удаляет записи media_files без ссылок в media_usages
-// и возвращает квоту организации.
-func deleteOrphanedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []uuid.UUID) error {
-	if len(mediaIDs) == 0 {
-		return nil
-	}
-	_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) ORDER BY id FOR UPDATE", mediaIDs)
-	if err != nil {
-		return fmt.Errorf("select for update media: %w", err)
-	}
-	var count int64
-	var totalBytes int64
-	if err := tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {
-		return fmt.Errorf("delete orphaned media: %w", err)
-	}
-	if count > 0 {
-		slog.InfoContext(ctx, "orphaned media deleted",
-			"count", count,
-			"bytes", totalBytes,
-		)
 	}
 	return nil
 }

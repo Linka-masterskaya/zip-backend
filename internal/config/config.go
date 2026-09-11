@@ -283,8 +283,9 @@ type TTSConfig struct {
 
 // CronConfig contains scheduled task settings.
 type CronConfig struct {
-	VoiceRefresh VoiceRefreshCron `mapstructure:"voice_refresh"`
-	TTSCleanup   TTSCleanupCron   `mapstructure:"tts_cleanup"`
+	VoiceRefresh       VoiceRefreshCron       `mapstructure:"voice_refresh"`
+	TTSCleanup         TTSCleanupCron         `mapstructure:"tts_cleanup"`
+	MediaOrphanScanner MediaOrphanScannerCron `mapstructure:"media_orphan_scanner"`
 }
 
 // VoiceRefreshCron contains voice cache refresh settings.
@@ -300,6 +301,13 @@ type TTSCleanupCron struct {
 	ReaperGracePeriod time.Duration `mapstructure:"reaper_grace_period"`
 	Limit             int           `mapstructure:"limit"`
 	ReaperLimit       int           `mapstructure:"reaper_limit"`
+}
+
+// MediaOrphanScannerCron contains global media_files orphan cleanup settings.
+type MediaOrphanScannerCron struct {
+	Interval    time.Duration `mapstructure:"interval"`
+	GracePeriod time.Duration `mapstructure:"grace_period"`
+	BatchSize   int           `mapstructure:"batch_size"`
 }
 
 // Load reads application settings from a configuration file and applies
@@ -559,6 +567,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cron.tts_cleanup.reaper_grace_period", "5m")
 	v.SetDefault("cron.tts_cleanup.limit", 100)
 	v.SetDefault("cron.tts_cleanup.reaper_limit", 1000)
+	v.SetDefault("cron.media_orphan_scanner.interval", "1h")
+	v.SetDefault("cron.media_orphan_scanner.grace_period", "1m")
+	v.SetDefault("cron.media_orphan_scanner.batch_size", 500)
 }
 
 // validateConfig validates required configuration fields.
@@ -612,6 +623,9 @@ func validateConfig(cfg *Config) error {
 	if err := validateTTSCleanupConfig(&cfg.Cron.TTSCleanup); err != nil {
 		return err
 	}
+	if err := validateMediaOrphanScannerConfig(&cfg.Cron.MediaOrphanScanner); err != nil {
+		return err
+	}
 
 	// TTSapi validation
 	if cfg.TTS.ServiceURL == "" {
@@ -645,6 +659,18 @@ func validateTTSCleanupConfig(cfg *TTSCleanupCron) error {
 		return fmt.Errorf("cron.tts_cleanup.limit must be > 0")
 	case cfg.ReaperLimit <= 0:
 		return fmt.Errorf("cron.tts_cleanup.reaper_limit must be > 0")
+	}
+	return nil
+}
+
+func validateMediaOrphanScannerConfig(cfg *MediaOrphanScannerCron) error {
+	switch {
+	case cfg.Interval <= 0:
+		return fmt.Errorf("cron.media_orphan_scanner.interval must be > 0")
+	case cfg.GracePeriod <= 0:
+		return fmt.Errorf("cron.media_orphan_scanner.grace_period must be > 0")
+	case cfg.BatchSize <= 0:
+		return fmt.Errorf("cron.media_orphan_scanner.batch_size must be > 0")
 	}
 	return nil
 }

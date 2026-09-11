@@ -540,7 +540,7 @@ func TestRepositoryPublicationAdminIsScopedToOrganization(t *testing.T) {
 	assert.Equal(t, "draft", fetched.Status)
 }
 
-func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) {
+func TestRepositoryAssignmentsAreSnapshotsAndLeaveOrphansForScanner(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	orgID, ownerID, folderID := seedPackOwner(t, pool, "assignment org")
@@ -649,11 +649,11 @@ func TestRepositoryAssignmentsAreSnapshotsAndDeleteWithoutOrphans(t *testing.T) 
 	var count int
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
-	assert.Zero(t, count)
+	assert.Equal(t, 1, count)
 	var used int64
 	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
-	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(4), used)
 }
 
 func TestRepositoryAdaptationArchiveUsesSnapshotMediaAndChecksAccess(t *testing.T) {
@@ -1179,9 +1179,9 @@ func TestRepositoryDeleteKeepsSharedMedia(t *testing.T) {
 	assert.Equal(t, int64(8), used)
 }
 
-// TestRepositoryUnassignCleansOrphanedMedia: при отвязке адаптации
-// медиа, которая больше нигде не используется, удаляется с возвратом квоты.
-func TestRepositoryUnassignCleansOrphanedMedia(t *testing.T) {
+// TestRepositoryUnassignLeavesOrphanForScanner: отвязка снимает usage, но
+// media_files и квоту теперь подбирает единый orphan-scanner.
+func TestRepositoryUnassignLeavesOrphanForScanner(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	orgID, ownerID, folderID := seedPackOwner(t, pool, "unassign org")
@@ -1223,15 +1223,15 @@ func TestRepositoryUnassignCleansOrphanedMedia(t *testing.T) {
 	var count int
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
-	assert.Zero(t, count)
+	assert.Equal(t, 1, count)
 
 	var used int64
 	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
-	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(5), used)
 }
 
-func TestRepositoryUpdateAdaptationConfigCleansOrphanedMedia(t *testing.T) {
+func TestRepositoryUpdateAdaptationConfigLeavesOrphanForScanner(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	orgID, ownerID, folderID := seedPackOwner(t, pool, "update config org")
@@ -1277,7 +1277,7 @@ func TestRepositoryUpdateAdaptationConfigCleansOrphanedMedia(t *testing.T) {
 		`UPDATE organizations SET storage_used_bytes = 7 WHERE id = $1`, orgID)
 	require.NoError(t, err)
 
-	// Обновляем конфиг без медиа — старая должна удалиться.
+	// Обновляем конфиг без медиа — usage снимается, а строку удалит scanner.
 	emptyConfig := json.RawMessage(`{
 		"metadata":{"version":"2.0"},
 		"settings":{"columns":1,"rows":1},
@@ -1289,12 +1289,12 @@ func TestRepositoryUpdateAdaptationConfigCleansOrphanedMedia(t *testing.T) {
 	var count int
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
-	assert.Zero(t, count)
+	assert.Equal(t, 1, count)
 
 	var used int64
 	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
-	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(7), used)
 }
 
 func TestRepositoryDeleteKeepsAvatarMedia(t *testing.T) {
@@ -1400,7 +1400,7 @@ func TestRepositoryDeleteKeepsTTSJobMedia(t *testing.T) {
 	assert.Equal(t, int64(6), used)
 }
 
-func TestRepositorySaveConfigCleansOrphanedMedia(t *testing.T) {
+func TestRepositorySaveConfigLeavesOrphanForScanner(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	orgID, ownerID, folderID := seedPackOwner(t, pool, "save config org")
@@ -1437,7 +1437,7 @@ func TestRepositorySaveConfigCleansOrphanedMedia(t *testing.T) {
 	_, err = repo.SaveConfig(t.Context(), ownerID, created.ID, configWithMedia, []uuid.UUID{mediaID})
 	require.NoError(t, err)
 
-	// Второй SaveConfig — убирает media, orphan должен удалиться.
+	// Второй SaveConfig убирает usage; orphan остаётся до cron-сканера.
 	emptyConfig := json.RawMessage(`{
 		"metadata":{"version":"2.0"},
 		"settings":{"columns":1,"rows":1},
@@ -1449,15 +1449,15 @@ func TestRepositorySaveConfigCleansOrphanedMedia(t *testing.T) {
 	var count int
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
-	assert.Zero(t, count)
+	assert.Equal(t, 1, count)
 
 	var used int64
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
-	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(10), used)
 }
 
-func TestRepositoryAssignCleansOrphanedMedia(t *testing.T) {
+func TestRepositoryAssignLeavesOrphanForScanner(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	orgID, ownerID, folderID := seedPackOwner(t, pool, "assign cleanup org")
@@ -1498,17 +1498,69 @@ func TestRepositoryAssignCleansOrphanedMedia(t *testing.T) {
 		`UPDATE organizations SET storage_used_bytes = 15 WHERE id = $1`, orgID)
 	require.NoError(t, err)
 
-	// Повторный assign — replace usages, старая media становится orphan.
+	// Повторный assign заменяет usages; старую media подберёт cron-сканер.
 	_, err = repo.Assign(t.Context(), ownerID, created.ID, []uuid.UUID{studentID})
 	require.NoError(t, err)
 
 	var count int
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&count))
-	assert.Zero(t, count)
+	assert.Equal(t, 1, count)
 
 	var used int64
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
-	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(15), used)
+}
+
+func TestRepositoryDeleteClearsPackVersionUsageForScanner(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "pack version orphan org")
+
+	created, err := repo.Create(t.Context(), ownerID, CreateInput{
+		Title:    "Versioned Pack",
+		FolderID: folderID,
+		Config:   []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`),
+	})
+	require.NoError(t, err)
+
+	mediaID := uuid.New()
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_files (
+			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
+		)
+		VALUES ($1, $2, $3, 'version.png', $4, 'image/png', 'image', 11, $5)`,
+		mediaID, orgID, ownerID, "pack-version-orphan-sha", "media/"+mediaID.String())
+	require.NoError(t, err)
+
+	versionID := uuid.New()
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO pack_versions (id, pack_id, version, config, created_by)
+		VALUES ($1, $2, 1, '{}'::jsonb, $3)`, versionID, created.ID, ownerID)
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `
+		INSERT INTO media_usages (media_id, source_type, source_id)
+		VALUES ($1, 'pack_version', $2)`, mediaID, versionID)
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(),
+		`UPDATE organizations SET storage_used_bytes = 11 WHERE id = $1`, orgID)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Delete(t.Context(), ownerID, created.ID))
+
+	var usages int
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_usages WHERE media_id = $1`, mediaID).Scan(&usages))
+	assert.Zero(t, usages, "pack_version usage must not outlive its cascaded pack_version row")
+
+	var mediaCount int
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&mediaCount))
+	assert.Equal(t, 1, mediaCount, "global orphan scanner owns media_files deletion")
+
+	var used int64
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
+	assert.Equal(t, int64(11), used, "quota is returned only when the scanner deletes the orphan")
 }
