@@ -618,12 +618,9 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 
-	// TTS cleanup validation. NewTicker panics on non-positive intervals, and
-	// the storage reaper requires a bounded positive batch size.
-	if err := validateTTSCleanupConfig(&cfg.Cron.TTSCleanup); err != nil {
-		return err
-	}
-	if err := validateMediaOrphanScannerConfig(&cfg.Cron.MediaOrphanScanner); err != nil {
+	// Cron validation. NewTicker panics on non-positive intervals, and
+	// scheduled cleanup jobs require valid positive batch sizes.
+	if err := validateCronConfig(&cfg.Cron); err != nil {
 		return err
 	}
 
@@ -643,6 +640,13 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 	return nil
+}
+
+func validateCronConfig(cfg *CronConfig) error {
+	if err := validateTTSCleanupConfig(&cfg.TTSCleanup); err != nil {
+		return err
+	}
+	return validateMediaOrphanScannerConfig(&cfg.MediaOrphanScanner)
 }
 
 func validateTTSCleanupConfig(cfg *TTSCleanupCron) error {
