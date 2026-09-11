@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
@@ -19,7 +20,7 @@ type repository interface {
 	UpdateStatusTTS(context.Context, uuid.UUID, string) error
 	GetOrgID(context.Context, uuid.UUID) (uuid.UUID, error)
 	GetJob(context.Context, uuid.UUID, uuid.UUID) (*JobDetails, error)
-	GetVoices(context.Context) ([]Voice, error)
+	GetVoices(context.Context) ([]Voice, time.Time, error)
 	UpsertVoices(context.Context, []Voice) error
 	CreateMediaWithSucceededJob(context.Context, uuid.UUID, uuid.UUID, *BankEntry, MediaFileInput) (uuid.UUID, uuid.UUID, error)
 }
@@ -38,6 +39,7 @@ type Service struct {
 	ttsClient  ttsClient
 	mimetype   string
 	maxTextLen int
+	voiceTTL   time.Duration
 }
 
 func NewService(repo repository, pub publisher, ttsClient ttsClient, cfg ServiceConfig) *Service {
@@ -47,12 +49,13 @@ func NewService(repo repository, pub publisher, ttsClient ttsClient, cfg Service
 		ttsClient:  ttsClient,
 		mimetype:   cfg.MimeType,
 		maxTextLen: cfg.MaxTextLen,
+		voiceTTL:   cfg.VoiceTTL,
 	}
 }
 
 func (s *Service) CreateAudio(ctx context.Context, ttsData TTSDataRequest) (string, error) {
 	ttsData.Text = normalize(ttsData.Text)
-	ttsData.Voice = normalize(ttsData.Voice)
+	ttsData.Voice = strings.TrimSpace(ttsData.Voice)
 	if ttsData.Text == "" || ttsData.Voice == "" {
 		return "", apperr.ErrBadRequest
 	}
@@ -140,11 +143,13 @@ func (s *Service) GetJob(ctx context.Context, jobID uuid.UUID) (string, string, 
 }
 
 func (s *Service) GetVoices(ctx context.Context) ([]Voice, error) {
-	voices, err := s.repo.GetVoices(ctx)
-	if err == nil {
+	voices, lastUpdate, err := s.repo.GetVoices(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "tts.GetVoices: cache miss", "err", err)
+	}
+	if !lastUpdate.IsZero() && time.Since(lastUpdate) < s.voiceTTL {
 		return voices, nil
 	}
-	slog.WarnContext(ctx, "tts.GetVoices: cache miss", "err", err)
 
 	voices, err = s.ttsClient.Voices(ctx)
 	if err != nil {

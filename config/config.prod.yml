@@ -187,6 +187,7 @@ ttsapi:
   max_concurrent: 10
   max_text_len: 5000
   max_body_size: 65536
+  voice_ttl: 24h
 
 cron:
   voice_refresh:

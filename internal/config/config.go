@@ -279,6 +279,7 @@ type TTSConfig struct {
 	MaxTextLen    int           `mapstructure:"max_text_len"`
 	MaxBodySize   int64         `mapstructure:"max_body_size"`
 	MimeType      string        `mapstructure:"mime_type"`
+	VoiceTTL      time.Duration `mapstructure:"voice_ttl"`
 }
 
 // CronConfig contains scheduled task settings.
@@ -529,6 +530,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ttsapi.mime_type", "audio/mpeg")
 	v.SetDefault("ttsapi.max_concurrent", 10)
 	v.SetDefault("ttsapi.rate_limit", 120)
+	v.SetDefault("ttsapi.voice_ttl", "24h")
 
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})
@@ -622,6 +624,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.TTS.MaxConcurrent <= 0 {
 		return fmt.Errorf("ttsapi.max_concurrent must be > 0")
+	}
+	if cfg.TTS.VoiceTTL < 5*time.Minute {
+		return fmt.Errorf("ttsapi.voice_ttl must be > 0")
 	}
 
 	// CORS validation

@@ -2,6 +2,7 @@ package tts
 
 import (
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -45,6 +46,7 @@ type JobDetails struct {
 type ServiceConfig struct {
 	MaxTextLen int
 	MimeType   string
+	VoiceTTL   time.Duration
 }
 
 type Voice struct {

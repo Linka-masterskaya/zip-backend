@@ -142,18 +142,19 @@ func (r *Repository) UpsertVoices(ctx context.Context, voices []Voice) error {
 	return nil
 }
 
-func (r *Repository) GetVoices(ctx context.Context) ([]Voice, error) {
+func (r *Repository) GetVoices(ctx context.Context) ([]Voice, time.Time, error) {
 	var data []byte
-	err := r.pool.QueryRow(ctx, getCache, "tts_voices").Scan(&data)
+	var lastUpdate time.Time
+	err := r.pool.QueryRow(ctx, getCache, "tts_voices").Scan(&data, &lastUpdate)
 	if err != nil {
-		return nil, fmt.Errorf("tts.GetVoices: %w", err)
+		return nil, time.Time{}, fmt.Errorf("tts.GetVoices: %w", err)
 	}
 
 	var voices []Voice
 	if err := json.Unmarshal(data, &voices); err != nil {
-		return nil, fmt.Errorf("tts.GetVoices: unmarshal: %w", err)
+		return nil, time.Time{}, fmt.Errorf("tts.GetVoices: unmarshal: %w", err)
 	}
-	return voices, nil
+	return voices, lastUpdate, nil
 }
 
 func (r *Repository) GetOldAudio(ctx context.Context, ttl time.Duration, limit int) ([]string, error) {
