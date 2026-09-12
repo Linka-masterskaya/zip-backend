@@ -151,16 +151,20 @@ func (s *Service) GetVoices(ctx context.Context) ([]Voice, error) {
 		return voices, nil
 	}
 
-	voices, err = s.ttsClient.Voices(ctx)
+	fresh, err := s.ttsClient.Voices(ctx)
 	if err != nil {
+		slog.WarnContext(ctx, "tts.GetVoices: tts client", "err", err)
+		if len(voices) > 0 {
+			return voices, nil
+		}
 		return nil, err
 	}
 
-	if err := s.repo.UpsertVoices(ctx, voices); err != nil {
+	if err := s.repo.UpsertVoices(ctx, fresh); err != nil {
 		slog.ErrorContext(ctx, "tts.GetVoices: cache write failed", "err", err)
 	}
 
-	return voices, nil
+	return fresh, nil
 }
 
 func (s *Service) failJob(ctx context.Context, jobID uuid.UUID) {

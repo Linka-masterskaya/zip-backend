@@ -786,7 +786,7 @@ func validateTTSConfig(cfg *TTSConfig) error {
 	// Cache refresh floor. Too small a TTL would cause a reload on nearly
 	// every request, hammering the repo and the upstream
 	if cfg.VoiceTTL < 5*time.Minute {
-		return fmt.Errorf("ttsapi.voice_ttl must be > 0")
+		return fmt.Errorf("ttsapi.voice_ttl must be >= 5m")
 	}
 	return nil
 }
