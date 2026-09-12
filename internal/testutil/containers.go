@@ -27,7 +27,7 @@ func NewMinIO(t *testing.T, registries ...*pgxpool.Pool) (*storage.Client, func(
 	const secretKey = "test-secret-key-12345"
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "minio/minio:RELEASE.2025-04-22T22-12-26Z",
+			Image:        "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z",
 			ExposedPorts: []string{"9000/tcp"},
 			Env: map[string]string{
 				"MINIO_ROOT_USER":     accessKey,
