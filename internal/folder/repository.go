@@ -365,12 +365,17 @@ func (r *Repository) Contents(
 	}
 	defer rollback(ctx, tx)
 
-	current, breadcrumbs, err := r.ensureParentVisible(ctx, tx, userID, input)
+	orgID, err := currentUserOrg(ctx, tx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	query, args := contentsQuery(userID, input)
+	current, breadcrumbs, err := r.ensureParentVisible(ctx, tx, userID, orgID, input)
+	if err != nil {
+		return nil, err
+	}
+
+	query, args := contentsQuery(userID, orgID, input)
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("folder contents: %w", err)
@@ -392,7 +397,7 @@ func (r *Repository) Contents(
 		return nil, fmt.Errorf("folder contents rows: %w", err)
 	}
 
-	countQuery, countArgs := contentsCountQuery(userID, input)
+	countQuery, countArgs := contentsCountQuery(userID, orgID, input)
 	var total int
 	if err = tx.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("folder contents count: %w", err)
@@ -418,16 +423,12 @@ func (r *Repository) Contents(
 func (r *Repository) ensureParentVisible(
 	ctx context.Context,
 	tx pgx.Tx,
-	userID uuid.UUID,
+	userID, orgID uuid.UUID,
 	input ContentsInput,
 ) (*CurrentFolder, []Breadcrumb, error) {
 	breadcrumbs := []Breadcrumb{{Name: sectionLabel(input.Section)}}
 	if input.ParentID == nil {
 		return nil, breadcrumbs, nil
-	}
-	orgID, err := currentUserOrg(ctx, tx, userID)
-	if err != nil {
-		return nil, nil, err
 	}
 	rows, err := tx.Query(ctx, `
          WITH RECURSIVE ancestors AS (
@@ -489,8 +490,8 @@ func (r *Repository) ensureParentVisible(
 	return current, breadcrumbs, nil
 }
 
-func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
-	base, args := contentsBaseQuery(userID, input)
+func contentsQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []any) {
+	base, args := contentsBaseQuery(userID, orgID, input)
 
 	orderColumn := "name"
 	if input.Sort == "updated_at" {
@@ -512,12 +513,12 @@ func contentsQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 	return query, args
 }
 
-func contentsCountQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
-	base, args := contentsBaseQuery(userID, input)
+func contentsCountQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []any) {
+	base, args := contentsBaseQuery(userID, orgID, input)
 	return "SELECT count(*) FROM (" + base + ") AS counted", args
 }
 
-func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
+func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []any) {
 	if input.ParentID == nil {
 		// Корень раздела содержит только папки: packs.folder_id объявлен
 		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
@@ -530,12 +531,15 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			FROM folders f
 			WHERE f.parent_id IS NULL
 			  AND f.section = $2
-			  AND ($2 = 'library' OR f.owner_id = $1)
+			  AND (
+			        ($2 = 'library' AND f.org_id = $3)
+			        OR ($2 <> 'library' AND f.owner_id = $1)
+			      )
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
 		       age, difficulty
 		FROM items`
-		args := []any{userID, input.Section}
+		args := []any{userID, input.Section, orgID}
 		return appendContentsFilters(query, args, input)
 	}
 
@@ -543,7 +547,7 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 	packScope := "AND p.owner_id = $2"
 	if input.Section == SectionLibrary {
 		packFolderColumn = "p.library_folder_id"
-		packScope = "AND p.published_at IS NOT NULL"
+		packScope = "AND p.published_at IS NOT NULL AND p.org_id = $3"
 	}
 
 	studentAssignments := ""
@@ -570,8 +574,11 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id = $1
-			  AND f.section = $3
-			  AND ($3 = 'library' OR f.owner_id = $2)
+			  AND f.section = $4
+			  AND (
+			        ($4 = 'library' AND f.org_id = $3)
+			        OR ($4 <> 'library' AND f.owner_id = $2)
+			      )
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       p.published_at IS NOT NULL, p.updated_at,
@@ -582,7 +589,7 @@ func contentsBaseQuery(userID uuid.UUID, input ContentsInput) (string, []any) {
 		SELECT type, id, name, kind, student_id, published, updated_at,
 		       age, difficulty
 		FROM items`
-	args := []any{*input.ParentID, userID, input.Section}
+	args := []any{*input.ParentID, userID, orgID, input.Section}
 	return appendContentsFilters(query, args, input)
 }
 
