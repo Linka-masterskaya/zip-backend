@@ -117,7 +117,7 @@ func TestStudentFolderOwnershipAndMixedContents(t *testing.T) {
 	assert.Nil(t, page.Items[1].Difficulty)
 }
 
-func TestStudentAssignmentsExcludeArchivedStudents(t *testing.T) {
+func TestArchivedStudentFolderAndContentsAreNotAddressable(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "owner")
 	studentID := seedFolderStudent(t, pool, ownerID)
@@ -153,15 +153,104 @@ func TestStudentAssignmentsExcludeArchivedStudents(t *testing.T) {
 	assert.Equal(t, packID, active.Items[0].ID)
 	assert.Equal(t, 1, active.Total)
 
+	child, err := service.Create(ctx, CreateInput{
+		ParentID: &studentFolder.ID, Section: SectionStudents,
+		Kind: KindFolder, Name: "Вложенные материалы",
+	})
+	require.NoError(t, err)
+
 	_, err = pool.Exec(ctx, `UPDATE students SET deleted_at = now() WHERE id = $1`, studentID)
 	require.NoError(t, err)
 
-	archived, err := service.Contents(ctx, ContentsInput{
+	_, err = service.Contents(ctx, ContentsInput{
 		Section: SectionStudents, ParentID: &studentFolder.ID,
 	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+
+	_, err = service.List(ctx, ListInput{
+		Section: SectionStudents, ParentID: &studentFolder.ID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+
+	// Известный id вложенной папки не должен позволять обойти скрытие дерева.
+	_, err = service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, ParentID: &child.ID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+
+	var foldersCount, adaptationsCount int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM folders WHERE id IN ($1, $2)),
+			(SELECT count(*) FROM pack_adaptations WHERE pack_id = $3 AND student_id = $4)`,
+		studentFolder.ID, child.ID, packID, studentID,
+	).Scan(&foldersCount, &adaptationsCount))
+	assert.Equal(t, 2, foldersCount)
+	assert.Equal(t, 1, adaptationsCount)
+}
+
+func TestArchivedStudentFolderIsHiddenFromListsFiltersAndPagination(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "student folder visibility")
+	activeStudentID := seedFolderStudent(t, pool, ownerID)
+	archivedStudentID := seedFolderStudent(t, pool, ownerID)
+	service := NewService(NewRepository(pool))
+	ctx := folderContext(ownerID)
+
+	activeFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionStudents, Kind: KindStudent,
+		StudentID: &activeStudentID, Name: "Активный ученик",
+	})
 	require.NoError(t, err)
-	assert.Empty(t, archived.Items)
-	assert.Zero(t, archived.Total)
+	archivedFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionStudents, Kind: KindStudent,
+		StudentID: &archivedStudentID, Name: "Архивный ученик",
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `UPDATE students SET deleted_at = now() WHERE id = $1`, archivedStudentID)
+	require.NoError(t, err)
+
+	root, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, root.Items, 1)
+	assert.Equal(t, activeFolder.ID, root.Items[0].ID)
+	assert.Equal(t, 1, root.Total)
+
+	pastEnd, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, Limit: 1, Offset: 1,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, pastEnd.Items)
+	assert.Equal(t, 1, pastEnd.Total)
+
+	byArchivedName, err := service.Contents(ctx, ContentsInput{
+		Section: SectionStudents, Query: archivedFolder.Name, Type: "folder",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, byArchivedName.Items)
+	assert.Zero(t, byArchivedName.Total)
+
+	listed, err := service.List(ctx, ListInput{
+		Section: SectionStudents, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.Equal(t, activeFolder.ID, listed[0].ID)
+
+	listedPastEnd, err := service.List(ctx, ListInput{
+		Section: SectionStudents, Limit: 1, Offset: 1,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, listedPastEnd)
+
+	var archivedFolderCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM folders WHERE id = $1`, archivedFolder.ID,
+	).Scan(&archivedFolderCount))
+	assert.Equal(t, 1, archivedFolderCount)
 }
 
 func TestConcurrentChildCreateAndParentDeleteNeverCascadesData(t *testing.T) {
