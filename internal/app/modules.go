@@ -50,6 +50,7 @@ type modules struct {
 	ttsConsumer    *broker.Consumer
 	voiceRefresher *cron.VoiceRefresher
 	ttsCleaner     *cron.TTSCleaner
+	mediaOrphans   *cron.MediaOrphanScanner
 }
 
 func buildPicturesSource(in *infra) (picturebank.Source, error) {
@@ -241,6 +242,12 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 		cfg.Cron.TTSCleanup.ReaperLimit,
 	)
 
+	mediaOrphans := cron.NewMediaOrphanScanner(
+		mediaRepo,
+		cfg.Cron.MediaOrphanScanner.BatchSize,
+		cfg.Cron.MediaOrphanScanner.GracePeriod,
+	)
+
 	return &modules{
 		packs: httpapi.PackHandlers{
 			Pack:     pack.NewHandler(packService),
@@ -284,6 +291,7 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 		ttsConsumer:    ttsConsumer,
 		voiceRefresher: voiceRefresher,
 		ttsCleaner:     ttsCleaner,
+		mediaOrphans:   mediaOrphans,
 	}, nil
 }
 

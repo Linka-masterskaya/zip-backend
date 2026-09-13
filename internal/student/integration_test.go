@@ -539,14 +539,14 @@ func TestStudentForceDeleteRemovesFolderTree(t *testing.T) {
 	assertCount(t, pool, `SELECT count(*) FROM folders WHERE id = $1`, childID, 0)
 	assertCount(t, pool, `SELECT count(*) FROM packs WHERE id = $1`, packID, 0)
 	assertCount(t, pool, `SELECT count(*) FROM media_usages WHERE source_id = $1`, packID, 0)
-	// Файл без других ссылок удаляется вместе с возвратом квоты.
-	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, mediaID, 0)
+	// Usage снят, но сам orphan и квоту теперь подбирает единый cron-сканер.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, mediaID, 1)
 
 	var used int64
 	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT storage_used_bytes FROM organizations
 		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
-	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(10), used)
 
 	// Повторный вызов — 404.
 	assertStudentStatus(t, service.ForceDelete(studentContext(ownerID), created.ID),
@@ -661,10 +661,9 @@ func TestStudentForceDeleteKeepsSharedMedia(t *testing.T) {
 	assert.Equal(t, int64(10), used)
 }
 
-// TestStudentForceDeleteCleansAdaptationMedia: при удалении ученика
-// медиа его адаптации чужого пака удаляется, если больше нигде не
-// используется; сам пак и его медиа остаются.
-func TestStudentForceDeleteCleansAdaptationMedia(t *testing.T) {
+// TestStudentForceDeleteLeavesAdaptationMediaForScanner: force-delete снимает
+// usage адаптации, а orphan media_files удаляется отдельно cron-сканером.
+func TestStudentForceDeleteLeavesAdaptationMediaForScanner(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
 	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
@@ -708,8 +707,8 @@ func TestStudentForceDeleteCleansAdaptationMedia(t *testing.T) {
 
 	require.NoError(t, service.ForceDelete(studentContext(ownerID), studentB.ID))
 
-	// Медиа адаптации удалена — больше не используется.
-	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, adaptMedia, 0)
+	// Медиа адаптации стала orphan, но пока остаётся в media_files.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, adaptMedia, 1)
 	// Медиа пака A жива — пак A цел.
 	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, packMedia, 1)
 	// Пак A цел.
@@ -719,13 +718,12 @@ func TestStudentForceDeleteCleansAdaptationMedia(t *testing.T) {
 	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT storage_used_bytes FROM organizations
 		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
-	assert.Equal(t, int64(10), used)
+	assert.Equal(t, int64(20), used)
 }
 
-// TestStudentForceDeleteCleansAvatarMedia: при удалении ученика
-// его аватар удаляется из media_files и квота возвращается,
-// если аватар больше нигде не используется.
-func TestStudentForceDeleteCleansAvatarMedia(t *testing.T) {
+// TestStudentForceDeleteLeavesAvatarMediaForScanner: удаление ученика снимает
+// ссылку на аватар вместе со строкой students, но media cleanup выполняет cron.
+func TestStudentForceDeleteLeavesAvatarMediaForScanner(t *testing.T) {
 	pool := studentTestDB(t)
 	ownerID := seedStudentUser(t, pool, "owner")
 	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
@@ -744,12 +742,12 @@ func TestStudentForceDeleteCleansAvatarMedia(t *testing.T) {
 
 	require.NoError(t, service.ForceDelete(studentContext(ownerID), student.ID))
 
-	// Аватар удалён — больше не используется.
-	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, avatarMedia, 0)
+	// Аватар стал orphan, но остаётся до запуска scanner.
+	assertCount(t, pool, `SELECT count(*) FROM media_files WHERE id = $1`, avatarMedia, 1)
 
 	var used int64
 	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT storage_used_bytes FROM organizations
 		 WHERE id = (SELECT org_id FROM users WHERE id = $1)`, ownerID).Scan(&used))
-	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(10), used)
 }

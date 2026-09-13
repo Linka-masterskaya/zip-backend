@@ -34,6 +34,7 @@ type App struct {
 	ttsRun          func(context.Context) error
 	voiceRefreshRun func(context.Context)
 	ttsCleanupRun   func(context.Context)
+	mediaOrphanRun  func(context.Context)
 }
 
 // Bootstrap loads configuration, creates infrastructure and wires the servers.
@@ -104,6 +105,9 @@ func Bootstrap(cfgPath string) (*App, error) {
 		ttsCleanupRun: func(ctx context.Context) {
 			mods.ttsCleaner.Run(ctx, cfg.Cron.TTSCleanup.Interval)
 		},
+		mediaOrphanRun: func(ctx context.Context) {
+			mods.mediaOrphans.Run(ctx, cfg.Cron.MediaOrphanScanner.Interval)
+		},
 	}, nil
 }
 
@@ -150,6 +154,11 @@ func (a *App) Run(ctx context.Context) error {
 
 	startBackground(func(ctx context.Context) error {
 		a.ttsCleanupRun(ctx)
+		return nil
+	})
+
+	startBackground(func(ctx context.Context) error {
+		a.mediaOrphanRun(ctx)
 		return nil
 	})
 

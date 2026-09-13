@@ -138,7 +138,7 @@ func TestRepositoryListScopesSearchesFiltersAndPaginatesByCursor(t *testing.T) {
 	assert.Equal(t, []uuid.UUID{note.ID, oldCat.ID}, idsOf(secondPage), "resumes right after the cursor")
 }
 
-func TestRepositoryListMarksOnlyOwnFilesDeletable(t *testing.T) {
+func TestRepositoryListMarksUnreferencedOrgFilesDeletable(t *testing.T) {
 	env := newMediaEnv(t)
 
 	own := env.seed(env.orgID, env.userID, "sha-own", 10)
@@ -255,7 +255,6 @@ func TestRepositoryDeleteBatchOfForeignFilesOnly(t *testing.T) {
 	env := newMediaEnv(t)
 
 	own := env.seed(env.orgID, env.userID, "sha-own", 100)
-	env.seed(env.orgID, env.mateID, "sha-mate", 40)
 	foreign := env.seed(env.otherOrgID, env.strangerID, "sha-foreign", 9)
 
 	outcome, err := env.repo.DeleteBatch(t.Context(), env.userID,
@@ -265,7 +264,7 @@ func TestRepositoryDeleteBatchOfForeignFilesOnly(t *testing.T) {
 	assert.Empty(t, outcome.InUse)
 	assert.Zero(t, outcome.FreedBytes)
 
-	assert.Equal(t, int64(140), env.storageUsed(env.orgID), "квота своей организации не тронута")
+	assert.Equal(t, int64(100), env.storageUsed(env.orgID), "квота своей организации не тронута")
 	assert.Equal(t, int64(9), env.storageUsed(env.otherOrgID))
 
 	var alive int
@@ -358,6 +357,13 @@ func (e *mediaEnv) attachTTSJob(mediaID uuid.UUID) {
 	require.NoError(e.t, err)
 }
 
+func (e *mediaEnv) attachActiveTTSJob(mediaID uuid.UUID) {
+	_, err := e.pool.Exec(e.t.Context(), `
+		INSERT INTO tts_jobs (org_id, text, voice, status, media_id)
+		VALUES ($1, $2, 'alena', 'in_progress', $3)`, e.orgID, "active-"+mediaID.String(), mediaID)
+	require.NoError(e.t, err)
+}
+
 func (e *mediaEnv) storageUsed(org uuid.UUID) int64 {
 	var used int64
 	require.NoError(e.t, e.pool.QueryRow(e.t.Context(),
@@ -378,4 +384,277 @@ func applyMediaMigrations(db *sql.DB) error {
 		return err
 	}
 	return goose.Up(db, "../../migrations")
+}
+
+func TestRepositoryOrphanScannerDeletesInBatchesAndReturnsQuota(t *testing.T) {
+	env := newMediaEnv(t)
+
+	freeA := env.seed(env.orgID, env.userID, "scan-free-a", 10)
+	freeB := env.seed(env.orgID, env.userID, "scan-free-b", 20)
+	freeC := env.seed(env.orgID, env.userID, "scan-free-c", 30)
+	usedByPack := env.seed(env.orgID, env.userID, "scan-pack", 40)
+	activeAvatar := env.seed(env.orgID, env.userID, "scan-avatar", 50)
+	archivedAvatar := env.seed(env.orgID, env.userID, "scan-archived", 60)
+	usedByTTS := env.seed(env.orgID, env.userID, "scan-tts", 70)
+
+	env.attachPackUsage(usedByPack.ID)
+	env.attachAvatar(activeAvatar.ID)
+	env.attachArchivedAvatar(archivedAvatar.ID)
+	env.attachActiveTTSJob(usedByTTS.ID)
+
+	cleared, err := env.repo.ClearSoftDeletedStudentAvatars(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), cleared)
+
+	first, err := env.repo.DeleteOrphanBatch(t.Context(), 2, time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), first.Count)
+	assert.Equal(t, int64(2), first.Candidates)
+
+	second, err := env.repo.DeleteOrphanBatch(t.Context(), 2, time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), second.Count)
+	assert.Equal(t, int64(2), second.Candidates)
+
+	last, err := env.repo.DeleteOrphanBatch(t.Context(), 2, time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	assert.Zero(t, last.Count)
+	assert.Zero(t, last.Candidates)
+
+	assert.Equal(t, int64(4), first.Count+second.Count)
+	assert.Equal(t, int64(120), first.Bytes+second.Bytes)
+	assert.Equal(t, int64(160), env.storageUsed(env.orgID))
+
+	var orphanCount int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files
+		WHERE id = ANY($1::uuid[])`, []uuid.UUID{
+		freeA.ID, freeB.ID, freeC.ID, archivedAvatar.ID,
+	}).Scan(&orphanCount))
+	assert.Zero(t, orphanCount)
+
+	var referencedCount int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files
+		WHERE id = ANY($1::uuid[])`, []uuid.UUID{
+		usedByPack.ID, activeAvatar.ID, usedByTTS.ID,
+	}).Scan(&referencedCount))
+	assert.Equal(t, 3, referencedCount, "активная tts_jobs и активный avatar должны удерживать media")
+
+	var staleArchivedLinks int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM students
+		WHERE deleted_at IS NOT NULL AND avatar_media_id IS NOT NULL`).Scan(&staleArchivedLinks))
+	assert.Zero(t, staleArchivedLinks)
+}
+
+func TestRepositoryOrphanScannerGracePeriodProtectsFreshMedia(t *testing.T) {
+	env := newMediaEnv(t)
+	fresh := env.seed(env.orgID, env.userID, "scan-fresh", 25)
+
+	cutoff := time.Now().Add(-time.Minute)
+	batch, err := env.repo.DeleteOrphanBatch(t.Context(), 10, cutoff)
+	require.NoError(t, err)
+	assert.Zero(t, batch.Count)
+	assert.Zero(t, batch.Candidates)
+	assert.Equal(t, int64(25), env.storageUsed(env.orgID),
+		"fresh unreferenced media must keep quota during the grace period")
+
+	_, err = env.pool.Exec(t.Context(), `
+		UPDATE media_files SET created_at = $2 WHERE id = $1`,
+		fresh.ID, time.Now().Add(-2*time.Minute))
+	require.NoError(t, err)
+
+	batch, err = env.repo.DeleteOrphanBatch(t.Context(), 10, cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), batch.Count)
+	assert.Equal(t, int64(1), batch.Candidates)
+	assert.Equal(t, int64(25), batch.Bytes)
+	assert.Zero(t, env.storageUsed(env.orgID))
+}
+
+func TestRepositoryOrphanScannerGracePeriodProtectsRecentlyReuploadedMedia(t *testing.T) {
+	env := newMediaEnv(t)
+	file := env.seed(env.orgID, env.userID, "scan-reuploaded", 25)
+	old := time.Now().Add(-10 * time.Minute)
+	cutoff := time.Now().Add(-time.Minute)
+
+	_, err := env.pool.Exec(t.Context(), `
+		UPDATE media_files SET created_at = $2 WHERE id = $1`, file.ID, old)
+	require.NoError(t, err)
+	_, err = env.pool.Exec(t.Context(), `
+		INSERT INTO storage_objects (key, size, content_type, sha256, created_at, updated_at)
+		VALUES ($1, $2, 'image/png', $3, $4, now())`,
+		file.MinIOKey, file.SizeBytes, file.SHA256, old)
+	require.NoError(t, err)
+
+	batch, err := env.repo.DeleteOrphanBatch(t.Context(), 10, cutoff)
+	require.NoError(t, err)
+	assert.Zero(t, batch.Count)
+	assert.Zero(t, batch.Candidates)
+	assert.Equal(t, int64(25), env.storageUsed(env.orgID),
+		"a recent PutObject must protect an older deduplicated media_files row")
+
+	_, err = env.pool.Exec(t.Context(), `
+		UPDATE storage_objects SET updated_at = $2 WHERE key = $1`, file.MinIOKey, old)
+	require.NoError(t, err)
+
+	batch, err = env.repo.DeleteOrphanBatch(t.Context(), 10, cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), batch.Count)
+	assert.Equal(t, int64(1), batch.Candidates)
+	assert.Equal(t, int64(25), batch.Bytes)
+	assert.Zero(t, env.storageUsed(env.orgID))
+}
+
+func TestRepositoryOrphanScannerRechecksRecentReuploadBeforeDelete(t *testing.T) {
+	env := newMediaEnv(t)
+	file := env.seed(env.orgID, env.userID, "scan-race-reupload", 25)
+	old := time.Now().Add(-10 * time.Minute)
+	cutoff := time.Now().Add(-time.Minute)
+
+	_, err := env.pool.Exec(t.Context(), `
+		UPDATE media_files SET created_at = $2 WHERE id = $1`, file.ID, old)
+	require.NoError(t, err)
+	_, err = env.pool.Exec(t.Context(), `
+		INSERT INTO storage_objects (key, size, content_type, sha256, created_at, updated_at)
+		VALUES ($1, $2, 'image/png', $3, $4, $4)`,
+		file.MinIOKey, file.SizeBytes, file.SHA256, old)
+	require.NoError(t, err)
+
+	tx, err := env.pool.Begin(t.Context())
+	require.NoError(t, err)
+	defer rollbackMediaTx(t.Context(), tx)
+
+	candidateIDs, err := selectOrphanCandidates(t.Context(), tx, 1, cutoff)
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{file.ID}, candidateIDs)
+
+	_, err = tx.Exec(t.Context(), `
+		UPDATE storage_objects SET updated_at = now() WHERE key = $1`, file.MinIOKey)
+	require.NoError(t, err)
+
+	var deleted OrphanBatchResult
+	require.NoError(t, tx.QueryRow(t.Context(), deleteLockedOrphansQuery, candidateIDs, cutoff).
+		Scan(&deleted.Count, &deleted.Bytes))
+	assert.Zero(t, deleted.Count, "second-stage freshness check must protect a re-upload that starts after selection")
+	assert.Zero(t, deleted.Bytes)
+	require.NoError(t, tx.Commit(t.Context()))
+
+	var alive int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files WHERE id = $1`, file.ID).Scan(&alive))
+	assert.Equal(t, 1, alive)
+	assert.Equal(t, int64(25), env.storageUsed(env.orgID))
+}
+
+func TestRepositoryOrphanScannerRechecksAvatarBeforeDelete(t *testing.T) {
+	env := newMediaEnv(t)
+	file := env.seed(env.orgID, env.userID, "scan-race-avatar", 25)
+
+	tx, err := env.pool.Begin(t.Context())
+	require.NoError(t, err)
+	defer rollbackMediaTx(t.Context(), tx)
+
+	candidateIDs, err := selectOrphanCandidates(t.Context(), tx, 1, time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{file.ID}, candidateIDs)
+
+	_, err = tx.Exec(t.Context(), `
+		UPDATE students SET avatar_media_id = $2 WHERE id = $1`, env.studentID, file.ID)
+	require.NoError(t, err)
+
+	var deleted OrphanBatchResult
+	require.NoError(t, tx.QueryRow(t.Context(), deleteLockedOrphansQuery, candidateIDs, time.Now().Add(time.Minute)).
+		Scan(&deleted.Count, &deleted.Bytes))
+	assert.Zero(t, deleted.Count, "second-stage reference check must protect a newly attached avatar")
+	assert.Zero(t, deleted.Bytes)
+	require.NoError(t, tx.Commit(t.Context()))
+
+	var avatarID uuid.UUID
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT avatar_media_id FROM students WHERE id = $1`, env.studentID).Scan(&avatarID))
+	assert.Equal(t, file.ID, avatarID)
+
+	var alive int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files WHERE id = $1`, file.ID).Scan(&alive))
+	assert.Equal(t, 1, alive)
+	assert.Equal(t, int64(25), env.storageUsed(env.orgID), "quota must stay reserved for referenced media")
+}
+
+func TestRepositoryOrphanScannerRechecksTTSBeforeDelete(t *testing.T) {
+	env := newMediaEnv(t)
+	file := env.seed(env.orgID, env.userID, "scan-race-tts", 35)
+
+	tx, err := env.pool.Begin(t.Context())
+	require.NoError(t, err)
+	defer rollbackMediaTx(t.Context(), tx)
+
+	candidateIDs, err := selectOrphanCandidates(t.Context(), tx, 1, time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{file.ID}, candidateIDs)
+
+	_, err = tx.Exec(t.Context(), `
+		INSERT INTO tts_jobs (org_id, text, voice, status, media_id)
+		VALUES ($1, $2, 'alena', 'in_progress', $3)`,
+		env.orgID, "race-tts-"+file.ID.String(), file.ID)
+	require.NoError(t, err)
+
+	var deleted OrphanBatchResult
+	require.NoError(t, tx.QueryRow(t.Context(), deleteLockedOrphansQuery, candidateIDs, time.Now().Add(time.Minute)).
+		Scan(&deleted.Count, &deleted.Bytes))
+	assert.Zero(t, deleted.Count, "second-stage reference check must protect a newly attached TTS media")
+	assert.Zero(t, deleted.Bytes)
+	require.NoError(t, tx.Commit(t.Context()))
+
+	var linkedMediaID uuid.UUID
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT media_id FROM tts_jobs WHERE text = $1`, "race-tts-"+file.ID.String()).Scan(&linkedMediaID))
+	assert.Equal(t, file.ID, linkedMediaID)
+
+	var alive int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files WHERE id = $1`, file.ID).Scan(&alive))
+	assert.Equal(t, 1, alive)
+	assert.Equal(t, int64(35), env.storageUsed(env.orgID), "quota must stay reserved for referenced media")
+}
+
+func TestRepositoryOrphanScannerIgnoresFinishedTTSJobs(t *testing.T) {
+	env := newMediaEnv(t)
+
+	succeeded := env.seed(env.orgID, env.userID, "scan-tts-succeeded", 25)
+	failed := env.seed(env.orgID, env.userID, "scan-tts-failed", 35)
+
+	_, err := env.pool.Exec(t.Context(), `
+		INSERT INTO tts_jobs (org_id, text, voice, status, media_id)
+		VALUES
+			($1, $2, 'alena', 'succeeded', $3),
+			($1, $4, 'alena', 'failed', $5)`,
+		env.orgID, "finished-succeeded-"+succeeded.ID.String(), succeeded.ID,
+		"finished-failed-"+failed.ID.String(), failed.ID)
+	require.NoError(t, err)
+
+	batch, err := env.repo.DeleteOrphanBatch(t.Context(), 10, time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), batch.Count)
+	assert.Equal(t, int64(2), batch.Candidates)
+	assert.Equal(t, int64(60), batch.Bytes)
+	assert.Zero(t, env.storageUsed(env.orgID))
+
+	var alive int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files WHERE id = ANY($1::uuid[])`,
+		[]uuid.UUID{succeeded.ID, failed.ID}).Scan(&alive))
+	assert.Zero(t, alive)
+
+	var nulledLinks int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM tts_jobs
+		WHERE text = ANY($1::text[]) AND media_id IS NULL`,
+		[]string{
+			"finished-succeeded-" + succeeded.ID.String(),
+			"finished-failed-" + failed.ID.String(),
+		}).Scan(&nulledLinks))
+	assert.Equal(t, 2, nulledLinks, "finished TTS jobs must not retain media and their FK must be nulled")
 }

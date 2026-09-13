@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -341,12 +340,11 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 	if err != nil {
 		return fmt.Errorf("pack repository delete adaptations: %w", err)
 	}
-	mediaIDs, err := collectPackMedia(ctx, tx, packID, adaptationIDs)
-	if err != nil {
-		return fmt.Errorf("pack repository delete collect media: %w", err)
-	}
 	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, packID); err != nil {
 		return fmt.Errorf("pack repository delete media usages: %w", err)
+	}
+	if _, err = tx.Exec(ctx, deletePackVersionMediaUsagesQuery, packID); err != nil {
+		return fmt.Errorf("pack repository delete version media usages: %w", err)
 	}
 	if len(adaptationIDs) > 0 {
 		if _, err = tx.Exec(ctx, deleteAdaptationUsagesForIDsQuery, adaptationIDs); err != nil {
@@ -355,9 +353,6 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 	}
 	if _, err = tx.Exec(ctx, deletePackQuery, userID, packID); err != nil {
 		return fmt.Errorf("pack repository delete: %w", err)
-	}
-	if err = deleteOrphanedMedia(ctx, tx, mediaIDs); err != nil {
-		return fmt.Errorf("pack repository delete orphaned media: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pack repository delete commit: %w", err)
@@ -536,36 +531,6 @@ func scanListItemWithTotal(row rowScanner) (*ListItem, int, error) {
 		return nil, 0, err
 	}
 	return &result, total, nil
-}
-
-func deleteOrphanedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []uuid.UUID) error {
-	if len(mediaIDs) == 0 {
-		return nil
-	}
-	_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) ORDER BY id FOR UPDATE", mediaIDs)
-	if err != nil {
-		return fmt.Errorf("select for update media: %w", err)
-	}
-	var count int64
-	var totalBytes int64
-	if err := tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {
-		return fmt.Errorf("delete orphaned media: %w", err)
-	}
-	if count > 0 {
-		slog.InfoContext(ctx, "orphaned media deleted",
-			"count", count,
-			"bytes", totalBytes,
-		)
-	}
-	return nil
-}
-
-func collectPackMedia(ctx context.Context, tx pgx.Tx, packID uuid.UUID, adaptationIDs []uuid.UUID) ([]uuid.UUID, error) {
-	mediaRows, err := tx.Query(ctx, collectPackMediaQuery, packID, adaptationIDs)
-	if err != nil {
-		return nil, fmt.Errorf("pack collect media: %w", err)
-	}
-	return pgx.CollectRows(mediaRows, pgx.RowTo[uuid.UUID])
 }
 
 func isMediaFKViolation(err error) bool {
