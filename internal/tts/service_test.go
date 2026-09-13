@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -58,8 +59,8 @@ func (f *fakeRepo) GetJob(ctx context.Context, jobID, orgID uuid.UUID) (*JobDeta
 	return &JobDetails{Status: StatusPending}, nil
 }
 
-func (f *fakeRepo) GetVoices(_ context.Context) ([]Voice, error) {
-	return nil, fmt.Errorf("no cache")
+func (f *fakeRepo) GetVoices(_ context.Context) ([]Voice, time.Time, error) {
+	return nil, time.Time{}, fmt.Errorf("no cache")
 }
 
 func (f *fakeRepo) UpsertVoices(_ context.Context, _ []Voice) error {
@@ -99,6 +100,7 @@ func testService(repo *fakeRepo, pub *fakePub, client *fakeClient) *Service {
 	return NewService(repo, pub, client, ServiceConfig{
 		MaxTextLen: 100,
 		MimeType:   "audio/mpeg",
+		VoiceTTL:   24 * time.Hour,
 	})
 }
 
