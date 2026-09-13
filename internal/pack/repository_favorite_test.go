@@ -1,6 +1,7 @@
 package pack
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -239,4 +240,23 @@ func TestRepositoryConsistencyInCompetitiveAddingAndDeletingToFavorites(t *testi
 	}
 
 	require.NoError(t, group.Wait())
+}
+
+func TestGlobalPackFavoriteByOtherOrg(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "global fav org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := json.RawMessage(`{"blocks":[]}`)
+
+	created, err := repo.Create(t.Context(), ownerID,
+		CreateInput{Title: "Global Fav", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, true)
+	require.NoError(t, err)
+
+	_, viewerID, _ := seedPackOwner(t, pool, "global fav viewer org")
+
+	err = repo.PutFavorite(t.Context(), viewerID, created.ID)
+	require.NoError(t, err)
 }

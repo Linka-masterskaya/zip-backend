@@ -77,7 +77,7 @@ func (r *Repository) Duplicate(
 	}
 	var lockedFolderID uuid.UUID
 	err = tx.QueryRow(
-		ctx, lockDuplicateFolderQuery, userID, targetFolderID, source.OrgID,
+		ctx, lockDuplicateFolderQuery, userID, targetFolderID,
 	).Scan(&lockedFolderID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrFolderNotAllowed
@@ -93,7 +93,6 @@ func (r *Repository) Duplicate(
 	result, err := scanPack(tx.QueryRow(
 		ctx,
 		insertDuplicatePackQuery,
-		source.OrgID,
 		userID,
 		lockedFolderID,
 		title,

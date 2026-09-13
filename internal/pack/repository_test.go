@@ -1633,3 +1633,23 @@ func TestGlobalPackNotVisibleInMyPacks(t *testing.T) {
 	}
 	assert.NotContains(t, ids, created.ID, "global pack not in my packs for other org")
 }
+
+func TestGlobalPackGetByOtherOrg(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "global get org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := json.RawMessage(`{"blocks":[]}`)
+
+	created, err := repo.Create(t.Context(), ownerID,
+		CreateInput{Title: "Global Get", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, true)
+	require.NoError(t, err)
+
+	_, viewerID, _ := seedPackOwner(t, pool, "global get viewer org")
+
+	got, err := repo.Get(t.Context(), viewerID, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, got.ID)
+}
