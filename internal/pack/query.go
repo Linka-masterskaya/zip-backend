@@ -72,71 +72,83 @@ const getPackForPublicationQuery = `
 	  AND u.deleted_at IS NULL
 	  AND (p.owner_id = u.id OR $3)`
 
-const listPacksBaseQuery = `
-	WITH RECURSIVE active_user AS (
-		SELECT id, org_id
-		FROM users
-		WHERE id = $1
-		  AND org_id IS NOT NULL
-		  AND deleted_at IS NULL
-	), folder_students AS (
-		-- Набор может лежать не в самой папке ученика, а во вложенной, у
-		-- которой student_id уже пустой. Спускаемся от папок учеников вниз,
-		-- чтобы у каждой вложенной папки был свой ученик.
-		SELECT f.id, f.student_id
-		FROM folders f
-		WHERE f.kind = 'student' AND f.owner_id = $1
-		UNION ALL
-		SELECT child.id, parent.student_id
-		FROM folders child
-		JOIN folder_students parent ON child.parent_id = parent.id
-	), placements AS (
-		SELECT p.id, p.folder_id AS result_folder_id, p.title, p.age, p.difficulty,
-		       p.created_at, p.updated_at, f.section, fs.student_id
-		FROM active_user u
-		JOIN packs p ON p.owner_id = u.id AND p.org_id = u.org_id
-		LEFT JOIN folder_students fs ON fs.id = p.folder_id
-		JOIN folders f ON f.id = p.folder_id
-		              AND f.owner_id = u.id
-		              AND f.org_id = u.org_id
-		              AND f.section IN ('my', 'students')
-		UNION ALL
-		SELECT p.id, student_folder.id AS result_folder_id, p.title, p.age, p.difficulty,
-		       p.created_at, p.updated_at, student_folder.section, s.id AS student_id
-		FROM active_user u
-		JOIN students s ON s.defectologist_id = u.id
-		               AND s.deleted_at IS NULL
-		JOIN folders student_folder ON student_folder.student_id = s.id
-		                           AND student_folder.owner_id = u.id
-		                           AND student_folder.org_id = u.org_id
-		                           AND student_folder.section = 'students'
-		                           AND student_folder.kind = 'student'
-		JOIN pack_adaptations pa ON pa.student_id = s.id
-		                        AND pa.created_by = u.id
-		JOIN packs p ON p.id = pa.pack_id
-		            AND p.owner_id = u.id
-		            AND p.org_id = u.org_id
-		WHERE p.folder_id <> student_folder.id
-		UNION ALL
-		SELECT p.id, p.library_folder_id AS result_folder_id, p.title, p.age, p.difficulty,
-		       p.created_at, p.updated_at, f.section, NULL::uuid AS student_id
-		FROM active_user u
-		JOIN packs p ON p.org_id = u.org_id
-		            AND p.published_at IS NOT NULL
-		JOIN folders f ON f.id = p.library_folder_id
-		              AND f.org_id = u.org_id
-		              AND f.section = 'library'
-	), filtered AS (
-		SELECT placements.*
-		FROM placements
-		WHERE ($2::text = '' OR title ILIKE '%' || $2::text || '%')
-		  AND ($3::int IS NULL OR age = $3::int)
-		  AND ($4::int IS NULL OR age >= $4::int)
-		  AND ($5::int IS NULL OR age <= $5::int)
-		  AND ($6::text = '' OR difficulty = $6::text)
-		  AND ($7::text = '' OR section = $7::text)
-		  AND ($8::uuid IS NULL OR student_id = $8::uuid)
-	)`
+		const listPacksBaseQuery = `
+		WITH RECURSIVE active_user AS (
+			SELECT id, org_id
+			FROM users
+			WHERE id = $1
+				AND org_id IS NOT NULL
+				AND deleted_at IS NULL
+		), folder_students AS (
+			SELECT f.id, f.student_id
+			FROM folders f
+			WHERE f.kind = 'student' AND f.owner_id = $1
+			UNION ALL
+			SELECT child.id, parent.student_id
+			FROM folders child
+			JOIN folder_students parent ON child.parent_id = parent.id
+		), placements AS (
+			SELECT p.id, p.folder_id AS result_folder_id, p.title, p.age, p.difficulty,
+						 p.created_at, p.updated_at, f.section, fs.student_id,
+						 p.org_id, p.owner_id, p.library_folder_id, p.published_at,
+						 p.status, p.goals, p.notes, p.config
+			FROM active_user u
+			JOIN packs p ON p.owner_id = u.id AND p.org_id = u.org_id
+			LEFT JOIN folder_students fs ON fs.id = p.folder_id
+			JOIN folders f ON f.id = p.folder_id
+										AND f.owner_id = u.id
+										AND f.org_id = u.org_id
+										AND f.section IN ('my', 'students')
+			UNION ALL
+			SELECT p.id, student_folder.id AS result_folder_id, p.title, p.age, p.difficulty,
+						 p.created_at, p.updated_at, student_folder.section, s.id AS student_id,
+						 p.org_id, p.owner_id, p.library_folder_id, p.published_at,
+						 p.status, p.goals, p.notes, p.config
+			FROM active_user u
+			JOIN students s ON s.defectologist_id = u.id
+										 AND s.deleted_at IS NULL
+			JOIN folders student_folder ON student_folder.student_id = s.id
+																 AND student_folder.owner_id = u.id
+																 AND student_folder.org_id = u.org_id
+																 AND student_folder.section = 'students'
+																 AND student_folder.kind = 'student'
+			JOIN pack_adaptations pa ON pa.student_id = s.id
+															AND pa.created_by = u.id
+			JOIN packs p ON p.id = pa.pack_id
+									AND p.owner_id = u.id
+									AND p.org_id = u.org_id
+			WHERE p.folder_id <> student_folder.id
+			UNION ALL
+			SELECT p.id, p.library_folder_id AS result_folder_id, p.title, p.age, p.difficulty,
+						 p.created_at, p.updated_at, f.section, NULL::uuid AS student_id,
+						 p.org_id, p.owner_id, p.library_folder_id, p.published_at,
+						 p.status, p.goals, p.notes, p.config
+			FROM active_user u
+			JOIN packs p ON p.org_id = u.org_id
+									AND p.published_at IS NOT NULL
+			JOIN folders f ON f.id = p.library_folder_id
+										AND f.org_id = u.org_id
+										AND f.section = 'library'
+			UNION ALL
+			SELECT p.id, NULL AS result_folder_id, p.title, p.age, p.difficulty,
+						 p.created_at, p.updated_at, 'library' AS section, NULL::uuid AS student_id,
+						 p.org_id, p.owner_id, NULL::uuid AS library_folder_id,
+						 p.published_at, p.status, p.goals, p.notes, p.config
+			FROM packs p, active_user u
+			WHERE p.published_globally = true
+				AND p.published_at IS NOT NULL
+				AND p.org_id != u.org_id
+		), filtered AS (
+			SELECT placements.*
+			FROM placements
+			WHERE ($2::text = '' OR title ILIKE '%' || $2::text || '%')
+				AND ($3::int IS NULL OR age = $3::int)
+				AND ($4::int IS NULL OR age >= $4::int)
+				AND ($5::int IS NULL OR age <= $5::int)
+				AND ($6::text = '' OR difficulty = $6::text)
+				AND ($7::text = '' OR section = $7::text)
+				AND ($8::uuid IS NULL OR student_id = $8::uuid)
+		)`
 
 // listPacksQuery подставляет сортировку из белого списка: значения
 // приходят от клиента, но в SQL попадают только проверенные строки.
@@ -157,23 +169,24 @@ func listPacksQuery(sortBy, order string) string {
 	}
 	return listPacksBaseQuery + `,
 	paged AS (
-		SELECT id, result_folder_id, title, section, created_at, updated_at,
+		SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
+		       published_at, title, status, age, difficulty, goals, notes, config,
+		       section, created_at, updated_at,
 		       count(*) OVER() AS total
 		FROM filtered
 		ORDER BY ` + column + ` ` + direction + `, id, section, result_folder_id
 		LIMIT $9 OFFSET $10
 	)
-	SELECT p.id, p.org_id, p.owner_id, page.result_folder_id, p.library_folder_id,
-	       p.published_at, p.title, p.status, p.age, p.difficulty,
-	       p.goals, p.notes, p.config,
+	SELECT page.id, page.org_id, page.owner_id, page.result_folder_id,
+	       page.library_folder_id, page.published_at, page.title, page.status,
+	       page.age, page.difficulty, page.goals, page.notes, page.config,
 	       EXISTS (
 		   SELECT 1
 		   FROM favorite_packs fp
-		   WHERE fp.user_id = $1 AND fp.pack_id = p.id
+		   WHERE fp.user_id = $1 AND fp.pack_id = page.id
 	       ) AS is_favorite,
-	       page.section, p.created_at, p.updated_at, page.total
+	       page.section, page.created_at, page.updated_at, page.total
 	FROM paged page
-	JOIN packs p ON p.id = page.id
 	ORDER BY ` + outerColumn + ` ` + direction + `, page.id, page.section, page.result_folder_id`
 }
 
@@ -245,6 +258,7 @@ const publishPackQuery = `
 	SET library_folder_id = f.id,
 	    published_at = COALESCE(p.published_at, now()),
 	    status = 'published',
+			published_globally = $4,
 	    updated_at = now()
 	FROM users u, folders f
 	WHERE p.id = $2
@@ -279,6 +293,7 @@ const unpublishPackQuery = `
 	SET library_folder_id = NULL,
 	    published_at = NULL,
 	    status = 'draft',
+	    published_globally = false,
 	    updated_at = now()
 	FROM users u
 	WHERE p.id = $2
