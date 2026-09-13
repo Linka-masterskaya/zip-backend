@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/Linka-masterskaya/zip-backend/internal/avatar"
 	"image"
 	"image/color"
 	"image/png"
@@ -19,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/avatar"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"

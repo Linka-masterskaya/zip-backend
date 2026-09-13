@@ -34,3 +34,7 @@ linters:
         linters:
           - errcheck
           - gosec
+
+formatters:
+  enable:
+    - goimports
