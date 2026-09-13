@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
+	"github.com/Linka-masterskaya/zip-backend/internal/bulk"
 	"github.com/Linka-masterskaya/zip-backend/internal/packfilter"
 	"github.com/Linka-masterskaya/zip-backend/pkg/linka"
 	"github.com/google/uuid"
@@ -23,6 +25,7 @@ type packRepository interface {
 	ListWithTotal(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
+	DeleteBatch(context.Context, uuid.UUID, []uuid.UUID, bool) (*BatchOutcome, error)
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
 	Publish(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, bool) (*Pack, error)
 	Unpublish(context.Context, uuid.UUID, uuid.UUID, bool) error
@@ -30,12 +33,104 @@ type packRepository interface {
 
 // Service contains pack business logic.
 type Service struct {
-	repo packRepository
+	repo             packRepository
+	batchDeleteLimit int
 }
 
 // NewService creates a pack service.
-func NewService(repo packRepository, _ *broker.Publisher) *Service {
-	return &Service{repo: repo}
+func NewService(repo packRepository, _ *broker.Publisher, batchDeleteLimit int) *Service {
+	if batchDeleteLimit <= 0 {
+		batchDeleteLimit = DefaultBatchDeleteLimit
+	}
+	return &Service{repo: repo, batchDeleteLimit: batchDeleteLimit}
+}
+
+// DefaultBatchDeleteLimit ограничивает пачку, когда лимит не задан в конфиге.
+const DefaultBatchDeleteLimit = 100
+
+// BatchOutcome описывает результат пачки на уровне репозитория.
+type BatchOutcome struct {
+	Deleted   []uuid.UUID
+	Published []uuid.UUID
+}
+
+// BatchDeleteResult это ответ ручки массового удаления: что удалено, что
+// пропущено и по какой причине.
+type BatchDeleteResult struct {
+	Deleted []uuid.UUID    `json:"deleted"`
+	Skipped []bulk.Skipped `json:"skipped"`
+	DryRun  bool           `json:"dry_run"`
+}
+
+// DeleteBatch удаляет наборы пачкой. Массовое удаление это N точечных: один
+// опубликованный или чужой набор не роняет остальные, а попадает в skipped.
+func (s *Service) DeleteBatch(ctx context.Context, ids []uuid.UUID, dryRun bool) (*BatchDeleteResult, error) {
+	userID, err := authctx.UserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, apperr.ErrBadRequest.WithMessage("ids must not be empty")
+	}
+	if len(ids) > s.batchDeleteLimit {
+		return nil, apperr.ErrBadRequest.WithMessage(
+			fmt.Sprintf("ids must contain at most %d items", s.batchDeleteLimit),
+		)
+	}
+	unique := uniquePackIDs(ids)
+	outcome, err := s.repo.DeleteBatch(ctx, userID, unique, dryRun)
+	if err != nil {
+		return nil, packError(err)
+	}
+	result := batchDeleteResult(unique, outcome, dryRun)
+	slog.InfoContext(ctx, "pack batch delete",
+		"user_id", userID,
+		"requested", len(unique),
+		"deleted", len(result.Deleted),
+		"skipped", len(result.Skipped),
+		"dry_run", dryRun,
+	)
+	return result, nil
+}
+
+func batchDeleteResult(requested []uuid.UUID, outcome *BatchOutcome, dryRun bool) *BatchDeleteResult {
+	result := &BatchDeleteResult{
+		Deleted: outcome.Deleted,
+		Skipped: []bulk.Skipped{},
+		DryRun:  dryRun,
+	}
+	resolved := make(map[uuid.UUID]struct{}, len(outcome.Deleted)+len(outcome.Published))
+	for _, id := range outcome.Deleted {
+		resolved[id] = struct{}{}
+	}
+	for _, id := range outcome.Published {
+		resolved[id] = struct{}{}
+		result.Skipped = append(result.Skipped, bulk.Skipped{ID: id, Reason: bulk.ReasonPublished})
+	}
+	for _, id := range requested {
+		if _, ok := resolved[id]; !ok {
+			result.Skipped = append(result.Skipped, bulk.Skipped{ID: id, Reason: bulk.ReasonNotFound})
+		}
+	}
+	return result
+}
+
+// uniquePackIDs схлопывает повторы, сохраняя порядок запроса: пользователь
+// видит пропуски в том же порядке, в каком отмечал карточки.
+func uniquePackIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	unique := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }
 
 // Create creates a pack with an empty valid Linka 2.0 config.

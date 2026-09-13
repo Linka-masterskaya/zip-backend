@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/bulk"
 	"github.com/Linka-masterskaya/zip-backend/internal/middleware"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -341,6 +342,7 @@ type fakePackService struct {
 	listFn        func(context.Context, ListInput) (*ListPage, error)
 	updateFn      func(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn      func(context.Context, uuid.UUID) error
+	deleteBatchFn func(context.Context, []uuid.UUID, bool) (*BatchDeleteResult, error)
 	moveFn        func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 }
 
@@ -390,6 +392,17 @@ func (f *fakePackService) Delete(ctx context.Context, packID uuid.UUID) error {
 		return f.deleteFn(ctx, packID)
 	}
 	return nil
+}
+
+func (f *fakePackService) DeleteBatch(
+	ctx context.Context,
+	ids []uuid.UUID,
+	dryRun bool,
+) (*BatchDeleteResult, error) {
+	if f.deleteBatchFn != nil {
+		return f.deleteBatchFn(ctx, ids, dryRun)
+	}
+	return &BatchDeleteResult{Deleted: ids, Skipped: []bulk.Skipped{}, DryRun: dryRun}, nil
 }
 
 func (f *fakePackService) Move(ctx context.Context, packID, folderID uuid.UUID) (*Pack, error) {

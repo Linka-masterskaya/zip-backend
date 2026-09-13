@@ -17,6 +17,7 @@ type folderService interface {
 	Rename(context.Context, uuid.UUID, string) (*Folder, error)
 	Move(context.Context, uuid.UUID, *uuid.UUID) (*Folder, error)
 	Delete(context.Context, uuid.UUID) error
+	DeleteBatch(context.Context, []uuid.UUID, bool) (*BatchDeleteResult, error)
 	Contents(context.Context, ContentsInput) (*ContentsPage, error)
 }
 
@@ -153,6 +154,26 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// Тело batch-delete это только массив UUID и флаг, поэтому лимит взят с
+// запасом к сотне идентификаторов и заодно отсекает гигантский запрос.
+const maxBatchDeleteBody = int64(128 * 1024)
+
+func (h *Handler) BatchDelete(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBatchDeleteBody)
+	var req struct {
+		IDs    []uuid.UUID `json:"ids"`
+		DryRun bool        `json:"dry_run"`
+	}
+	if err := decode(r, &req); err != nil {
+		return apperr.ErrBadRequest.WithMessage("body must contain an ids array of folder UUIDs")
+	}
+	result, err := h.service.DeleteBatch(r.Context(), req.IDs, req.DryRun)
+	if err != nil {
+		return err
+	}
+	return respond(w, http.StatusOK, result)
 }
 
 func pagination(r *http.Request) (int, int, error) {

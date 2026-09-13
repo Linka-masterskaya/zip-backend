@@ -392,6 +392,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/folders/batch-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Массовое удаление пустых папок одной пачкой
+         * @description Идемпотентно. Папка, которой нет или которая недоступна, попадает в `skipped` с причиной `not_found`, непустая — с причиной `not_empty`, остальные из пачки удаляются. Папка, чьи подпапки отмечены в этой же пачке, освобождается вместе с ними и удаляется. Удаление папки вместе с содержимым здесь не выполняется. Сделано методом POST, потому что тело у DELETE вырезают часть прокси и клиентов.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FolderBatchDeleteRequest"];
+                };
+            };
+            responses: {
+                /** @description Что удалено и что пропущено */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FolderBatchDeleteResult"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/folders/{id}": {
         parameters: {
             query?: never;
@@ -1130,6 +1175,51 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Pack"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packs/batch-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Массовое удаление наборов одной пачкой
+         * @description Идемпотентно. Набор, которого нет или который принадлежит другому пользователю, попадает в `skipped` с причиной `not_found`, опубликованный — с причиной `published`, остальные из пачки удаляются вместе со следами использования медиа. Публикация неявно не снимается. Сделано методом POST, потому что тело у DELETE вырезают часть прокси и клиентов.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PackBatchDeleteRequest"];
+                };
+            };
+            responses: {
+                /** @description Что удалено и что пропущено */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PackBatchDeleteResult"];
                     };
                 };
                 400: components["responses"]["BadRequest"];
@@ -3129,6 +3219,54 @@ export interface components {
              * @description Сколько байт вернулось в квоту организации; при dry_run — сколько вернулось бы.
              */
             freed_bytes: number;
+            dry_run: boolean;
+        };
+        PackBatchDeleteRequest: {
+            /** @description Идентификаторы наборов; повторы схлопываются. Размер пачки задаётся настройкой packs.batch_delete_limit, по умолчанию 100. */
+            ids: string[];
+            /**
+             * @description Посчитать результат и ничего не удалять.
+             * @default false
+             */
+            dry_run: boolean;
+        };
+        PackSkipped: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description not_found — набора нет или он принадлежит другому пользователю; published — набор опубликован, сначала нужно снять публикацию
+             * @enum {string}
+             */
+            reason: "not_found" | "published";
+        };
+        /** @description Удалённые и пропущенные наборы одной пачки. */
+        PackBatchDeleteResult: {
+            deleted: string[];
+            skipped: components["schemas"]["PackSkipped"][];
+            dry_run: boolean;
+        };
+        FolderBatchDeleteRequest: {
+            /** @description Идентификаторы папок; повторы схлопываются. Размер пачки задаётся настройкой folders.batch_delete_limit, по умолчанию 100. */
+            ids: string[];
+            /**
+             * @description Посчитать результат и ничего не удалять.
+             * @default false
+             */
+            dry_run: boolean;
+        };
+        FolderSkipped: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description not_found — папки нет или она недоступна; not_empty — в папке остались наборы или подпапки
+             * @enum {string}
+             */
+            reason: "not_found" | "not_empty";
+        };
+        /** @description Удалённые и пропущенные папки одной пачки. */
+        FolderBatchDeleteResult: {
+            deleted: string[];
+            skipped: components["schemas"]["FolderSkipped"][];
             dry_run: boolean;
         };
         PictureCategory: {

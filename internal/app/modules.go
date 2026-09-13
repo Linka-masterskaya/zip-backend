@@ -73,7 +73,7 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 	}
 
 	packRepo := pack.NewRepository(in.db)
-	packService := pack.NewService(packRepo, in.pub)
+	packService := pack.NewService(packRepo, in.pub, in.cfg.Packs.BatchDeleteLimit)
 	favoriteService := pack.NewFavoriteService(packRepo)
 	mediaRepo := media.NewRepository(in.db)
 	mediaService := media.NewService(mediaRepo, in.storage, in.cfg.Media.BatchDeleteLimit)
@@ -260,7 +260,7 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 		},
 		folders: httpapi.FolderHandlers{
 			Folder: folder.NewHandler(
-				folder.NewService(folderRepo),
+				folder.NewService(folderRepo, in.cfg.Folders.BatchDeleteLimit),
 			),
 		},
 		students: httpapi.StudentHandlers{

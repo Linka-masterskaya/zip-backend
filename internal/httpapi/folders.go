@@ -25,6 +25,7 @@ func RegisterFolderRoutes(
 	}
 
 	mux.Handle("POST /api/v1/folders", protected(handlers.Folder.Create))
+	mux.Handle("POST /api/v1/folders/batch-delete", protected(handlers.Folder.BatchDelete))
 	mux.Handle("GET /api/v1/folders", protected(handlers.Folder.List))
 	mux.Handle("GET /api/v1/sections/{section}/contents", protected(handlers.Folder.Contents))
 	mux.Handle("PATCH /api/v1/folders/{id}", protected(handlers.Folder.Rename))

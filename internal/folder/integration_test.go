@@ -23,7 +23,7 @@ func TestFolderTreeDepthCycleAccessAndDelete(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "owner")
 	foreignID := seedFolderUser(t, pool, "foreign")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	root, err := service.Create(ctx, CreateInput{
@@ -82,7 +82,7 @@ func TestStudentFolderOwnershipAndMixedContents(t *testing.T) {
 	foreignID := seedFolderUser(t, pool, "foreign")
 	studentID := seedFolderStudent(t, pool, ownerID)
 	foreignStudentID := seedFolderStudent(t, pool, foreignID)
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	studentFolder, err := service.Create(ctx, CreateInput{
@@ -121,7 +121,7 @@ func TestArchivedStudentFolderAndContentsAreNotAddressable(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "owner")
 	studentID := seedFolderStudent(t, pool, ownerID)
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	studentFolder, err := service.Create(ctx, CreateInput{
@@ -256,7 +256,7 @@ func TestArchivedStudentFolderIsHiddenFromListsFiltersAndPagination(t *testing.T
 func TestConcurrentChildCreateAndParentDeleteNeverCascadesData(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "owner")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 	root, err := service.Create(ctx, CreateInput{
 		Section: SectionMy, Kind: KindFolder, Name: "Root",
@@ -307,7 +307,7 @@ func TestLibraryAdminIsScopedToOrganization(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "owner")
 	foreignHeadID := seedFolderUser(t, pool, "foreign head")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ownerCtx := folderContext(ownerID)
 	foreignHeadCtx := folderContextWithRole(foreignHeadID, "head_defectologist")
 
@@ -412,7 +412,7 @@ func TestSectionRootContentsAreScopedSortedAndFolderOnly(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "root owner")
 	foreignID := seedFolderUser(t, pool, "root foreign")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	beta, err := service.Create(ctx, CreateInput{
@@ -464,7 +464,7 @@ func TestSectionRootContentsAreScopedSortedAndFolderOnly(t *testing.T) {
 func TestContentsRejectsFolderFromAnotherSection(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "section mismatch")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	libraryFolder, err := service.Create(ctx, CreateInput{
@@ -481,7 +481,7 @@ func TestContentsTotalIgnoresPaginationAndVisibility(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "total owner")
 	foreignID := seedFolderUser(t, pool, "total foreign")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	for _, name := range []string{"Альфа", "Бета", "Гамма"} {
@@ -574,7 +574,7 @@ func TestContentsReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
 func TestContentsFilters(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "owner")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	root, err := service.Create(ctx, CreateInput{
@@ -759,7 +759,7 @@ func TestContentsLibraryOrgIsolationForNestedPacks(t *testing.T) {
 func TestContentsBreadcrumbsForFourLevelDepth(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "breadcrumb owner")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	names := []string{"Root", "Level1", "Level2", "Level3", "Level4"}
@@ -800,7 +800,7 @@ func TestContentsBreadcrumbsForFourLevelDepth(t *testing.T) {
 func TestContentsRootHasSectionOnlyBreadcrumbAndNoCurrentFolder(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "root breadcrumb owner")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	page, err := service.Contents(ctx, ContentsInput{Section: SectionMy})
@@ -816,7 +816,7 @@ func TestContentsRejectsParentFromAnotherOrganization(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "cross-org owner")
 	foreignID := seedFolderUser(t, pool, "cross-org foreign")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 
 	foreignFolder, err := service.Create(folderContext(foreignID), CreateInput{
 		Section: SectionMy, Kind: KindFolder, Name: "Foreign root",
@@ -832,7 +832,7 @@ func TestContentsLibraryBreadcrumbsScopedToOrganization(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "library breadcrumb owner")
 	foreignID := seedFolderUser(t, pool, "library breadcrumb foreign")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 
 	libraryRoot, err := service.Create(folderContext(ownerID), CreateInput{
 		Section: SectionLibrary, Kind: KindFolder, Name: "Shared",
@@ -875,7 +875,7 @@ func TestContentsDataIntegrityErrorWhenBreakingTheChain(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "broken chain owner")
 	repo := NewRepository(pool)
-	service := NewService(repo)
+	service := NewService(repo, 0)
 	ctx := folderContext(ownerID)
 
 	root, err := service.Create(ctx, CreateInput{
@@ -909,7 +909,7 @@ func TestContentsStudentsBreadcrumbsAndNonExistentID(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "students breadcrumb owner")
 	studentID := seedFolderStudent(t, pool, ownerID)
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	studentFolder, err := service.Create(ctx, CreateInput{
@@ -946,7 +946,7 @@ func TestContentsStudentsBreadcrumbsAndNonExistentID(t *testing.T) {
 func TestContentsRejectsForeignAncestorInMiddleOfChain(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "middle chain owner")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	root, err := service.Create(ctx, CreateInput{

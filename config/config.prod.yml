@@ -206,3 +206,9 @@ cron:
 
 media:
   batch_delete_limit: 100
+
+packs:
+  batch_delete_limit: 100
+
+folders:
+  batch_delete_limit: 100

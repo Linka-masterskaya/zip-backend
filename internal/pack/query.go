@@ -226,17 +226,20 @@ const updatePackQuery = `
 	  AND p.owner_id = $1
 	RETURNING ` + qualifiedPackColumns
 
-const deletePackQuery = `
-	DELETE FROM packs WHERE id = $2 AND owner_id = $1`
+const deletePacksQuery = `
+	DELETE FROM packs WHERE id = ANY($2::uuid[]) AND owner_id = $1`
 
-const lockPackForDeleteQuery = `
-	SELECT p.published_at IS NOT NULL
+// Наборы лочатся по возрастанию идентификатора: две пачки с пересекающимся
+// составом иначе разойдутся в порядке блокировок и поймают дедлок.
+const lockPacksForDeleteQuery = `
+	SELECT p.id, p.published_at IS NOT NULL
 	FROM packs p
 	JOIN users u ON u.id = $1
-	WHERE p.id = $2
+	WHERE p.id = ANY($2::uuid[])
 	  AND p.owner_id = u.id
 	  AND p.org_id = u.org_id
 	  AND u.deleted_at IS NULL
+	ORDER BY p.id
 	FOR UPDATE OF p, u`
 
 const movePackQuery = `
@@ -324,10 +327,13 @@ const countAccessibleMediaQuery = `
 const deletePackMediaUsagesQuery = `
 	DELETE FROM media_usages WHERE source_type = 'pack' AND source_id = $1`
 
-const deletePackVersionMediaUsagesQuery = `
+const deletePacksMediaUsagesQuery = `
+	DELETE FROM media_usages WHERE source_type = 'pack' AND source_id = ANY($1::uuid[])`
+
+const deletePacksVersionMediaUsagesQuery = `
 	DELETE FROM media_usages
 	WHERE source_type = 'pack_version'
-	  AND source_id IN (SELECT id FROM pack_versions WHERE pack_id = $1)`
+	  AND source_id IN (SELECT id FROM pack_versions WHERE pack_id = ANY($1::uuid[]))`
 
 const insertPackMediaUsagesQuery = `
 	INSERT INTO media_usages (media_id, source_type, source_id)
@@ -484,8 +490,8 @@ const deleteAdaptationUsagesQuery = `
 const deleteAdaptationQuery = `
 	DELETE FROM pack_adaptations WHERE id = $1`
 
-const adaptationIDsForPackQuery = `
-	SELECT id FROM pack_adaptations WHERE pack_id = $1`
+const adaptationIDsForPacksQuery = `
+	SELECT id FROM pack_adaptations WHERE pack_id = ANY($1::uuid[])`
 
 const deleteAdaptationUsagesForIDsQuery = `
 	DELETE FROM media_usages

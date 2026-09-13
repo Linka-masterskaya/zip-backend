@@ -45,6 +45,7 @@ func TestRegisterPackRoutesPatterns(t *testing.T) {
 
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/packs",
+		"POST /api/v1/packs/batch-delete",
 		"POST /api/v1/packs/{id}/duplicate",
 		"POST /api/v1/packs/{id}/share",
 		"GET /api/v1/pack-share-tasks/{id}",
@@ -89,6 +90,7 @@ func TestRegisterFolderRoutesPatterns(t *testing.T) {
 
 	assertPatterns(t, m.patterns, []string{
 		"POST /api/v1/folders",
+		"POST /api/v1/folders/batch-delete",
 		"GET /api/v1/folders",
 		"GET /api/v1/sections/{section}/contents",
 		"PATCH /api/v1/folders/{id}",
