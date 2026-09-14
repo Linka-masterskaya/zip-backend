@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -185,40 +184,10 @@ func (r *Repository) DeleteFromBank(ctx context.Context, keys []string) error {
 }
 
 func (r *Repository) CleanupOldJobs(ctx context.Context, cutoff time.Time) error {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("tts.CleanupOldJobs begin: %w", err)
-	}
-	defer rollback(ctx, tx)
-
-	rows, err := tx.Query(ctx, deleteOldJobs, cutoff)
-	if err != nil {
+	if _, err := r.pool.Exec(ctx, deleteOldJobs, cutoff); err != nil {
 		return fmt.Errorf("tts.CleanupOldJobs delete jobs: %w", err)
 	}
-	mediaIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return fmt.Errorf("tts.CleanupOldJobs collect: %w", err)
-	}
-
-	if len(mediaIDs) > 0 {
-		_, err := tx.Exec(ctx, "SELECT id FROM media_files WHERE id=ANY($1) ORDER BY id FOR UPDATE", mediaIDs)
-		if err != nil {
-			return fmt.Errorf("select for update media: %w", err)
-		}
-		var count int64
-		var totalBytes int64
-		if err = tx.QueryRow(ctx, deleteOrphanedMediaQuery, mediaIDs).Scan(&count, &totalBytes); err != nil {
-			return fmt.Errorf("tts.CleanupOldJobs orphaned media: %w", err)
-		}
-		if count > 0 {
-			slog.InfoContext(ctx, "orphaned media deleted",
-				"count", count,
-				"bytes", totalBytes,
-			)
-		}
-	}
-
-	return tx.Commit(ctx)
+	return nil
 }
 
 func rollback(ctx context.Context, tx pgx.Tx) {

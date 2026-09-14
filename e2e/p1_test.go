@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/cron"
 	"github.com/Linka-masterskaya/zip-backend/internal/cryptox"
 	"github.com/Linka-masterskaya/zip-backend/internal/folder"
 	"github.com/Linka-masterskaya/zip-backend/internal/httpapi"
@@ -423,7 +424,8 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 		response = e2eRequest(
 			t, server, token, http.MethodDelete, "/api/v1/media/"+mediaID.String(), nil,
 		)
-		assert.Equal(t, http.StatusNotFound, response.StatusCode)
+		assert.Equal(t, http.StatusNoContent, response.StatusCode,
+			"unused media remains until the orphan scanner runs and can still be deleted manually")
 		e2eClose(t, response)
 	}
 
@@ -505,6 +507,14 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 	)
 	assert.Equal(t, http.StatusNoContent, response.StatusCode)
 	e2eClose(t, response)
+
+	// AB-70: domain paths only drop references. The global scanner performs
+	// media_files deletion and quota return later (hourly in production).
+	scanner := cron.NewMediaOrphanScanner(media.NewRepository(pool), 100, 0)
+	scanResult, err := scanner.Scan(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), scanResult.Count)
+	assert.Equal(t, first.SizeBytes+replacement.SizeBytes, scanResult.Bytes)
 
 	for _, shelfID := range []uuid.UUID{firstShelf.ID, secondShelf.ID} {
 		assert.Empty(t, e2eFolderContents(t, server, token, "students", shelfID).Items)

@@ -199,6 +199,10 @@ cron:
     reaper_grace_period: 5m
     limit: 100
     reaper_limit: 1000
+  media_orphan_scanner:
+    interval: 1h
+    grace_period: 1m
+    batch_size: 500
 
 media:
   batch_delete_limit: 100
