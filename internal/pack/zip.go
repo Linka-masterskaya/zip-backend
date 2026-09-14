@@ -231,21 +231,38 @@ func prepareArchiveConfig(
 	for blockIndex := range cfg.Blocks {
 		for elementIndex := range cfg.Blocks[blockIndex].Elements {
 			element := &cfg.Blocks[blockIndex].Elements[elementIndex]
-			if element.MediaID == nil {
-				continue
+			// У составной карточки два вложения; каждому — свой путь в архиве.
+			var slots []*mediaSlot
+			if element.Image != nil {
+				slots = append(slots, &mediaSlot{id: element.Image.MediaID, url: &element.Image.MediaURL})
 			}
-			file, exists := filesByID[*element.MediaID]
-			if !exists {
-				return nil, nil, fmt.Errorf("%w: media %s", ErrMissingMediaReference, *element.MediaID)
+			if element.Audio != nil {
+				slots = append(slots, &mediaSlot{id: element.Audio.MediaID, url: &element.Audio.MediaURL})
 			}
-			element.MediaURL = archiveMediaPath(file)
-			if _, exists = seen[file.ID]; !exists {
-				seen[file.ID] = struct{}{}
-				archiveFiles = append(archiveFiles, file)
+			for _, slot := range slots {
+				if slot.id == nil {
+					continue
+				}
+				file, exists := filesByID[*slot.id]
+				if !exists {
+					return nil, nil, fmt.Errorf("%w: media %s", ErrMissingMediaReference, *slot.id)
+				}
+				*slot.url = archiveMediaPath(file)
+				if _, exists = seen[file.ID]; !exists {
+					seen[file.ID] = struct{}{}
+					archiveFiles = append(archiveFiles, file)
+				}
 			}
 		}
 	}
 	return &cfg, archiveFiles, nil
+}
+
+// mediaSlot — вложение карточки: идентификатор файла и место, куда
+// записать его путь внутри архива.
+type mediaSlot struct {
+	id  *uuid.UUID
+	url *string
 }
 
 func archiveMediaPath(file *media.File) string {
@@ -303,11 +320,11 @@ func writeArchivePictures(
 	for blockIndex := range cfg.Blocks {
 		for elementIndex := range cfg.Blocks[blockIndex].Elements {
 			element := &cfg.Blocks[blockIndex].Elements[elementIndex]
-			if element.Kind != linka.ElementKindImage || element.MediaID != nil ||
-				element.SourcePictureID == nil {
+			image := element.Image
+			if image == nil || image.MediaID != nil || image.SourcePictureID == nil {
 				continue
 			}
-			pictureID := *element.SourcePictureID
+			pictureID := *image.SourcePictureID
 			path, exists := paths[pictureID]
 			if !exists {
 				if loader == nil {
@@ -326,7 +343,7 @@ func writeArchivePictures(
 				}
 				paths[pictureID] = path
 			}
-			element.MediaURL = path
+			image.MediaURL = path
 		}
 	}
 	return nil

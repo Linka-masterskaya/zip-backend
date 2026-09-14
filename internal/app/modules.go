@@ -205,6 +205,7 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 		tts.ServiceConfig{
 			MaxTextLen: cfg.TTS.MaxTextLen,
 			MimeType:   cfg.TTS.MimeType,
+			VoiceTTL:   cfg.TTS.VoiceTTL,
 		},
 	)
 

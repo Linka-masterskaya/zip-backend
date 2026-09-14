@@ -28,7 +28,7 @@ services:
 
   minio:
     container_name: local-minio
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     restart: unless-stopped
     ports:
       - "9000:9000" # порт API

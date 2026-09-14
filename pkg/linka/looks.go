@@ -27,6 +27,7 @@ const (
 // пустая заготовка, которой добивается сетка страницы.
 const (
 	LooksCardTypeContent = 0
+	LooksCardTypeSpace   = 1
 	LooksCardTypeEmpty   = 2
 )
 
@@ -124,7 +125,14 @@ func ToLooks(cfg *Config) (*LooksConfig, error) {
 		Pages:       make([]LooksPage, 0, len(cfg.Blocks)),
 	}
 	for i := range cfg.Blocks {
-		page, err := blockToPage(&cfg.Blocks[i], columns, rows)
+		// Сетка страницы — из блока; у наборов без layout действует
+		// сетка набора.
+		layout := cfg.Blocks[i].EffectiveLayout(cfg.Settings)
+		page, err := blockToPage(
+			&cfg.Blocks[i],
+			positiveOr(layout.Columns, columns),
+			positiveOr(layout.Rows, rows),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -281,22 +289,33 @@ func elementCards(elements []Element) ([]LooksCard, error) {
 }
 
 func elementCard(element *Element) (*LooksCard, error) {
-	card := LooksCard{ID: element.ID, CardType: LooksCardTypeContent}
+	card := LooksCard{ID: element.ID}
 	switch element.Kind {
-	case ElementKindText:
-		card.Title = element.Value
-	case ElementKindImage:
-		if element.MediaURL == "" {
-			return nil, fmt.Errorf("%w: element %s", ErrLooksMissingMediaPath, element.ID)
-		}
-		card.ImagePath = element.MediaURL
-	case ElementKindAudio:
-		if element.MediaURL == "" {
-			return nil, fmt.Errorf("%w: element %s", ErrLooksMissingMediaPath, element.ID)
-		}
-		card.AudioPath = element.MediaURL
+	case ElementKindNormal, ElementKindText:
+		card.CardType = LooksCardTypeContent
+	case ElementKindSpace:
+		card.CardType = LooksCardTypeSpace
+		return &card, nil
+	case ElementKindEmpty:
+		card.CardType = LooksCardTypeEmpty
+		return &card, nil
 	default:
 		return nil, fmt.Errorf("element %s has unknown kind %q", element.ID, element.Kind)
+	}
+	// Карточка Looks несёт подпись, картинку и озвучку одновременно —
+	// так же, как наша составная карточка.
+	card.Title = element.Text
+	if element.Image != nil {
+		if element.Image.MediaURL == "" {
+			return nil, fmt.Errorf("%w: element %s image", ErrLooksMissingMediaPath, element.ID)
+		}
+		card.ImagePath = element.Image.MediaURL
+	}
+	if element.Audio != nil {
+		if element.Audio.MediaURL == "" {
+			return nil, fmt.Errorf("%w: element %s audio", ErrLooksMissingMediaPath, element.ID)
+		}
+		card.AudioPath = element.Audio.MediaURL
 	}
 	return &card, nil
 }

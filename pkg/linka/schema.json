@@ -43,6 +43,16 @@
 							"sequence"
 						]
 					},
+					"layout": {
+						"type": "object",
+						"description": "Сетка блока. Опциональна: у уже сохранённых наборов её нет, тогда действует settings.",
+						"required": ["rows", "columns"],
+						"additionalProperties": false,
+						"properties": {
+							"rows": { "type": "integer", "minimum": 1, "maximum": 100 },
+							"columns": { "type": "integer", "minimum": 1, "maximum": 100 }
+						}
+					},
 					"elements": {
 						"type": "array",
 						"minItems": 1,
@@ -54,7 +64,27 @@
 								"id": { "type": "string", "minLength": 1 },
 								"kind": {
 									"type": "string",
-									"enum": ["text", "image", "audio"]
+									"description": "Вид карточки. image и audio — устаревшая одно-типная форма, принимается на чтение.",
+									"enum": ["normal", "text", "empty", "space", "image", "audio"]
+								},
+								"text": { "type": "string" },
+								"image": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"media_id": { "type": "string", "format": "uuid" },
+										"media_url": { "type": "string", "format": "uri-reference" },
+										"source_picture_id": { "type": "string", "format": "uuid" }
+									}
+								},
+								"audio": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"media_id": { "type": "string", "format": "uuid" },
+										"media_url": { "type": "string", "format": "uri-reference" },
+										"text": { "type": "string" }
+									}
 								},
 								"value": { "type": "string" },
 								"media_id": { "type": "string", "format": "uuid" },

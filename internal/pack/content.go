@@ -264,34 +264,73 @@ func (s *ContentService) uploadImportedMedia(
 	for blockIndex := range cfg.Blocks {
 		for elementIndex := range cfg.Blocks[blockIndex].Elements {
 			element := &cfg.Blocks[blockIndex].Elements[elementIndex]
-			if element.Kind == linka.ElementKindText {
-				continue
+			if image := element.Image; image != nil {
+				if image.SourcePictureID != nil {
+					// Картинка из банка приезжает по ссылке, файла в архиве нет.
+					image.MediaID, image.MediaURL = nil, ""
+				} else {
+					mediaID, err := s.uploadArchiveEntry(ctx, files, image.MediaURL)
+					if err != nil {
+						return err
+					}
+					image.MediaID, image.MediaURL = &mediaID, ""
+				}
 			}
-			if element.Kind == linka.ElementKindImage && element.SourcePictureID != nil {
-				element.MediaID = nil
-				element.MediaURL = ""
-				continue
+			if audio := element.Audio; audio != nil {
+				mediaID, err := s.uploadArchiveEntry(ctx, files, audio.MediaURL)
+				if err != nil {
+					return err
+				}
+				audio.MediaID, audio.MediaURL = &mediaID, ""
 			}
-			content, ok := files[element.MediaURL]
-			if !ok || element.MediaURL == "" {
-				return apperr.ErrBadRequest.WithMessage("archive media reference is missing")
-			}
-			uploaded, uploadErr := s.uploader.Upload(ctx, content, filepath.Base(element.MediaURL))
-			if uploadErr != nil {
-				return uploadErr
-			}
-			mediaID := uploaded.ID
-			element.MediaID = &mediaID
-			element.MediaURL = ""
 		}
 	}
 	return nil
+}
+
+// uploadArchiveEntry кладёт файл из архива в медиа пользователя и
+// возвращает его идентификатор.
+func (s *ContentService) uploadArchiveEntry(
+	ctx context.Context,
+	files map[string][]byte,
+	archivePath string,
+) (uuid.UUID, error) {
+	content, ok := files[archivePath]
+	if !ok || archivePath == "" {
+		return uuid.Nil, apperr.ErrBadRequest.WithMessage("archive media reference is missing")
+	}
+	uploaded, err := s.uploader.Upload(ctx, content, filepath.Base(archivePath))
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return uploaded.ID, nil
 }
 
 func (s *ContentService) removeIncompleteImport(ctx context.Context, packID uuid.UUID) {
 	if err := s.packService.Delete(ctx, packID); err != nil {
 		slog.Warn("remove incomplete imported pack", "pack_id", packID, "err", err)
 	}
+}
+
+// requireElementMedia — у вложения должен быть источник: файл в медиа,
+// картинка из банка либо, при импорте, путь внутри архива.
+func requireElementMedia(element linka.Element, allowArchiveURL bool) error {
+	if image := element.Image; image != nil {
+		hasMedia := image.MediaID != nil && *image.MediaID != uuid.Nil
+		hasPicture := image.SourcePictureID != nil && *image.SourcePictureID != uuid.Nil
+		hasArchivePath := allowArchiveURL && image.MediaURL != ""
+		if !hasMedia && !hasPicture && !hasArchivePath {
+			return apperr.ErrBadRequest.WithMessage("image requires media_id or source_picture_id")
+		}
+	}
+	if audio := element.Audio; audio != nil {
+		hasMedia := audio.MediaID != nil && *audio.MediaID != uuid.Nil
+		hasArchivePath := allowArchiveURL && audio.MediaURL != ""
+		if !hasMedia && !hasArchivePath {
+			return apperr.ErrBadRequest.WithMessage("audio requires media_id")
+		}
+	}
+	return nil
 }
 
 func validateAndMediaIDs(ctx context.Context, config json.RawMessage, allowArchiveURL bool) ([]uuid.UUID, error) {
@@ -305,22 +344,12 @@ func validateAndMediaIDs(ctx context.Context, config json.RawMessage, allowArchi
 	seen := make(map[uuid.UUID]struct{})
 	for _, block := range cfg.Blocks {
 		for _, element := range block.Elements {
-			if element.Kind == linka.ElementKindText {
-				continue
+			if err := requireElementMedia(element, allowArchiveURL); err != nil {
+				return nil, err
 			}
-			if element.MediaID == nil || *element.MediaID == uuid.Nil {
-				if element.Kind == linka.ElementKindImage && element.SourcePictureID != nil &&
-					*element.SourcePictureID != uuid.Nil {
-					continue
-				}
-				if allowArchiveURL && element.MediaURL != "" {
-					continue
-				}
-				return nil, apperr.ErrBadRequest.WithMessage(
-					"image elements require media_id or source_picture_id; audio elements require media_id",
-				)
+			for _, id := range element.MediaIDs() {
+				seen[id] = struct{}{}
 			}
-			seen[*element.MediaID] = struct{}{}
 		}
 	}
 	ids := make([]uuid.UUID, 0, len(seen))

@@ -1492,7 +1492,32 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Полностью сохранить валидный Linka 2.0 config и его media usages */
+        /**
+         * Полностью сохранить валидный Linka 2.0 config и его media usages
+         * @description Структура `config` задаётся JSON Schema в `pkg/linka/schema.json`, здесь тело
+         *     описано как произвольный объект.
+         *
+         *     Сетка задаётся только у блока типа `grid`: `blocks[].layout: {rows, columns}`
+         *     (1..100). Поле опционально — у наборов, сохранённых до его появления,
+         *     действует `settings.{rows, columns}` как значение по умолчанию. Если `layout`
+         *     задан, число `elements` не может превышать `rows × columns`, иначе `400`.
+         *
+         *     Отдельного поля «количество» нет — размер задания это длина массива:
+         *     вариантов (`elements`) у `single_choice`, `multi_choice`, `sequence`;
+         *     пар (`pairs`) у `matching`; категорий (`categories`) и вариантов
+         *     (`elements`) у `categories`. `layout` у этих типов отвергается.
+         *
+         *     Элемент (карточка) — составной. `kind` задаёт вид карточки:
+         *     `normal` — обычная, `text` — текстовая, `empty` — пустая, `space` — пробел.
+         *     Содержимое — атрибуты, и у обычной карточки они могут быть все сразу:
+         *     `text` (подпись), `image: {media_id | source_picture_id}`,
+         *     `audio: {media_id, text}` — `text` внутри `audio` это исходный текст для TTS.
+         *     `empty` и `space` содержимого не несут, иначе `400`.
+         *
+         *     Устаревшая форма — `kind: image|audio` с плоскими `value`, `media_id`,
+         *     `source_picture_id` — принимается на чтение и приводится к составной;
+         *     в ответах и экспорте всегда составная форма.
+         */
         put: {
             parameters: {
                 query?: never;

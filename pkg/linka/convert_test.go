@@ -39,7 +39,7 @@ func TestRegisteredFormatsAreConvertible(t *testing.T) {
 		Blocks: []linka.Block{{
 			ID:       "b",
 			Type:     linka.BlockTypeGrid,
-			Elements: []linka.Element{{ID: "e", Kind: linka.ElementKindText, Value: "x"}},
+			Elements: []linka.Element{{ID: "e", Kind: linka.ElementKindText, Text: "x"}},
 		}},
 	}
 	formats := linka.Formats()
