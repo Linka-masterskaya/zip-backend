@@ -70,13 +70,55 @@ func ValidateConfig(ctx context.Context, data json.RawMessage) error {
 				return fmt.Errorf("block[%d] (id: %s): duplicate element id found: %s", i, block.ID, el.ID)
 			}
 			validElementIDs[el.ID] = true
+			if err := validateElement(el); err != nil {
+				return fmt.Errorf("block[%d] (id: %s) element %s: %w", i, block.ID, el.ID, err)
+			}
 		}
 
+		if err := validateLayout(block); err != nil {
+			return fmt.Errorf("block[%d] (id: %s): %w", i, block.ID, err)
+		}
 		if err := validateBlockLogic(block, validElementIDs); err != nil {
 			return fmt.Errorf("block[%d] (id: %s) logic error: %w", i, block.ID, err)
 		}
 	}
 
+	return nil
+}
+
+// validateElement — пустая карточка и пробел не несут содержимого:
+// если оно там есть, клиент его не покажет, а автор об этом не узнает.
+func validateElement(el Element) error {
+	switch el.Kind {
+	case ElementKindEmpty, ElementKindSpace:
+		if el.Text != "" || el.Image != nil || el.Audio != nil {
+			return fmt.Errorf("kind %q must not carry content", el.Kind)
+		}
+	}
+	return nil
+}
+
+// validateLayout проверяет сетку блока, если она задана явно. Для блоков
+// без layout проверки нет: они сохранены до появления поля, и ронять их
+// на сохранении нельзя. Переполнение там страхует конвертер.
+//
+// Сетку задаёт только grid. У остальных типов размер — это длина
+// массива: вариантов у выбора и последовательности, пар у сопоставления,
+// категорий и вариантов у распределения. Отдельного поля «количество»
+// нет, чтобы не было двух источников правды.
+func validateLayout(b Block) error {
+	if b.Layout == nil {
+		return nil
+	}
+	if b.Type != BlockTypeGrid {
+		return fmt.Errorf("layout is not applicable to block type %q", b.Type)
+	}
+	if got, capacity := len(b.Elements), b.Layout.Capacity(); got > capacity {
+		// Looks обрезает страницу до rows×columns, лишние карточки
+		// пропали бы молча.
+		return fmt.Errorf("%d elements exceeds layout capacity %d (%dx%d)",
+			got, capacity, b.Layout.Rows, b.Layout.Columns)
+	}
 	return nil
 }
 

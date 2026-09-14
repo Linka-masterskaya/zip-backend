@@ -367,7 +367,7 @@ func collectAdaptationMedia(ctx context.Context, tx pgx.Tx, adaptationIDs []uuid
 	rows, err := tx.Query(ctx, `SELECT media_id FROM media_usages
 	WHERE source_type = 'pack_adaptation'
 	AND source_id = ANY($1::uuid[])`,
-	adaptationIDs)
+		adaptationIDs)
 	if err != nil {
 		return nil, fmt.Errorf("collect adaptation media: %w", err)
 	}

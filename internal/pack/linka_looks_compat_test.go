@@ -94,9 +94,11 @@ func TestLinkaLooksCompatibilityFixture(t *testing.T) {
 		cfg.Blocks[0].Elements[1].ID,
 		cfg.Blocks[0].Elements[2].ID,
 	})
-	assert.Equal(t, "Ёжик — правильный ответ", cfg.Blocks[0].Elements[0].Value)
-	assert.Equal(t, "media/"+imageID.String()+".png", cfg.Blocks[0].Elements[1].MediaURL)
-	assert.Equal(t, "media/"+audioID.String()+".wav", cfg.Blocks[0].Elements[2].MediaURL)
+	assert.Equal(t, "Ёжик — правильный ответ", cfg.Blocks[0].Elements[0].Text)
+	require.NotNil(t, cfg.Blocks[0].Elements[1].Image)
+	assert.Equal(t, "media/"+imageID.String()+".png", cfg.Blocks[0].Elements[1].Image.MediaURL)
+	require.NotNil(t, cfg.Blocks[0].Elements[2].Audio)
+	assert.Equal(t, "media/"+audioID.String()+".wav", cfg.Blocks[0].Elements[2].Audio.MediaURL)
 
 	require.Len(t, cfg.Blocks[1].Elements, 4)
 	assert.Equal(t, []string{"cat-ru", "cat-en", "dog-ru", "dog-en"}, []string{
@@ -106,10 +108,10 @@ func TestLinkaLooksCompatibilityFixture(t *testing.T) {
 		cfg.Blocks[1].Elements[3].ID,
 	})
 	assert.Equal(t, []string{"Кошка", "cat", "Собака", "dog"}, []string{
-		cfg.Blocks[1].Elements[0].Value,
-		cfg.Blocks[1].Elements[1].Value,
-		cfg.Blocks[1].Elements[2].Value,
-		cfg.Blocks[1].Elements[3].Value,
+		cfg.Blocks[1].Elements[0].Text,
+		cfg.Blocks[1].Elements[1].Text,
+		cfg.Blocks[1].Elements[2].Text,
+		cfg.Blocks[1].Elements[3].Text,
 	})
 }
 

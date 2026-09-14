@@ -44,7 +44,7 @@ func TestBuildAndParseArchiveRoundTrip(t *testing.T) {
 		Blocks: []linka.Block{{
 			ID: "b", Type: linka.BlockTypeGrid,
 			Elements: []linka.Element{{
-				ID: "e", Kind: linka.ElementKindImage, MediaID: &mediaID,
+				ID: "e", Kind: linka.ElementKindNormal, Image: &linka.ElementImage{MediaID: &mediaID},
 			}},
 		}},
 	}
@@ -71,8 +71,8 @@ func TestBuildAndParseArchiveRoundTrip(t *testing.T) {
 	assert.Equal(t, []byte{1, 2, 3}, parsed.Files["media/"+mediaID.String()+".png"])
 	var exported linka.Config
 	require.NoError(t, json.Unmarshal(parsed.Config, &exported))
-	assert.Equal(t, "media/"+mediaID.String()+".png", exported.Blocks[0].Elements[0].MediaURL)
-	assert.Equal(t, mediaID, *exported.Blocks[0].Elements[0].MediaID)
+	assert.Equal(t, "media/"+mediaID.String()+".png", exported.Blocks[0].Elements[0].Image.MediaURL)
+	assert.Equal(t, mediaID, *exported.Blocks[0].Elements[0].Image.MediaID)
 }
 
 func TestBuildArchiveRejectsMissingMediaMetadata(t *testing.T) {

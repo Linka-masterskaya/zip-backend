@@ -3,6 +3,7 @@ package linka
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,5 +92,127 @@ func TestValidateConfigAllowsPicturesBankSourceID(t *testing.T) {
 
 	if err := ValidateConfig(t.Context(), config); err != nil {
 		t.Fatalf("config with source_picture_id must be valid: %v", err)
+	}
+}
+
+func layoutConfig(blockType string, rows, columns int, elements int, withLayout bool) string {
+	els := ""
+	for i := 0; i < elements; i++ {
+		if i > 0 {
+			els += ","
+		}
+		els += fmt.Sprintf(`{"id":"e%d","kind":"text","value":"x"}`, i)
+	}
+	layout := ""
+	if withLayout {
+		layout = fmt.Sprintf(`"layout":{"rows":%d,"columns":%d},`, rows, columns)
+	}
+	answers := ""
+	if blockType == BlockTypeSingleChoice {
+		answers = `,"answers":[{"element_id":"e0","is_correct":true}]`
+	}
+	return fmt.Sprintf(`{
+		"metadata":{"version":"2.0","title":"t"},
+		"settings":{"columns":2,"rows":2},
+		"blocks":[{"id":"b1","type":%q,%s"elements":[%s]%s}]
+	}`, blockType, layout, els, answers)
+}
+
+// TestValidateConfigBlockLayout — сетка принадлежит блоку: у каждого
+// задания в наборе своя раскладка, как в Linka Looks. Поле опционально,
+// чтобы уже сохранённые наборы без него продолжали проходить.
+func TestValidateConfigBlockLayout(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{"grid с layout, элементы помещаются", layoutConfig(BlockTypeGrid, 2, 2, 4, true), ""},
+		{"grid с layout, элементов больше сетки", layoutConfig(BlockTypeGrid, 2, 2, 5, true), "exceeds layout capacity"},
+		{"grid без layout — старые наборы", layoutConfig(BlockTypeGrid, 0, 0, 1, false), ""},
+		{"single_choice без layout — размер это длина массива", layoutConfig(BlockTypeSingleChoice, 0, 0, 3, false), ""},
+		{"single_choice с layout отвергается", layoutConfig(BlockTypeSingleChoice, 1, 3, 3, true), "layout is not applicable"},
+		{"layout с нулевыми строками отвергается схемой", layoutConfig(BlockTypeGrid, 0, 2, 1, true), "schema validation failed"},
+		{"layout больше 100 отвергается схемой", layoutConfig(BlockTypeGrid, 101, 1, 1, true), "schema validation failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConfig(context.Background(), json.RawMessage(tt.config))
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateConfigRejectsLayoutOnLaneBlocks: у сопоставления размер —
+// число пар, у распределения — число категорий и вариантов; сетки нет.
+func TestValidateConfigRejectsLayoutOnLaneBlocks(t *testing.T) {
+	config := `{
+		"metadata":{"version":"2.0","title":"t"},
+		"settings":{"columns":2,"rows":2},
+		"blocks":[{"id":"b1","type":"matching","layout":{"rows":1,"columns":2},
+			"elements":[{"id":"a","kind":"text","value":"a"},{"id":"b","kind":"text","value":"b"}],
+			"pairs":[{"left_id":"a","right_id":"b"}]}]
+	}`
+	err := ValidateConfig(context.Background(), json.RawMessage(config))
+	if err == nil || !strings.Contains(err.Error(), "layout is not applicable") {
+		t.Fatalf("err = %v, want layout rejection for matching", err)
+	}
+}
+
+func elementConfig(element string) string {
+	return `{
+		"metadata":{"version":"2.0","title":"t"},
+		"settings":{"columns":2,"rows":2},
+		"blocks":[{"id":"b1","type":"grid","elements":[` + element + `]}]
+	}`
+}
+
+// TestValidateConfigCompositeElement — схема принимает составную
+// карточку (подпись + картинка + озвучка) и старую одно-типную форму.
+func TestValidateConfigCompositeElement(t *testing.T) {
+	mediaID := "11111111-1111-4111-8111-111111111111"
+	tests := []struct {
+		name    string
+		element string
+		wantErr string
+	}{
+		{"обычная с подписью, картинкой и озвучкой",
+			`{"id":"e","kind":"normal","text":"Кошка","image":{"media_id":"` + mediaID + `"},"audio":{"media_id":"` + mediaID + `","text":"рыжий кот"}}`, ""},
+		{"обычная только с картинкой из банка",
+			`{"id":"e","kind":"normal","image":{"source_picture_id":"` + mediaID + `"}}`, ""},
+		{"текстовая", `{"id":"e","kind":"text","text":"да"}`, ""},
+		{"пустая", `{"id":"e","kind":"empty"}`, ""},
+		{"пробел", `{"id":"e","kind":"space"}`, ""},
+		{"пустая с содержимым отвергается", `{"id":"e","kind":"empty","text":"x"}`, "must not carry content"},
+		{"пробел с картинкой отвергается",
+			`{"id":"e","kind":"space","image":{"media_id":"` + mediaID + `"}}`, "must not carry content"},
+		{"старая форма image", `{"id":"e","kind":"image","value":"Кошка","media_id":"` + mediaID + `"}`, ""},
+		{"старая форма audio", `{"id":"e","kind":"audio","media_id":"` + mediaID + `"}`, ""},
+		{"старая форма text", `{"id":"e","kind":"text","value":"да"}`, ""},
+		{"неизвестный kind отвергается схемой", `{"id":"e","kind":"video"}`, "schema validation failed"},
+		{"лишнее поле в image отвергается схемой",
+			`{"id":"e","kind":"normal","image":{"media_id":"` + mediaID + `","bogus":1}}`, "schema validation failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConfig(context.Background(), json.RawMessage(elementConfig(tt.element)))
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
 	}
 }
