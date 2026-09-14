@@ -522,9 +522,11 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 	if input.ParentID == nil {
 		// Корень раздела содержит только папки: packs.folder_id объявлен
 		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
-		folderScope := "AND f.owner_id = $1"
+		args := []any{input.Section, userID}
+		folderScope := "AND f.owner_id = $2"
 		if input.Section == SectionLibrary {
-			folderScope = "AND f.org_id = $3"
+			args[1] = orgID
+			folderScope = "AND f.org_id = $2"
 		}
 		query := `
 		WITH items AS (
@@ -534,23 +536,26 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id IS NULL
-			  AND f.section = $2
+			  AND f.section = $1
 			  ` + folderScope + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
 		       age, difficulty
 		FROM items`
-		args := []any{userID, input.Section, orgID}
 		return appendContentsFilters(query, args, input)
 	}
 
+	// Аналогично: $2 — userID либо orgID, никогда оба одновременно, чтобы
+	// не оставлять непроцитированный в SQL плейсхолдер.
+	args := []any{*input.ParentID, userID, input.Section}
 	folderScope := "AND f.owner_id = $2"
 	packFolderColumn := "p.folder_id"
 	packScope := "AND p.owner_id = $2"
 	if input.Section == SectionLibrary {
-		folderScope = "AND f.org_id = $3"
+		args[1] = orgID
+		folderScope = "AND f.org_id = $2"
 		packFolderColumn = "p.library_folder_id"
-		packScope = "AND p.published_at IS NOT NULL AND p.org_id = $3"
+		packScope = "AND p.published_at IS NOT NULL AND p.org_id = $2"
 	}
 
 	studentAssignments := ""
@@ -577,7 +582,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			       NULL::text AS difficulty
 			FROM folders f
 			WHERE f.parent_id = $1
-			  AND f.section = $4
+			  AND f.section = $3
 			  ` + folderScope + `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
@@ -589,7 +594,6 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 		SELECT type, id, name, kind, student_id, published, updated_at,
 		       age, difficulty
 		FROM items`
-	args := []any{*input.ParentID, userID, orgID, input.Section}
 	return appendContentsFilters(query, args, input)
 }
 
