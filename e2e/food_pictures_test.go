@@ -223,8 +223,8 @@ func pictureIDs(pictures []foodPictureResponse) []uuid.UUID {
 func elementPictureIDs(elements []linka.Element) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(elements))
 	for _, element := range elements {
-		if element.SourcePictureID != nil {
-			ids = append(ids, *element.SourcePictureID)
+		if element.Image != nil && element.Image.SourcePictureID != nil {
+			ids = append(ids, *element.Image.SourcePictureID)
 		}
 	}
 	return ids

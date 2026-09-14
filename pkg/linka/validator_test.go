@@ -167,3 +167,53 @@ func TestValidateConfigRejectsLayoutOnLaneBlocks(t *testing.T) {
 		t.Fatalf("err = %v, want layout rejection for matching", err)
 	}
 }
+
+func elementConfig(element string) string {
+	return `{
+		"metadata":{"version":"2.0","title":"t"},
+		"settings":{"columns":2,"rows":2},
+		"blocks":[{"id":"b1","type":"grid","elements":[` + element + `]}]
+	}`
+}
+
+// TestValidateConfigCompositeElement — схема принимает составную
+// карточку (подпись + картинка + озвучка) и старую одно-типную форму.
+func TestValidateConfigCompositeElement(t *testing.T) {
+	mediaID := "11111111-1111-4111-8111-111111111111"
+	tests := []struct {
+		name    string
+		element string
+		wantErr string
+	}{
+		{"обычная с подписью, картинкой и озвучкой",
+			`{"id":"e","kind":"normal","text":"Кошка","image":{"media_id":"` + mediaID + `"},"audio":{"media_id":"` + mediaID + `","text":"рыжий кот"}}`, ""},
+		{"обычная только с картинкой из банка",
+			`{"id":"e","kind":"normal","image":{"source_picture_id":"` + mediaID + `"}}`, ""},
+		{"текстовая", `{"id":"e","kind":"text","text":"да"}`, ""},
+		{"пустая", `{"id":"e","kind":"empty"}`, ""},
+		{"пробел", `{"id":"e","kind":"space"}`, ""},
+		{"пустая с содержимым отвергается", `{"id":"e","kind":"empty","text":"x"}`, "must not carry content"},
+		{"пробел с картинкой отвергается",
+			`{"id":"e","kind":"space","image":{"media_id":"` + mediaID + `"}}`, "must not carry content"},
+		{"старая форма image", `{"id":"e","kind":"image","value":"Кошка","media_id":"` + mediaID + `"}`, ""},
+		{"старая форма audio", `{"id":"e","kind":"audio","media_id":"` + mediaID + `"}`, ""},
+		{"старая форма text", `{"id":"e","kind":"text","value":"да"}`, ""},
+		{"неизвестный kind отвергается схемой", `{"id":"e","kind":"video"}`, "schema validation failed"},
+		{"лишнее поле в image отвергается схемой",
+			`{"id":"e","kind":"normal","image":{"media_id":"` + mediaID + `","bogus":1}}`, "schema validation failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConfig(context.Background(), json.RawMessage(elementConfig(tt.element)))
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}

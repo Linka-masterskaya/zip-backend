@@ -70,6 +70,9 @@ func ValidateConfig(ctx context.Context, data json.RawMessage) error {
 				return fmt.Errorf("block[%d] (id: %s): duplicate element id found: %s", i, block.ID, el.ID)
 			}
 			validElementIDs[el.ID] = true
+			if err := validateElement(el); err != nil {
+				return fmt.Errorf("block[%d] (id: %s) element %s: %w", i, block.ID, el.ID, err)
+			}
 		}
 
 		if err := validateLayout(block); err != nil {
@@ -80,6 +83,18 @@ func ValidateConfig(ctx context.Context, data json.RawMessage) error {
 		}
 	}
 
+	return nil
+}
+
+// validateElement — пустая карточка и пробел не несут содержимого:
+// если оно там есть, клиент его не покажет, а автор об этом не узнает.
+func validateElement(el Element) error {
+	switch el.Kind {
+	case ElementKindEmpty, ElementKindSpace:
+		if el.Text != "" || el.Image != nil || el.Audio != nil {
+			return fmt.Errorf("kind %q must not carry content", el.Kind)
+		}
+	}
 	return nil
 }
 

@@ -1502,6 +1502,17 @@ export interface paths {
          *     `settings.{rows, columns}` как значение по умолчанию. Если `layout` задан,
          *     число `elements` не может превышать `rows × columns`, иначе `400`.
          *     Для `matching` и `categories` `layout` не применим — своя геометрия.
+         *
+         *     Элемент (карточка) — составной. `kind` задаёт вид карточки:
+         *     `normal` — обычная, `text` — текстовая, `empty` — пустая, `space` — пробел.
+         *     Содержимое — атрибуты, и у обычной карточки они могут быть все сразу:
+         *     `text` (подпись), `image: {media_id | source_picture_id}`,
+         *     `audio: {media_id, text}` — `text` внутри `audio` это исходный текст для TTS.
+         *     `empty` и `space` содержимого не несут, иначе `400`.
+         *
+         *     Устаревшая форма — `kind: image|audio` с плоскими `value`, `media_id`,
+         *     `source_picture_id` — принимается на чтение и приводится к составной;
+         *     в ответах и экспорте всегда составная форма.
          */
         put: {
             parameters: {

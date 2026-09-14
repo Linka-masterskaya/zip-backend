@@ -27,6 +27,7 @@ const (
 // пустая заготовка, которой добивается сетка страницы.
 const (
 	LooksCardTypeContent = 0
+	LooksCardTypeSpace   = 1
 	LooksCardTypeEmpty   = 2
 )
 
@@ -288,22 +289,33 @@ func elementCards(elements []Element) ([]LooksCard, error) {
 }
 
 func elementCard(element *Element) (*LooksCard, error) {
-	card := LooksCard{ID: element.ID, CardType: LooksCardTypeContent}
+	card := LooksCard{ID: element.ID}
 	switch element.Kind {
-	case ElementKindText:
-		card.Title = element.Value
-	case ElementKindImage:
-		if element.MediaURL == "" {
-			return nil, fmt.Errorf("%w: element %s", ErrLooksMissingMediaPath, element.ID)
-		}
-		card.ImagePath = element.MediaURL
-	case ElementKindAudio:
-		if element.MediaURL == "" {
-			return nil, fmt.Errorf("%w: element %s", ErrLooksMissingMediaPath, element.ID)
-		}
-		card.AudioPath = element.MediaURL
+	case ElementKindNormal, ElementKindText:
+		card.CardType = LooksCardTypeContent
+	case ElementKindSpace:
+		card.CardType = LooksCardTypeSpace
+		return &card, nil
+	case ElementKindEmpty:
+		card.CardType = LooksCardTypeEmpty
+		return &card, nil
 	default:
 		return nil, fmt.Errorf("element %s has unknown kind %q", element.ID, element.Kind)
+	}
+	// Карточка Looks несёт подпись, картинку и озвучку одновременно —
+	// так же, как наша составная карточка.
+	card.Title = element.Text
+	if element.Image != nil {
+		if element.Image.MediaURL == "" {
+			return nil, fmt.Errorf("%w: element %s image", ErrLooksMissingMediaPath, element.ID)
+		}
+		card.ImagePath = element.Image.MediaURL
+	}
+	if element.Audio != nil {
+		if element.Audio.MediaURL == "" {
+			return nil, fmt.Errorf("%w: element %s audio", ErrLooksMissingMediaPath, element.ID)
+		}
+		card.AudioPath = element.Audio.MediaURL
 	}
 	return &card, nil
 }

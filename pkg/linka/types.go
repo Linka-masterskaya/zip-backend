@@ -1,6 +1,10 @@
 package linka
 
-import "github.com/google/uuid"
+import (
+	"encoding/json"
+
+	"github.com/google/uuid"
+)
 
 const (
 	BlockTypeGrid         = "grid"
@@ -11,10 +15,21 @@ const (
 	BlockTypeSequence     = "sequence"
 )
 
+// Вид карточки. Текст, картинка и озвучка — не виды, а атрибуты: у
+// обычной карточки они могут быть все сразу, как у карточки Linka Looks.
 const (
-	ElementKindText  = "text"
-	ElementKindImage = "image"
-	ElementKindAudio = "audio"
+	ElementKindNormal = "normal"
+	ElementKindText   = "text"
+	ElementKindEmpty  = "empty"
+	ElementKindSpace  = "space"
+)
+
+// Устаревшие виды: до появления составной карточки один элемент нёс
+// ровно одно вложение. Принимаются на чтение и приводятся к составной
+// форме, наружу не отдаются.
+const (
+	legacyKindImage = "image"
+	legacyKindAudio = "audio"
 )
 
 type Config struct {
@@ -67,13 +82,93 @@ type Block struct {
 	Sequence []SeqItem  `json:"sequence,omitempty"`
 }
 
+// Element — карточка. Kind задаёт вид, остальное — содержимое, и у
+// обычной карточки его может быть три вида сразу.
 type Element struct {
-	ID              string     `json:"id"`
-	Kind            string     `json:"kind"`
-	Value           string     `json:"value,omitempty"`
+	ID    string        `json:"id"`
+	Kind  string        `json:"kind"`
+	Text  string        `json:"text,omitempty"`
+	Image *ElementImage `json:"image,omitempty"`
+	Audio *ElementAudio `json:"audio,omitempty"`
+}
+
+// ElementImage — картинка карточки: из медиа пользователя либо из банка
+// картинок. MediaURL — путь внутри .linka, проставляется при экспорте.
+type ElementImage struct {
 	MediaID         *uuid.UUID `json:"media_id,omitempty"`
 	MediaURL        string     `json:"media_url,omitempty"`
 	SourcePictureID *uuid.UUID `json:"source_picture_id,omitempty"`
+}
+
+// ElementAudio — озвучка карточки. Text — исходный текст для TTS, чтобы
+// озвучку можно было пересобрать другим голосом.
+type ElementAudio struct {
+	MediaID  *uuid.UUID `json:"media_id,omitempty"`
+	MediaURL string     `json:"media_url,omitempty"`
+	Text     string     `json:"text,omitempty"`
+}
+
+// legacyElement — форма до составной карточки: kind text|image|audio
+// и одно вложение в плоских полях.
+type legacyElement struct {
+	ID              string        `json:"id"`
+	Kind            string        `json:"kind"`
+	Text            string        `json:"text,omitempty"`
+	Image           *ElementImage `json:"image,omitempty"`
+	Audio           *ElementAudio `json:"audio,omitempty"`
+	Value           string        `json:"value,omitempty"`
+	MediaID         *uuid.UUID    `json:"media_id,omitempty"`
+	MediaURL        string        `json:"media_url,omitempty"`
+	SourcePictureID *uuid.UUID    `json:"source_picture_id,omitempty"`
+}
+
+// UnmarshalJSON принимает и составную, и устаревшую форму. Устаревшая
+// приводится к составной сразу при чтении, поэтому остальной код видит
+// один формат.
+func (e *Element) UnmarshalJSON(data []byte) error {
+	var raw legacyElement
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*e = Element{ID: raw.ID, Kind: raw.Kind, Text: raw.Text, Image: raw.Image, Audio: raw.Audio}
+	switch raw.Kind {
+	case ElementKindText:
+		if e.Text == "" {
+			e.Text = raw.Value
+		}
+	case legacyKindImage:
+		e.Kind = ElementKindNormal
+		if e.Text == "" {
+			e.Text = raw.Value
+		}
+		if e.Image == nil {
+			e.Image = &ElementImage{
+				MediaID: raw.MediaID, MediaURL: raw.MediaURL, SourcePictureID: raw.SourcePictureID,
+			}
+		}
+	case legacyKindAudio:
+		e.Kind = ElementKindNormal
+		if e.Text == "" {
+			e.Text = raw.Value
+		}
+		if e.Audio == nil {
+			e.Audio = &ElementAudio{MediaID: raw.MediaID, MediaURL: raw.MediaURL}
+		}
+	}
+	return nil
+}
+
+// MediaIDs — идентификаторы медиа-файлов карточки. Порядок: картинка,
+// затем озвучка.
+func (e Element) MediaIDs() []uuid.UUID {
+	ids := make([]uuid.UUID, 0, 2)
+	if e.Image != nil && e.Image.MediaID != nil && *e.Image.MediaID != uuid.Nil {
+		ids = append(ids, *e.Image.MediaID)
+	}
+	if e.Audio != nil && e.Audio.MediaID != nil && *e.Audio.MediaID != uuid.Nil {
+		ids = append(ids, *e.Audio.MediaID)
+	}
+	return ids
 }
 
 type Answer struct {
