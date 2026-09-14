@@ -522,6 +522,10 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 	if input.ParentID == nil {
 		// Корень раздела содержит только папки: packs.folder_id объявлен
 		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
+		folderScope := "AND f.owner_id = $1"
+		if input.Section == SectionLibrary {
+			folderScope = "AND f.org_id = $3"
+		}
 		query := `
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
@@ -531,10 +535,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			FROM folders f
 			WHERE f.parent_id IS NULL
 			  AND f.section = $2
-			  AND (
-			        ($2 = 'library' AND f.org_id = $3)
-			        OR ($2 <> 'library' AND f.owner_id = $1)
-			      )
+			  ` + folderScope + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
 		       age, difficulty
@@ -543,9 +544,11 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 		return appendContentsFilters(query, args, input)
 	}
 
+	folderScope := "AND f.owner_id = $2"
 	packFolderColumn := "p.folder_id"
 	packScope := "AND p.owner_id = $2"
 	if input.Section == SectionLibrary {
+		folderScope = "AND f.org_id = $3"
 		packFolderColumn = "p.library_folder_id"
 		packScope = "AND p.published_at IS NOT NULL AND p.org_id = $3"
 	}
@@ -575,10 +578,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			FROM folders f
 			WHERE f.parent_id = $1
 			  AND f.section = $4
-			  AND (
-			        ($4 = 'library' AND f.org_id = $3)
-			        OR ($4 <> 'library' AND f.owner_id = $2)
-			      )
+			  ` + folderScope + `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       p.published_at IS NOT NULL, p.updated_at,
