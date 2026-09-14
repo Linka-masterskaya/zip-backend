@@ -101,20 +101,24 @@ func (r *Repository) List(
 	userID uuid.UUID,
 	input ListInput,
 ) ([]Folder, error) {
-	if input.ParentID != nil {
-		var parentSection string
-		var parentOwner uuid.UUID
-		err := r.pool.QueryRow(ctx, `
-			SELECT section, owner_id FROM folders WHERE id = $1`,
-			input.ParentID).Scan(&parentSection, &parentOwner)
-		if errors.Is(err, pgx.ErrNoRows) ||
-			(err == nil && (parentSection != input.Section ||
-				(input.Section != SectionLibrary && parentOwner != userID))) {
-			return nil, ErrNotFound
-		}
-		if err != nil {
-			return nil, fmt.Errorf("folder list parent: %w", err)
-		}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("folder list begin: %w", err)
+	}
+	defer rollback(ctx, tx)
+
+	orgID, err := currentUserOrg(ctx, tx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, _, parentErr := r.ensureParentVisible(ctx, tx, userID, orgID, ContentsInput{
+		Section: input.Section, ParentID: input.ParentID,
+	}); parentErr != nil {
+		return nil, parentErr
 	}
 
 	args := []any{input.Section, input.ParentID, input.Limit, input.Offset}
@@ -124,11 +128,12 @@ func (r *Repository) List(
 		args = append(args, userID)
 	}
 
-	rows, err := r.pool.Query(ctx, `
+	rows, err := tx.Query(ctx, `
 		SELECT `+qualifiedFolderColumns+`
 		FROM folders f
 		WHERE f.section = $1
 		  AND f.parent_id IS NOT DISTINCT FROM $2::uuid
+		  `+visibleStudentFolderPredicate+`
 		  `+scope+`
 		ORDER BY lower(f.name), f.id
 		LIMIT $3 OFFSET $4`, args...)
@@ -147,6 +152,9 @@ func (r *Repository) List(
 	}
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("folder list rows: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("folder list commit: %w", err)
 	}
 	return result, nil
 }
@@ -420,6 +428,7 @@ func (r *Repository) Contents(
 // и в том же запросе строит цепочку предков от корня раздела до неё самой.
 // Для корня раздела (ParentID == nil) проверять нечего — он не строка в
 // таблице, поэтому текущей папки нет, а путь состоит только из самого раздела.
+// Любая папка в дереве архивного ученика считается недоступной.
 func (r *Repository) ensureParentVisible(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -431,18 +440,27 @@ func (r *Repository) ensureParentVisible(
 		return nil, breadcrumbs, nil
 	}
 	rows, err := tx.Query(ctx, `
-         WITH RECURSIVE ancestors AS (
-		 SELECT id, name, parent_id, section, owner_id, 0 AS level
-		 FROM folders
-		 WHERE id = $1 AND org_id = $2
-		 UNION ALL
-	     SELECT f.id, f.name, f.parent_id, f.section, f.owner_id, a.level + 1
-		 FROM folders f
-		 JOIN ancestors a ON f.id = a.parent_id
-		 WHERE f.org_id = $2 AND a.level < $3)
-		 SELECT id, name, parent_id, section, owner_id
-		 FROM ancestors
-		 ORDER BY level DESC`, *input.ParentID, orgID, maxFolderDepth)
+		WITH RECURSIVE ancestors AS (
+			SELECT id, name, parent_id, section, kind, student_id, owner_id, 0 AS level
+			FROM folders
+			WHERE id = $1 AND org_id = $2
+			UNION ALL
+			SELECT f.id, f.name, f.parent_id, f.section, f.kind,
+			       f.student_id, f.owner_id, a.level + 1
+			FROM folders f
+			JOIN ancestors a ON f.id = a.parent_id
+			WHERE f.org_id = $2 AND a.level < $3
+		)
+		SELECT id, name, parent_id, section, owner_id
+		FROM ancestors
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM ancestors a
+			JOIN students s ON s.id = a.student_id
+			WHERE a.kind = 'student'
+			  AND s.deleted_at IS NOT NULL
+		)
+		ORDER BY level DESC`, *input.ParentID, orgID, maxFolderDepth)
 	if err != nil {
 		return nil, nil, fmt.Errorf("folder ancestors: %w", err)
 	}
@@ -538,6 +556,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			WHERE f.parent_id IS NULL
 			  AND f.section = $1
 			  ` + folderScope + `
+			  ` + visibleStudentFolderPredicate + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
 		       age, difficulty
@@ -582,6 +601,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			WHERE f.parent_id = $1
 			  AND f.section = $3
 			  ` + folderScope + `
+			  ` + visibleStudentFolderPredicate + `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       p.published_at IS NOT NULL, p.updated_at,
@@ -618,6 +638,20 @@ func appendContentsFilters(query string, args []any, input ContentsInput) (strin
 	args = append(args, input.Query, input.Type, input.Age, input.AgeFrom, input.AgeTo, input.Difficulty)
 	return query + filters, args
 }
+
+// visibleStudentFolderPredicate применяется к запросам с алиасом folders f.
+// Обычные папки не связаны с students и остаются видимыми; student-папка
+// видима только пока связанный ученик не удалён логически.
+const visibleStudentFolderPredicate = `
+		  AND (
+			f.kind <> 'student'
+			OR EXISTS (
+				SELECT 1
+				FROM students visible_student
+				WHERE visible_student.id = f.student_id
+				  AND visible_student.deleted_at IS NULL
+			)
+		  )`
 
 // activeUserOrg блокирует строку пользователя (FOR UPDATE), поэтому подходит
 // для транзакций, которые дальше изменяют данные.
