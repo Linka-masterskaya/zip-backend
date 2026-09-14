@@ -101,13 +101,16 @@ func validateElement(el Element) error {
 // validateLayout проверяет сетку блока, если она задана явно. Для блоков
 // без layout проверки нет: они сохранены до появления поля, и ронять их
 // на сохранении нельзя. Переполнение там страхует конвертер.
+//
+// Сетку задаёт только grid. У остальных типов размер — это длина
+// массива: вариантов у выбора и последовательности, пар у сопоставления,
+// категорий и вариантов у распределения. Отдельного поля «количество»
+// нет, чтобы не было двух источников правды.
 func validateLayout(b Block) error {
 	if b.Layout == nil {
 		return nil
 	}
-	switch b.Type {
-	case BlockTypeMatching, BlockTypeCategories:
-		// У линеек и категорий своя геометрия, прямоугольной сетки нет.
+	if b.Type != BlockTypeGrid {
 		return fmt.Errorf("layout is not applicable to block type %q", b.Type)
 	}
 	if got, capacity := len(b.Elements), b.Layout.Capacity(); got > capacity {

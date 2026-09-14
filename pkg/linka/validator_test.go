@@ -130,9 +130,8 @@ func TestValidateConfigBlockLayout(t *testing.T) {
 		{"grid с layout, элементы помещаются", layoutConfig(BlockTypeGrid, 2, 2, 4, true), ""},
 		{"grid с layout, элементов больше сетки", layoutConfig(BlockTypeGrid, 2, 2, 5, true), "exceeds layout capacity"},
 		{"grid без layout — старые наборы", layoutConfig(BlockTypeGrid, 0, 0, 1, false), ""},
-		{"single_choice с layout, помещается", layoutConfig(BlockTypeSingleChoice, 1, 3, 3, true), ""},
-		{"single_choice с layout, переполнение", layoutConfig(BlockTypeSingleChoice, 1, 2, 3, true), "exceeds layout capacity"},
-		{"single_choice без layout", layoutConfig(BlockTypeSingleChoice, 0, 0, 3, false), ""},
+		{"single_choice без layout — размер это длина массива", layoutConfig(BlockTypeSingleChoice, 0, 0, 3, false), ""},
+		{"single_choice с layout отвергается", layoutConfig(BlockTypeSingleChoice, 1, 3, 3, true), "layout is not applicable"},
 		{"layout с нулевыми строками отвергается схемой", layoutConfig(BlockTypeGrid, 0, 2, 1, true), "schema validation failed"},
 		{"layout больше 100 отвергается схемой", layoutConfig(BlockTypeGrid, 101, 1, 1, true), "schema validation failed"},
 	}
@@ -152,8 +151,8 @@ func TestValidateConfigBlockLayout(t *testing.T) {
 	}
 }
 
-// TestValidateConfigRejectsLayoutOnLaneBlocks: у сопоставления и
-// категорий своя геометрия, прямоугольная сетка к ним не относится.
+// TestValidateConfigRejectsLayoutOnLaneBlocks: у сопоставления размер —
+// число пар, у распределения — число категорий и вариантов; сетки нет.
 func TestValidateConfigRejectsLayoutOnLaneBlocks(t *testing.T) {
 	config := `{
 		"metadata":{"version":"2.0","title":"t"},
