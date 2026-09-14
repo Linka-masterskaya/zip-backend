@@ -1,6 +1,7 @@
 package pack
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -222,4 +223,26 @@ func TestRepositoryDuplicateRollsBackWhenMediaUsagesFail(t *testing.T) {
 		WHERE source_type = 'pack' AND source_id <> $1`, source.ID).Scan(&duplicateUsages))
 	assert.Equal(t, beforeCount, afterCount)
 	assert.Zero(t, duplicateUsages)
+}
+
+func TestGlobalPackDuplicateByOtherOrg(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, ownerID, folderID := seedPackOwner(t, pool, "global dup org")
+	libraryFolderID := seedPackLibraryFolder(t, pool, ownerID)
+	config := json.RawMessage(`{"blocks":[]}`)
+
+	created, err := repo.Create(t.Context(), ownerID,
+		CreateInput{Title: "Global Dup", FolderID: folderID, Config: config})
+	require.NoError(t, err)
+	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, true)
+	require.NoError(t, err)
+
+	_, viewerID, viewerFolderID := seedPackOwner(t, pool, "global dup viewer org")
+
+	dup, err := repo.Duplicate(t.Context(), viewerID, created.ID,
+		DuplicateInput{FolderID: &viewerFolderID})
+	require.NoError(t, err)
+	assert.NotEqual(t, created.ID, dup.ID)
+	assert.Equal(t, "Global Dup (копия)", dup.Title)
 }
