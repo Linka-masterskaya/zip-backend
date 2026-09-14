@@ -3,6 +3,7 @@ package linka
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,5 +92,78 @@ func TestValidateConfigAllowsPicturesBankSourceID(t *testing.T) {
 
 	if err := ValidateConfig(t.Context(), config); err != nil {
 		t.Fatalf("config with source_picture_id must be valid: %v", err)
+	}
+}
+
+func layoutConfig(blockType string, rows, columns int, elements int, withLayout bool) string {
+	els := ""
+	for i := 0; i < elements; i++ {
+		if i > 0 {
+			els += ","
+		}
+		els += fmt.Sprintf(`{"id":"e%d","kind":"text","value":"x"}`, i)
+	}
+	layout := ""
+	if withLayout {
+		layout = fmt.Sprintf(`"layout":{"rows":%d,"columns":%d},`, rows, columns)
+	}
+	answers := ""
+	if blockType == BlockTypeSingleChoice {
+		answers = `,"answers":[{"element_id":"e0","is_correct":true}]`
+	}
+	return fmt.Sprintf(`{
+		"metadata":{"version":"2.0","title":"t"},
+		"settings":{"columns":2,"rows":2},
+		"blocks":[{"id":"b1","type":%q,%s"elements":[%s]%s}]
+	}`, blockType, layout, els, answers)
+}
+
+// TestValidateConfigBlockLayout — сетка принадлежит блоку: у каждого
+// задания в наборе своя раскладка, как в Linka Looks. Поле опционально,
+// чтобы уже сохранённые наборы без него продолжали проходить.
+func TestValidateConfigBlockLayout(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{"grid с layout, элементы помещаются", layoutConfig(BlockTypeGrid, 2, 2, 4, true), ""},
+		{"grid с layout, элементов больше сетки", layoutConfig(BlockTypeGrid, 2, 2, 5, true), "exceeds layout capacity"},
+		{"grid без layout — старые наборы", layoutConfig(BlockTypeGrid, 0, 0, 1, false), ""},
+		{"single_choice с layout, помещается", layoutConfig(BlockTypeSingleChoice, 1, 3, 3, true), ""},
+		{"single_choice с layout, переполнение", layoutConfig(BlockTypeSingleChoice, 1, 2, 3, true), "exceeds layout capacity"},
+		{"single_choice без layout", layoutConfig(BlockTypeSingleChoice, 0, 0, 3, false), ""},
+		{"layout с нулевыми строками отвергается схемой", layoutConfig(BlockTypeGrid, 0, 2, 1, true), "schema validation failed"},
+		{"layout больше 100 отвергается схемой", layoutConfig(BlockTypeGrid, 101, 1, 1, true), "schema validation failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConfig(context.Background(), json.RawMessage(tt.config))
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateConfigRejectsLayoutOnLaneBlocks: у сопоставления и
+// категорий своя геометрия, прямоугольная сетка к ним не относится.
+func TestValidateConfigRejectsLayoutOnLaneBlocks(t *testing.T) {
+	config := `{
+		"metadata":{"version":"2.0","title":"t"},
+		"settings":{"columns":2,"rows":2},
+		"blocks":[{"id":"b1","type":"matching","layout":{"rows":1,"columns":2},
+			"elements":[{"id":"a","kind":"text","value":"a"},{"id":"b","kind":"text","value":"b"}],
+			"pairs":[{"left_id":"a","right_id":"b"}]}]
+	}`
+	err := ValidateConfig(context.Background(), json.RawMessage(config))
+	if err == nil || !strings.Contains(err.Error(), "layout is not applicable") {
+		t.Fatalf("err = %v, want layout rejection for matching", err)
 	}
 }

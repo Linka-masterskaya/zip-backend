@@ -28,15 +28,37 @@ type Metadata struct {
 	Title   string `json:"title,omitempty"`
 }
 
+// Settings — сетка по умолчанию для блоков без собственного Layout.
 type Settings struct {
 	Columns int `json:"columns"`
 	Rows    int `json:"rows"`
 }
 
+// Layout — прямоугольная сетка блока.
+type Layout struct {
+	Rows    int `json:"rows"`
+	Columns int `json:"columns"`
+}
+
+// Capacity — сколько элементов помещается в сетку.
+func (l Layout) Capacity() int { return l.Rows * l.Columns }
+
+// EffectiveLayout — сетка блока либо, если своей нет, сетка набора.
+func (b Block) EffectiveLayout(defaults Settings) Layout {
+	if b.Layout != nil {
+		return *b.Layout
+	}
+	return Layout{Rows: defaults.Rows, Columns: defaults.Columns}
+}
+
 type Block struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name,omitempty"`
-	Type     string    `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	Type string `json:"type"`
+	// Layout — сетка этого блока. У каждого задания в наборе своя
+	// раскладка, как и у страницы в Linka Looks. Опциональна: у наборов,
+	// сохранённых до её появления, действует Settings.
+	Layout   *Layout   `json:"layout,omitempty"`
 	Elements []Element `json:"elements"`
 
 	Answers  []Answer   `json:"answers,omitempty"`

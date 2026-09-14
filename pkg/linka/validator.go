@@ -72,11 +72,35 @@ func ValidateConfig(ctx context.Context, data json.RawMessage) error {
 			validElementIDs[el.ID] = true
 		}
 
+		if err := validateLayout(block); err != nil {
+			return fmt.Errorf("block[%d] (id: %s): %w", i, block.ID, err)
+		}
 		if err := validateBlockLogic(block, validElementIDs); err != nil {
 			return fmt.Errorf("block[%d] (id: %s) logic error: %w", i, block.ID, err)
 		}
 	}
 
+	return nil
+}
+
+// validateLayout проверяет сетку блока, если она задана явно. Для блоков
+// без layout проверки нет: они сохранены до появления поля, и ронять их
+// на сохранении нельзя. Переполнение там страхует конвертер.
+func validateLayout(b Block) error {
+	if b.Layout == nil {
+		return nil
+	}
+	switch b.Type {
+	case BlockTypeMatching, BlockTypeCategories:
+		// У линеек и категорий своя геометрия, прямоугольной сетки нет.
+		return fmt.Errorf("layout is not applicable to block type %q", b.Type)
+	}
+	if got, capacity := len(b.Elements), b.Layout.Capacity(); got > capacity {
+		// Looks обрезает страницу до rows×columns, лишние карточки
+		// пропали бы молча.
+		return fmt.Errorf("%d elements exceeds layout capacity %d (%dx%d)",
+			got, capacity, b.Layout.Rows, b.Layout.Columns)
+	}
 	return nil
 }
 

@@ -224,3 +224,40 @@ func TestToLooksRequiresMediaPath(t *testing.T) {
 		t.Fatalf("err = %v, want ErrLooksMissingMediaPath", err)
 	}
 }
+
+// TestToLooksUsesBlockLayout — сетка страницы Looks берётся из блока, а
+// не из настроек набора: у каждого задания своя раскладка.
+func TestToLooksUsesBlockLayout(t *testing.T) {
+	cfg := &linka.Config{
+		Settings: linka.Settings{Columns: 3, Rows: 3},
+		Blocks: []linka.Block{
+			{
+				ID: "own", Type: linka.BlockTypeGrid,
+				Layout: &linka.Layout{Rows: 2, Columns: 2},
+				Elements: []linka.Element{
+					{ID: "a", Kind: linka.ElementKindText, Value: "1"},
+					{ID: "b", Kind: linka.ElementKindText, Value: "2"},
+				},
+			},
+			{
+				// Без layout — старый набор, действует сетка из settings.
+				ID: "legacy", Type: linka.BlockTypeGrid,
+				Elements: []linka.Element{{ID: "c", Kind: linka.ElementKindText, Value: "3"}},
+			},
+		},
+	}
+	got, err := linka.ToLooks(cfg)
+	if err != nil {
+		t.Fatalf("ToLooks: %v", err)
+	}
+	own, legacy := got.Pages[0], got.Pages[1]
+	if own.Columns != 2 || own.Rows != 2 {
+		t.Errorf("own layout: got %dx%d, want 2x2", own.Columns, own.Rows)
+	}
+	if len(own.Cards) != 4 {
+		t.Errorf("own cards = %d, want 4 (2x2 with padding)", len(own.Cards))
+	}
+	if legacy.Columns != 3 || legacy.Rows != 3 {
+		t.Errorf("legacy layout: got %dx%d, want settings 3x3", legacy.Columns, legacy.Rows)
+	}
+}

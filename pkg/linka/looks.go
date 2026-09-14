@@ -124,7 +124,14 @@ func ToLooks(cfg *Config) (*LooksConfig, error) {
 		Pages:       make([]LooksPage, 0, len(cfg.Blocks)),
 	}
 	for i := range cfg.Blocks {
-		page, err := blockToPage(&cfg.Blocks[i], columns, rows)
+		// Сетка страницы — из блока; у наборов без layout действует
+		// сетка набора.
+		layout := cfg.Blocks[i].EffectiveLayout(cfg.Settings)
+		page, err := blockToPage(
+			&cfg.Blocks[i],
+			positiveOr(layout.Columns, columns),
+			positiveOr(layout.Rows, rows),
+		)
 		if err != nil {
 			return nil, err
 		}

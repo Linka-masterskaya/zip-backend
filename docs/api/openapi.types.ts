@@ -1492,7 +1492,17 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Полностью сохранить валидный Linka 2.0 config и его media usages */
+        /**
+         * Полностью сохранить валидный Linka 2.0 config и его media usages
+         * @description Структура `config` задаётся JSON Schema в `pkg/linka/schema.json`, здесь тело
+         *     описано как произвольный объект.
+         *
+         *     Сетка задаётся у блока: `blocks[].layout: {rows, columns}` (1..100). Поле
+         *     опционально — у наборов, сохранённых до его появления, действует
+         *     `settings.{rows, columns}` как значение по умолчанию. Если `layout` задан,
+         *     число `elements` не может превышать `rows × columns`, иначе `400`.
+         *     Для `matching` и `categories` `layout` не применим — своя геометрия.
+         */
         put: {
             parameters: {
                 query?: never;
