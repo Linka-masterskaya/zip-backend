@@ -391,13 +391,6 @@ func (e *mediaEnv) attachTTSJob(mediaID uuid.UUID) {
 	require.NoError(e.t, err)
 }
 
-func (e *mediaEnv) attachActiveTTSJob(mediaID uuid.UUID) {
-	_, err := e.pool.Exec(e.t.Context(), `
-		INSERT INTO tts_jobs (org_id, text, voice, status, media_id)
-		VALUES ($1, $2, 'alena', 'in_progress', $3)`, e.orgID, "active-"+mediaID.String(), mediaID)
-	require.NoError(e.t, err)
-}
-
 func (e *mediaEnv) storageUsed(org uuid.UUID) int64 {
 	var used int64
 	require.NoError(e.t, e.pool.QueryRow(e.t.Context(),
@@ -692,3 +685,4 @@ func TestRepositoryOrphanScannerIgnoresFinishedTTSJobs(t *testing.T) {
 		}).Scan(&nulledLinks))
 	assert.Equal(t, 2, nulledLinks, "finished TTS jobs must not retain media and their FK must be nulled")
 }
+
