@@ -545,8 +545,6 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 		return appendContentsFilters(query, args, input)
 	}
 
-	// Аналогично: $2 — userID либо orgID, никогда оба одновременно, чтобы
-	// не оставлять непроцитированный в SQL плейсхолдер.
 	args := []any{*input.ParentID, userID, input.Section}
 	folderScope := "AND f.owner_id = $2"
 	packFolderColumn := "p.folder_id"
