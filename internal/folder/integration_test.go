@@ -588,6 +588,84 @@ func TestContentsFilters(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, rootPacks.Items)
 }
+func TestContentsOrganizationRestrictionsInTheLibrarySection(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "owner")
+	foreignID := seedFolderUser(t, pool, "foreign")
+	service := NewService(NewRepository(pool))
+
+	folder, err := service.Create(folderContext(ownerID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Библиотечная папка",
+	})
+	require.NoError(t, err)
+
+	ownPage, err := service.Contents(folderContext(ownerID), ContentsInput{
+		Section: SectionLibrary, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, ownPage.Items, 1)
+	assert.Equal(t, folder.ID, ownPage.Items[0].ID)
+	assert.Equal(t, 1, ownPage.Total)
+
+	foreignPage, err := service.Contents(folderContext(foreignID), ContentsInput{
+		Section: SectionLibrary, Limit: 1,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, foreignPage.Items)
+	assert.Equal(t, 0, foreignPage.Total)
+}
+
+func TestContentsLibraryOrgIsolationForNestedPacks(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "library org owner")
+	sameOrgID := seedFolderUser(t, pool, "library org same org")
+	foreignID := seedFolderUser(t, pool, "library org foreign")
+	service := NewService(NewRepository(pool))
+	ctx := t.Context()
+
+	// Пользователи owner и same в одной организации
+	var ownerOrgID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT org_id FROM users WHERE id = $1`, ownerID).Scan(&ownerOrgID))
+	_, err := pool.Exec(ctx,
+		`UPDATE users SET org_id = $1 WHERE id = $2`, ownerOrgID, sameOrgID)
+	require.NoError(t, err)
+
+	libraryFolder, err := service.Create(folderContext(ownerID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Библиотека",
+	})
+	require.NoError(t, err)
+	ownFolder, err := service.Create(folderContext(ownerID), CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Мои наборы",
+	})
+	require.NoError(t, err)
+
+	// Пак живет в my и опубликован в library.
+	var packID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO packs (
+			org_id, owner_id, folder_id, library_folder_id,
+			title, config, status, published_at
+		)
+		VALUES ($1, $2, $3, $4, 'Опубликованный набор', '{}'::jsonb, 'published', now())
+		RETURNING id`,
+		ownerOrgID, ownerID, ownFolder.ID, libraryFolder.ID).Scan(&packID))
+
+	samePage, err := service.Contents(folderContext(sameOrgID), ContentsInput{
+		Section: SectionLibrary, ParentID: &libraryFolder.ID,
+	})
+	require.NoError(t, err)
+	require.Len(t, samePage.Items, 1)
+	assert.Equal(t, packID, samePage.Items[0].ID)
+	assert.Equal(t, 1, samePage.Total)
+
+	// Пользователю чужой организации сама папка не видна — 404, а не пустой список,
+	// так как мы запрашиваем конкретную папку по ID.
+	_, err = service.Contents(folderContext(foreignID), ContentsInput{
+		Section: SectionLibrary, ParentID: &libraryFolder.ID,
+	})
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+}
 
 func TestContentsBreadcrumbsForFourLevelDepth(t *testing.T) {
 	pool := folderTestDB(t)
