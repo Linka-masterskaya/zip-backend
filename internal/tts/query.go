@@ -65,10 +65,10 @@ const upsertCache = `
 	INSERT INTO app_cache (key, data, updated_at)
 	VALUES ($1, $2, NOW())
 	ON CONFLICT (key) DO UPDATE
-	SET data = $2, updated_at = NOW()`
+	SET data = EXCLUDED.data, updated_at = NOW()`
 
 const getCache = `
-	SELECT data FROM app_cache WHERE key = $1`
+	SELECT data, updated_at FROM app_cache WHERE key = $1`
 
 const deleteOldJobs = `
 	WITH deleted AS (

@@ -186,6 +186,33 @@ func TestRepositoryUnusedFilterCoversAvatarsAndTTS(t *testing.T) {
 	assert.Equal(t, 5, allTotal)
 }
 
+func TestRepositoryDeleteUsesSameReferencePredicateAsBatchAndUnused(t *testing.T) {
+	env := newMediaEnv(t)
+
+	usedByPack := env.seed(env.orgID, env.userID, "sha-single-pack", 10)
+	avatar := env.seed(env.orgID, env.userID, "sha-single-avatar", 20)
+	activeTTS := env.seed(env.orgID, env.userID, "sha-single-active-tts", 30)
+	archivedAvatar := env.seed(env.orgID, env.userID, "sha-single-archived", 40)
+	finishedTTS := env.seed(env.orgID, env.userID, "sha-single-finished-tts", 50)
+
+	env.attachPackUsage(usedByPack.ID)
+	env.attachAvatar(avatar.ID)
+	env.attachActiveTTSJob(activeTTS.ID)
+	env.attachArchivedAvatar(archivedAvatar.ID)
+	env.attachTTSJob(finishedTTS.ID)
+
+	for _, id := range []uuid.UUID{usedByPack.ID, avatar.ID, activeTTS.ID} {
+		_, err := env.repo.Delete(t.Context(), env.userID, id)
+		require.ErrorIs(t, err, ErrInUse)
+	}
+
+	for _, id := range []uuid.UUID{archivedAvatar.ID, finishedTTS.ID} {
+		deleted, err := env.repo.Delete(t.Context(), env.userID, id)
+		require.NoError(t, err)
+		assert.Equal(t, id, deleted.ID)
+	}
+}
+
 func TestRepositoryDeleteBatchSkipsEveryKindOfReference(t *testing.T) {
 	env := newMediaEnv(t)
 
@@ -348,6 +375,13 @@ func (e *mediaEnv) attachArchivedAvatar(mediaID uuid.UUID) {
 			(id, defectologist_id, email_encrypted, name, status, avatar_media_id, deleted_at)
 		VALUES ($1, $2, $3, 'Архивный', 'archived', $4, now())`,
 		uuid.New(), e.userID, []byte{2}, mediaID)
+	require.NoError(e.t, err)
+}
+
+func (e *mediaEnv) attachActiveTTSJob(mediaID uuid.UUID) {
+	_, err := e.pool.Exec(e.t.Context(), `
+		INSERT INTO tts_jobs (org_id, text, voice, status, media_id)
+		VALUES ($1, $2, 'alena', 'pending', $3)`, e.orgID, "active-"+mediaID.String(), mediaID)
 	require.NoError(e.t, err)
 }
 

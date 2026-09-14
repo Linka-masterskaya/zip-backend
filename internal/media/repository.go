@@ -200,7 +200,11 @@ func (r *Repository) Delete(
 		return nil, fmt.Errorf("media repository delete lock: %w", err)
 	}
 	var inUse bool
-	if err = tx.QueryRow(ctx, mediaInUseQuery, mediaID).Scan(&inUse); err != nil {
+	err = tx.QueryRow(ctx, mediaInUseQuery, mediaID).Scan(&inUse)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
 		return nil, fmt.Errorf("media repository delete usage: %w", err)
 	}
 	if inUse {

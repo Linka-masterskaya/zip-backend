@@ -279,6 +279,7 @@ type TTSConfig struct {
 	MaxTextLen    int           `mapstructure:"max_text_len"`
 	MaxBodySize   int64         `mapstructure:"max_body_size"`
 	MimeType      string        `mapstructure:"mime_type"`
+	VoiceTTL      time.Duration `mapstructure:"voice_ttl"`
 }
 
 // CronConfig contains scheduled task settings.
@@ -529,6 +530,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ttsapi.mime_type", "audio/mpeg")
 	v.SetDefault("ttsapi.max_concurrent", 10)
 	v.SetDefault("ttsapi.rate_limit", 120)
+	v.SetDefault("ttsapi.voice_ttl", "24h")
 
 	// CORS defaults
 	v.SetDefault("cors.allow_origins", []string{"http://localhost:8080"})
@@ -613,15 +615,10 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 
-	// TTSapi validation
-	if cfg.TTS.ServiceURL == "" {
-		return fmt.Errorf("ttsapi.service_url is required")
-	}
-	if cfg.TTS.RateLimit <= 0 {
-		return fmt.Errorf("ttsapi.rate_limit must be > 0")
-	}
-	if cfg.TTS.MaxConcurrent <= 0 {
-		return fmt.Errorf("ttsapi.max_concurrent must be > 0")
+	// TTS validation. Guards against a misconfigured instance: missing upstream,
+	// disabled backpressure (zero limits), or a TTL so low it hammers the upstream.
+	if err := validateTTSConfig(&cfg.TTS); err != nil {
+		return err
 	}
 
 	// CORS validation
@@ -769,6 +766,29 @@ func normalizeStringSlice(items []string) []string {
 		}
 	}
 	return result
+}
+
+func validateTTSConfig(cfg *TTSConfig) error {
+	// TTSapi validation
+	if cfg.ServiceURL == "" {
+		return fmt.Errorf("ttsapi.service_url is required")
+	}
+
+	// Backpressure controls. Zero/negative values would disable the rate
+	// limiter or block all requests forever on the semaphore.
+	if cfg.RateLimit <= 0 {
+		return fmt.Errorf("ttsapi.rate_limit must be > 0")
+	}
+	if cfg.MaxConcurrent <= 0 {
+		return fmt.Errorf("ttsapi.max_concurrent must be > 0")
+	}
+
+	// Cache refresh floor. Too small a TTL would cause a reload on nearly
+	// every request, hammering the repo and the upstream
+	if cfg.VoiceTTL < 5*time.Minute {
+		return fmt.Errorf("ttsapi.voice_ttl must be >= 5m")
+	}
+	return nil
 }
 
 // MediaConfig contains media library settings.
