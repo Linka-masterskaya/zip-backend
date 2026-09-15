@@ -314,24 +314,101 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 }
 
 // Delete removes an owned pack from the authenticated user's organization.
+// Одиночное удаление это пачка из одного набора: путь один, иначе правила
+// очистки медиа пришлось бы держать синхронными в двух местах.
 func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	outcome, err := r.deletePacks(ctx, userID, []uuid.UUID{packID}, false)
 	if err != nil {
-		return fmt.Errorf("pack repository delete begin: %w", err)
+		return err
 	}
-	defer rollbackPackTx(ctx, tx)
-	var published bool
-	err = tx.QueryRow(ctx, lockPackForDeleteQuery, userID, packID).Scan(&published)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrPackNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("pack repository delete lock: %w", err)
-	}
-	if published {
+	if len(outcome.Published) > 0 {
 		return ErrPackPublished
 	}
-	adaptRows, err := tx.Query(ctx, adaptationIDsForPackQuery, packID)
+	if len(outcome.Deleted) == 0 {
+		return ErrPackNotFound
+	}
+	return nil
+}
+
+// DeleteBatch удаляет наборы пачкой. Опубликованные и недоступные не роняют
+// операцию целиком, а возвращаются вызывающему как пропущенные.
+func (r *Repository) DeleteBatch(
+	ctx context.Context,
+	userID uuid.UUID,
+	packIDs []uuid.UUID,
+	dryRun bool,
+) (*BatchOutcome, error) {
+	return r.deletePacks(ctx, userID, packIDs, dryRun)
+}
+
+func (r *Repository) deletePacks(
+	ctx context.Context,
+	userID uuid.UUID,
+	packIDs []uuid.UUID,
+	dryRun bool,
+) (*BatchOutcome, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("pack repository delete begin: %w", err)
+	}
+	defer rollbackPackTx(ctx, tx)
+
+	outcome, err := lockPacksForDelete(ctx, tx, userID, packIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(outcome.Deleted) > 0 && !dryRun {
+		if err = purgePacks(ctx, tx, userID, outcome.Deleted); err != nil {
+			return nil, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("pack repository delete commit: %w", err)
+	}
+	return outcome, nil
+}
+
+// lockPacksForDelete блокирует доступные наборы и раскладывает их на удаляемые
+// и опубликованные. Наборов, которых пользователь не видит, в выдаче нет:
+// вызывающий отличает их по отсутствию в обеих группах.
+func lockPacksForDelete(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+	packIDs []uuid.UUID,
+) (*BatchOutcome, error) {
+	rows, err := tx.Query(ctx, lockPacksForDeleteQuery, userID, packIDs)
+	if err != nil {
+		return nil, fmt.Errorf("pack repository delete lock: %w", err)
+	}
+	defer rows.Close()
+
+	outcome := &BatchOutcome{Deleted: []uuid.UUID{}, Published: []uuid.UUID{}}
+	for rows.Next() {
+		var (
+			id        uuid.UUID
+			published bool
+		)
+		if err = rows.Scan(&id, &published); err != nil {
+			return nil, fmt.Errorf("pack repository delete lock scan: %w", err)
+		}
+		if published {
+			outcome.Published = append(outcome.Published, id)
+			continue
+		}
+		outcome.Deleted = append(outcome.Deleted, id)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("pack repository delete lock rows: %w", err)
+	}
+	return outcome, nil
+}
+
+// purgePacks сносит наборы вместе со следами использования медиа. media_usages
+// не связаны с packs внешним ключом, поэтому строки снимаются руками. Сами
+// файлы и квоту освобождает крон-сканер сирот, здесь их не трогаем.
+func purgePacks(ctx context.Context, tx pgx.Tx, userID uuid.UUID, packIDs []uuid.UUID) error {
+	adaptRows, err := tx.Query(ctx, adaptationIDsForPacksQuery, packIDs)
 	if err != nil {
 		return fmt.Errorf("pack repository delete adaptations: %w", err)
 	}
@@ -339,10 +416,10 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 	if err != nil {
 		return fmt.Errorf("pack repository delete adaptations: %w", err)
 	}
-	if _, err = tx.Exec(ctx, deletePackMediaUsagesQuery, packID); err != nil {
+	if _, err = tx.Exec(ctx, deletePacksMediaUsagesQuery, packIDs); err != nil {
 		return fmt.Errorf("pack repository delete media usages: %w", err)
 	}
-	if _, err = tx.Exec(ctx, deletePackVersionMediaUsagesQuery, packID); err != nil {
+	if _, err = tx.Exec(ctx, deletePacksVersionMediaUsagesQuery, packIDs); err != nil {
 		return fmt.Errorf("pack repository delete version media usages: %w", err)
 	}
 	if len(adaptationIDs) > 0 {
@@ -350,11 +427,8 @@ func (r *Repository) Delete(ctx context.Context, userID, packID uuid.UUID) error
 			return fmt.Errorf("pack repository delete adaptation usages: %w", err)
 		}
 	}
-	if _, err = tx.Exec(ctx, deletePackQuery, userID, packID); err != nil {
+	if _, err = tx.Exec(ctx, deletePacksQuery, userID, packIDs); err != nil {
 		return fmt.Errorf("pack repository delete: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("pack repository delete commit: %w", err)
 	}
 	return nil
 }

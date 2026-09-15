@@ -33,6 +33,8 @@ type Config struct {
 	TTS          TTSConfig          `mapstructure:"ttsapi"`
 	Cron         CronConfig         `mapstructure:"cron"`
 	Media        MediaConfig        `mapstructure:"media"`
+	Packs        PacksConfig        `mapstructure:"packs"`
+	Folders      FoldersConfig      `mapstructure:"folders"`
 	PackShare    PackShareConfig    `mapstructure:"pack_share"`
 }
 
@@ -823,5 +825,15 @@ func validateTTSConfig(cfg *TTSConfig) error {
 
 // MediaConfig contains media library settings.
 type MediaConfig struct {
+	BatchDeleteLimit int `mapstructure:"batch_delete_limit"`
+}
+
+// PacksConfig contains pack library settings.
+type PacksConfig struct {
+	BatchDeleteLimit int `mapstructure:"batch_delete_limit"`
+}
+
+// FoldersConfig contains folder tree settings.
+type FoldersConfig struct {
 	BatchDeleteLimit int `mapstructure:"batch_delete_limit"`
 }

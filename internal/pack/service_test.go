@@ -26,7 +26,7 @@ func TestServiceCreateBuildsEmptyLinkaConfig(t *testing.T) {
 		return &Pack{ID: uuid.New(), Config: input.Config}, nil
 	}
 
-	result, err := NewService(repo, nil).Create(packContext(userID), "  New pack  ", folderID)
+	result, err := NewService(repo, nil, 0).Create(packContext(userID), "  New pack  ", folderID)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -68,7 +68,7 @@ func TestServiceGetListDeleteAndMoveDelegateUserScope(t *testing.T) {
 		return &Pack{ID: packID, FolderID: folderID}, nil
 	}
 
-	service := NewService(repo, nil)
+	service := NewService(repo, nil, 0)
 	ctx := packContext(userID)
 	_, err := service.Get(ctx, packID)
 	require.NoError(t, err)
@@ -96,7 +96,7 @@ func TestServiceListRejectsInvalidPagination(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewService(&fakePackRepository{}, nil).List(
+			_, err := NewService(&fakePackRepository{}, nil, 0).List(
 				packContext(uuid.New()), test.input,
 			)
 			assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
@@ -126,7 +126,7 @@ func TestServiceListRejectsInvalidFilters(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewService(&fakePackRepository{}, nil).List(
+			_, err := NewService(&fakePackRepository{}, nil, 0).List(
 				packContext(uuid.New()), test.input,
 			)
 			assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
@@ -158,7 +158,7 @@ func TestServiceUpdateAllowsClearingNullableMetadata(t *testing.T) {
 		Notes: NullablePatch[string]{Set: true},
 	}
 
-	_, err := NewService(repo, nil).Update(packContext(userID), packID, input)
+	_, err := NewService(repo, nil, 0).Update(packContext(userID), packID, input)
 
 	require.NoError(t, err)
 }
@@ -186,7 +186,7 @@ func TestServiceUpdateRejectsInvalidMetadata(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewService(&fakePackRepository{}, nil).Update(
+			_, err := NewService(&fakePackRepository{}, nil, 0).Update(
 				packContext(uuid.New()), uuid.New(), UpdateInput{FilterMetadata: test.metadata},
 			)
 			assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
@@ -219,7 +219,7 @@ func TestServicePublishValidatesConfigBeforeMutation(t *testing.T) {
 	}
 	ctx := authctx.SetRoleToCtx(packContext(userID), "defectologist")
 
-	_, err := NewService(repo, nil).Publish(ctx, packID, folderID)
+	_, err := NewService(repo, nil, 0).Publish(ctx, packID, folderID)
 
 	assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
 	assert.False(t, publishCalled)
@@ -241,7 +241,7 @@ func TestServiceMapsRepositoryErrors(t *testing.T) {
 			repo := &fakePackRepository{getFn: func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error) {
 				return nil, test.repoErr
 			}}
-			_, err := NewService(repo, nil).Get(packContext(uuid.New()), uuid.New())
+			_, err := NewService(repo, nil, 0).Get(packContext(uuid.New()), uuid.New())
 			assertAppErrorStatus(t, err, test.httpStatus)
 		})
 	}
@@ -262,7 +262,7 @@ func TestServiceDuplicateContract(t *testing.T) {
 		return &Pack{ID: uuid.New(), FolderID: folderID}, nil
 	}
 
-	result, err := NewService(repo, nil).Duplicate(
+	result, err := NewService(repo, nil, 0).Duplicate(
 		packContext(userID), packID, DuplicateInput{FolderID: &folderID},
 	)
 
@@ -276,7 +276,7 @@ func TestServiceDuplicateMapsDestinationRequired(t *testing.T) {
 	) (*Pack, error) {
 		return nil, ErrDuplicateDestinationRequired
 	}}
-	_, err := NewService(repo, nil).Duplicate(
+	_, err := NewService(repo, nil, 0).Duplicate(
 		packContext(uuid.New()), uuid.New(), DuplicateInput{},
 	)
 	assertAppErrorStatus(t, err, http.StatusBadRequest)
@@ -298,7 +298,7 @@ func TestServiceRequiresAuthenticatedUser(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := test.call(NewService(&fakePackRepository{}, nil))
+			err := test.call(NewService(&fakePackRepository{}, nil, 0))
 			require.ErrorIs(t, err, apperr.ErrUnauthorized)
 		})
 	}
@@ -324,6 +324,7 @@ type fakePackRepository struct {
 	listWithTotalFn     func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
+	deleteBatchFn       func(context.Context, uuid.UUID, []uuid.UUID, bool) (*BatchOutcome, error)
 	moveFn              func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
 	publishFn           func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, bool) (*Pack, error)
 }
@@ -387,6 +388,18 @@ func (f *fakePackRepository) Delete(ctx context.Context, userID, packID uuid.UUI
 		return f.deleteFn(ctx, userID, packID)
 	}
 	return nil
+}
+
+func (f *fakePackRepository) DeleteBatch(
+	ctx context.Context,
+	userID uuid.UUID,
+	packIDs []uuid.UUID,
+	dryRun bool,
+) (*BatchOutcome, error) {
+	if f.deleteBatchFn != nil {
+		return f.deleteBatchFn(ctx, userID, packIDs, dryRun)
+	}
+	return &BatchOutcome{Deleted: packIDs, Published: []uuid.UUID{}}, nil
 }
 
 func (f *fakePackRepository) Move(ctx context.Context, userID, packID, folderID uuid.UUID) (*Pack, error) {

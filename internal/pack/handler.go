@@ -21,6 +21,7 @@ type packService interface {
 	List(context.Context, ListInput) (*ListPage, error)
 	Update(context.Context, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID) error
+	DeleteBatch(context.Context, []uuid.UUID, bool) (*BatchDeleteResult, error)
 	Move(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	Publish(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	Unpublish(context.Context, uuid.UUID) error
@@ -174,6 +175,27 @@ func (h *Handler) DeletePack(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// Тело batch-delete это только массив UUID и флаг, поэтому лимит взят с
+// запасом к сотне идентификаторов и заодно отсекает гигантский запрос.
+const maxBatchDeleteBody = int64(128 * 1024)
+
+// BatchDeletePacks handles POST /api/v1/packs/batch-delete.
+func (h *Handler) BatchDeletePacks(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBatchDeleteBody)
+	var req struct {
+		IDs    []uuid.UUID `json:"ids"`
+		DryRun bool        `json:"dry_run"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		return apperr.ErrBadRequest.WithMessage("body must contain an ids array of pack UUIDs")
+	}
+	result, err := h.service.DeleteBatch(r.Context(), req.IDs, req.DryRun)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, result)
 }
 
 // MovePack handles POST /api/v1/packs/{id}/move.

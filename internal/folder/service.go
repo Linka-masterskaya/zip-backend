@@ -3,10 +3,13 @@ package folder
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
+	"github.com/Linka-masterskaya/zip-backend/internal/bulk"
 	"github.com/Linka-masterskaya/zip-backend/internal/packfilter"
 	"github.com/google/uuid"
 )
@@ -17,15 +20,114 @@ type folderRepository interface {
 	Rename(context.Context, uuid.UUID, string, uuid.UUID, string) (*Folder, error)
 	Move(context.Context, uuid.UUID, string, uuid.UUID, *uuid.UUID) (*Folder, error)
 	Delete(context.Context, uuid.UUID, string, uuid.UUID) error
+	DeleteBatch(context.Context, uuid.UUID, string, []uuid.UUID, bool) (*BatchOutcome, error)
 	Contents(context.Context, uuid.UUID, ContentsInput) (*ContentsPage, error)
 }
 
 type Service struct {
-	repo folderRepository
+	repo             folderRepository
+	batchDeleteLimit int
 }
 
-func NewService(repo folderRepository) *Service {
-	return &Service{repo: repo}
+func NewService(repo folderRepository, batchDeleteLimit int) *Service {
+	if batchDeleteLimit <= 0 {
+		batchDeleteLimit = DefaultBatchDeleteLimit
+	}
+	return &Service{repo: repo, batchDeleteLimit: batchDeleteLimit}
+}
+
+// DefaultBatchDeleteLimit ограничивает пачку, когда лимит не задан в конфиге.
+const DefaultBatchDeleteLimit = 100
+
+// BatchOutcome описывает результат пачки на уровне репозитория.
+type BatchOutcome struct {
+	Deleted  []uuid.UUID
+	NotEmpty []uuid.UUID
+}
+
+// BatchDeleteResult это ответ ручки массового удаления: что удалено, что
+// пропущено и по какой причине.
+type BatchDeleteResult struct {
+	Deleted []uuid.UUID    `json:"deleted"`
+	Skipped []bulk.Skipped `json:"skipped"`
+	DryRun  bool           `json:"dry_run"`
+}
+
+// DeleteBatch удаляет пустые папки пачкой. Непустая папка попадает в skipped:
+// удаление вместе с содержимым это отдельное явное действие.
+func (s *Service) DeleteBatch(
+	ctx context.Context,
+	ids []uuid.UUID,
+	dryRun bool,
+) (*BatchDeleteResult, error) {
+	userID, role, err := actor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, apperr.ErrBadRequest.WithMessage("ids must not be empty")
+	}
+	if len(ids) > s.batchDeleteLimit {
+		return nil, apperr.ErrBadRequest.WithMessage(
+			fmt.Sprintf("ids must contain at most %d items", s.batchDeleteLimit),
+		)
+	}
+	unique := uniqueFolderIDs(ids)
+	outcome, err := s.repo.DeleteBatch(ctx, userID, role, unique, dryRun)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	result := batchDeleteResult(unique, outcome, dryRun)
+	slog.InfoContext(ctx, "folder batch delete",
+		"user_id", userID,
+		"requested", len(unique),
+		"deleted", len(result.Deleted),
+		"skipped", len(result.Skipped),
+		"dry_run", dryRun,
+	)
+	return result, nil
+}
+
+func batchDeleteResult(requested []uuid.UUID, outcome *BatchOutcome, dryRun bool) *BatchDeleteResult {
+	result := &BatchDeleteResult{
+		Deleted: outcome.Deleted,
+		Skipped: []bulk.Skipped{},
+		DryRun:  dryRun,
+	}
+	resolved := make(map[uuid.UUID]struct{}, len(outcome.Deleted)+len(outcome.NotEmpty))
+	for _, id := range outcome.Deleted {
+		resolved[id] = struct{}{}
+	}
+	for _, id := range outcome.NotEmpty {
+		resolved[id] = struct{}{}
+	}
+	for _, id := range requested {
+		if _, ok := resolved[id]; !ok {
+			result.Skipped = append(result.Skipped, bulk.Skipped{ID: id, Reason: bulk.ReasonNotFound})
+		}
+	}
+	for _, id := range outcome.NotEmpty {
+		result.Skipped = append(result.Skipped, bulk.Skipped{ID: id, Reason: bulk.ReasonNotEmpty})
+	}
+	return result
+}
+
+// uniqueFolderIDs схлопывает повторы, сохраняя порядок запроса: пользователь
+// видит пропуски в том же порядке, в каком отмечал карточки.
+func uniqueFolderIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	unique := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (*Folder, error) {

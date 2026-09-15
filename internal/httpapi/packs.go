@@ -34,6 +34,7 @@ func RegisterPackRoutes(
 	mux.Handle("GET /api/v1/packs/{id}", protected(handlers.Pack.GetPack))
 	mux.Handle("GET /api/v1/packs", protected(handlers.Pack.ListPacks))
 	mux.Handle("PATCH /api/v1/packs/{id}", protected(handlers.Pack.UpdatePack))
+	mux.Handle("POST /api/v1/packs/batch-delete", protected(handlers.Pack.BatchDeletePacks))
 	mux.Handle("DELETE /api/v1/packs/{id}", protected(handlers.Pack.DeletePack))
 	mux.Handle("POST /api/v1/packs/{id}/move", protected(handlers.Pack.MovePack))
 	mux.Handle("POST /api/v1/packs/{id}/publication", protected(handlers.Pack.PublishPack))

@@ -436,6 +436,82 @@ components:
         dry_run:
           type: boolean
 
+    PackBatchDeleteRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+          description: Идентификаторы наборов; повторы схлопываются. Размер пачки задаётся настройкой packs.batch_delete_limit, по умолчанию 100.
+        dry_run:
+          type: boolean
+          default: false
+          description: Посчитать результат и ничего не удалять.
+
+    PackSkipped:
+      type: object
+      required: [id, reason]
+      properties:
+        id: { type: string, format: uuid }
+        reason:
+          type: string
+          enum: [not_found, published]
+          description: 'not_found — набора нет или он принадлежит другому пользователю; published — набор опубликован, сначала нужно снять публикацию'
+
+    PackBatchDeleteResult:
+      type: object
+      required: [deleted, skipped, dry_run]
+      description: Удалённые и пропущенные наборы одной пачки.
+      properties:
+        deleted:
+          type: array
+          items: { type: string, format: uuid }
+        skipped:
+          type: array
+          items: { $ref: '#/components/schemas/PackSkipped' }
+        dry_run:
+          type: boolean
+
+    FolderBatchDeleteRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+          description: Идентификаторы папок; повторы схлопываются. Размер пачки задаётся настройкой folders.batch_delete_limit, по умолчанию 100.
+        dry_run:
+          type: boolean
+          default: false
+          description: Посчитать результат и ничего не удалять.
+
+    FolderSkipped:
+      type: object
+      required: [id, reason]
+      properties:
+        id: { type: string, format: uuid }
+        reason:
+          type: string
+          enum: [not_found, not_empty]
+          description: 'not_found — папки нет или она недоступна; not_empty — в папке остались наборы или подпапки'
+
+    FolderBatchDeleteResult:
+      type: object
+      required: [deleted, skipped, dry_run]
+      description: Удалённые и пропущенные папки одной пачки.
+      properties:
+        deleted:
+          type: array
+          items: { type: string, format: uuid }
+        skipped:
+          type: array
+          items: { $ref: '#/components/schemas/FolderSkipped' }
+        dry_run:
+          type: boolean
+
     PictureCategory:
       type: object
       required: [id, name]
@@ -1128,6 +1204,32 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { description: Родитель не найден }
 
+  /folders/batch-delete:
+    post:
+      tags: [folders]
+      summary: Массовое удаление пустых папок одной пачкой
+      description: >-
+        Идемпотентно. Папка, которой нет или которая недоступна, попадает в
+        `skipped` с причиной `not_found`, непустая — с причиной `not_empty`,
+        остальные из пачки удаляются. Папка, чьи подпапки отмечены в этой же
+        пачке, освобождается вместе с ними и удаляется. Удаление папки вместе
+        с содержимым здесь не выполняется. Сделано методом POST, потому что
+        тело у DELETE вырезают часть прокси и клиентов.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FolderBatchDeleteRequest' }
+      responses:
+        '200':
+          description: Что удалено и что пропущено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FolderBatchDeleteResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /folders/{id}:
     patch:
       tags: [folders]
@@ -1626,6 +1728,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PackListPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /packs/batch-delete:
+    post:
+      tags: [packs]
+      summary: Массовое удаление наборов одной пачкой
+      description: >-
+        Идемпотентно. Набор, которого нет или который принадлежит другому
+        пользователю, попадает в `skipped` с причиной `not_found`,
+        опубликованный — с причиной `published`, остальные из пачки удаляются
+        вместе со следами использования медиа. Публикация неявно не снимается.
+        Сделано методом POST, потому что тело у DELETE вырезают часть прокси и
+        клиентов.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PackBatchDeleteRequest' }
+      responses:
+        '200':
+          description: Что удалено и что пропущено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackBatchDeleteResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -311,52 +312,150 @@ func relativeSubtreeDepth(
 	return relativeMax, nil
 }
 
+// Delete удаляет одну пустую папку. Это пачка из одного элемента: путь общий,
+// чтобы правила доступа и проверка пустоты не разъезжались между ручками.
 func (r *Repository) Delete(
 	ctx context.Context,
 	userID uuid.UUID,
 	role string,
 	folderID uuid.UUID,
 ) error {
-	tag, err := r.pool.Exec(ctx, `
-		DELETE FROM folders f USING users u
-		WHERE f.id = $2
-		  AND u.id = $1
+	outcome, err := r.deleteFolders(ctx, userID, role, []uuid.UUID{folderID}, false)
+	if err != nil {
+		return err
+	}
+	if len(outcome.NotEmpty) > 0 {
+		return ErrNotEmpty
+	}
+	if len(outcome.Deleted) == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteBatch удаляет пустые папки пачкой. Непустая папка не роняет операцию
+// целиком, а возвращается вызывающему как пропущенная: удаление содержимого
+// это отдельное явное действие.
+func (r *Repository) DeleteBatch(
+	ctx context.Context,
+	userID uuid.UUID,
+	role string,
+	folderIDs []uuid.UUID,
+	dryRun bool,
+) (*BatchOutcome, error) {
+	return r.deleteFolders(ctx, userID, role, folderIDs, dryRun)
+}
+
+func (r *Repository) deleteFolders(
+	ctx context.Context,
+	userID uuid.UUID,
+	role string,
+	folderIDs []uuid.UUID,
+	dryRun bool,
+) (*BatchOutcome, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("folder delete begin: %w", err)
+	}
+	defer rollback(ctx, tx)
+
+	accessible, err := lockFoldersForDelete(ctx, tx, userID, role, folderIDs)
+	if err != nil {
+		return nil, err
+	}
+	outcome := &BatchOutcome{Deleted: []uuid.UUID{}, NotEmpty: []uuid.UUID{}}
+	// Папки удаляются снизу вверх: folders.parent_id объявлен RESTRICT, и
+	// родитель, чьи подпапки отмечены в этой же пачке, освобождается только
+	// после них. Порядок блокировок при этом уже зафиксирован локом выше.
+	for _, folder := range accessible {
+		deleted, err := deleteEmptyFolder(ctx, tx, folder.id)
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			outcome.Deleted = append(outcome.Deleted, folder.id)
+			continue
+		}
+		outcome.NotEmpty = append(outcome.NotEmpty, folder.id)
+	}
+	// Холостой прогон считает результат тем же кодом, что и настоящее
+	// удаление, и откатывает его. Иначе предсказание разошлось бы с фактом на
+	// первой же папке, освободившейся вместе с подпапками из той же пачки.
+	if dryRun {
+		return outcome, nil
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("folder delete commit: %w", err)
+	}
+	return outcome, nil
+}
+
+type lockedFolder struct {
+	id    uuid.UUID
+	depth int
+}
+
+// lockFoldersForDelete блокирует доступные пользователю папки и отдаёт их в
+// порядке удаления, от самых вложенных к верхним. Недоступных папок в выдаче
+// нет: вызывающий отличает их по отсутствию в результате.
+func lockFoldersForDelete(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+	role string,
+	folderIDs []uuid.UUID,
+) ([]lockedFolder, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT f.id, f.depth
+		FROM folders f
+		JOIN users u ON u.id = $1
+		WHERE f.id = ANY($2::uuid[])
 		  AND u.org_id IS NOT NULL
 		  AND u.deleted_at IS NULL
 		  AND f.org_id = u.org_id
 		  AND (f.owner_id = u.id OR ($3 AND f.section = 'library'))
+		ORDER BY f.id
+		FOR UPDATE OF f, u`, userID, folderIDs, isAdmin(role))
+	if err != nil {
+		return nil, fmt.Errorf("folder delete lock: %w", err)
+	}
+	defer rows.Close()
+
+	locked := make([]lockedFolder, 0, len(folderIDs))
+	for rows.Next() {
+		var folder lockedFolder
+		if err = rows.Scan(&folder.id, &folder.depth); err != nil {
+			return nil, fmt.Errorf("folder delete lock scan: %w", err)
+		}
+		locked = append(locked, folder)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("folder delete lock rows: %w", err)
+	}
+	sort.SliceStable(locked, func(i, j int) bool {
+		return locked[i].depth > locked[j].depth
+	})
+	return locked, nil
+}
+
+// deleteEmptyFolder удаляет папку, если в ней не осталось ни подпапок, ни
+// наборов. Права уже проверены при блокировке.
+func deleteEmptyFolder(ctx context.Context, tx pgx.Tx, folderID uuid.UUID) (bool, error) {
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM folders f
+		WHERE f.id = $1
 		  AND NOT EXISTS (SELECT 1 FROM folders c WHERE c.parent_id = f.id)
 		  AND NOT EXISTS (SELECT 1 FROM packs p WHERE p.folder_id = f.id)
 		  AND NOT EXISTS (SELECT 1 FROM packs p WHERE p.library_folder_id = f.id)`,
-		userID, folderID, isAdmin(role))
+		folderID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			return ErrNotEmpty
+			return false, nil
 		}
-		return fmt.Errorf("folder delete: %w", err)
+		return false, fmt.Errorf("folder delete: %w", err)
 	}
-	if tag.RowsAffected() > 0 {
-		return nil
-	}
-	var exists bool
-	if err = r.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM folders f
-			JOIN users u ON u.id = $1
-			WHERE f.id = $2
-			  AND u.org_id IS NOT NULL
-			  AND u.deleted_at IS NULL
-			  AND f.org_id = u.org_id
-			  AND (f.owner_id = u.id OR ($3 AND f.section = 'library'))
-		)`, userID, folderID, isAdmin(role)).Scan(&exists); err != nil {
-		return fmt.Errorf("folder delete existence: %w", err)
-	}
-	if exists {
-		return ErrNotEmpty
-	}
-	return ErrNotFound
+	return tag.RowsAffected() > 0, nil
 }
 
 func (r *Repository) Contents(

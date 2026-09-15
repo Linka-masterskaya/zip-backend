@@ -583,14 +583,14 @@ func e2eServer(
 	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
 	t.Cleanup(cleanupStorage)
 	packRepo := pack.NewRepository(pool)
-	packService := pack.NewService(packRepo, nil)
+	packService := pack.NewService(packRepo, nil, pack.DefaultBatchDeleteLimit)
 	packHandler := pack.NewHandler(packService)
 	mediaService := media.NewService(media.NewRepository(pool), objectStorage, media.DefaultBatchDeleteLimit)
 	mediaHandler := media.NewHandler(mediaService)
 	contentHandler := pack.NewContentHandler(
 		pack.NewContentService(packRepo, objectStorage, mediaService, packService),
 	)
-	folderHandler := folder.NewHandler(folder.NewService(folder.NewRepository(pool)))
+	folderHandler := folder.NewHandler(folder.NewService(folder.NewRepository(pool), folder.DefaultBatchDeleteLimit))
 	studentHandler := student.NewHandler(student.NewService(student.NewRepository(pool), crypto, objectStorage, mediaService))
 
 	mux := http.NewServeMux()

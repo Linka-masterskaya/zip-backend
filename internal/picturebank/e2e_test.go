@@ -96,7 +96,7 @@ func TestE2E_PicturesBankImportAndArchive(t *testing.T) {
 	picturesService := NewService(client)
 	handler := NewHandler(picturesService)
 	packRepo := pack.NewRepository(pool)
-	packService := pack.NewService(packRepo, nil)
+	packService := pack.NewService(packRepo, nil, 0)
 	packHandler := pack.NewHandler(packService)
 	contentHandler := pack.NewContentHandler(
 		pack.NewContentService(
