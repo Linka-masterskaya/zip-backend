@@ -49,6 +49,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &req); err != nil {
 		return apperr.ErrBadRequest
 	}
+	if req.Kind == "student" {
+		return apperr.ErrBadRequest.WithMessage("student folders are created automatically")
+	}
+
 	result, err := h.service.Create(r.Context(), CreateInput(req))
 	if err != nil {
 		return err
