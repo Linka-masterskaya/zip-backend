@@ -194,7 +194,7 @@ func TestArchivedStudentFolderIsHiddenFromListsFiltersAndPagination(t *testing.T
 	ownerID := seedFolderUser(t, pool, "student folder visibility")
 	activeStudentID := seedFolderStudent(t, pool, ownerID)
 	archivedStudentID := seedFolderStudent(t, pool, ownerID)
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := folderContext(ownerID)
 
 	activeFolder, err := service.Create(ctx, CreateInput{
@@ -681,7 +681,7 @@ func TestContentsOrganizationRestrictionsInTheLibrarySection(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "owner")
 	foreignID := seedFolderUser(t, pool, "foreign")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 
 	folder, err := service.Create(folderContext(ownerID), CreateInput{
 		Section: SectionLibrary, Kind: KindFolder, Name: "Библиотечная папка",
@@ -709,7 +709,7 @@ func TestContentsLibraryOrgIsolationForNestedPacks(t *testing.T) {
 	ownerID := seedFolderUser(t, pool, "library org owner")
 	sameOrgID := seedFolderUser(t, pool, "library org same org")
 	foreignID := seedFolderUser(t, pool, "library org foreign")
-	service := NewService(NewRepository(pool))
+	service := NewService(NewRepository(pool), 0)
 	ctx := t.Context()
 
 	// Пользователи owner и same в одной организации

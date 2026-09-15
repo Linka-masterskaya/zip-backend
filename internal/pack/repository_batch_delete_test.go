@@ -12,7 +12,8 @@ import (
 
 // TestRepositoryDeleteBatchSkipsPublishedAndForeign: пачка не падает целиком
 // из-за одного элемента. Опубликованный набор остаётся на месте, чужой не
-// виден вовсе, остальные уходят вместе со ссылками на медиа.
+// виден вовсе, остальные уходят вместе со следами использования медиа. Сами
+// файлы и квоту после AB-70 освобождает крон, поэтому здесь они не проверяются.
 func TestRepositoryDeleteBatchSkipsPublishedAndForeign(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
@@ -70,17 +71,23 @@ func TestRepositoryDeleteBatchSkipsPublishedAndForeign(t *testing.T) {
 		[]uuid.UUID{published.ID, foreignPack.ID}).Scan(&stillThere))
 	assert.Equal(t, 2, stillThere)
 
-	// Медиа первого набора больше ничем не занято, значит ссылка и квота
-	// освобождаются тем же путём, что и при одиночном удалении.
+	// Ссылка на медиа удалённого набора снята, иначе файл навсегда остался бы
+	// занятым и крон-сканер до него не добрался бы.
+	var usages int
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM media_usages WHERE media_id = $1`, mediaID).Scan(&usages))
+	assert.Equal(t, 0, usages)
+
+	// Запись файла и квота остаются нетронутыми: их освобождает крон.
 	var mediaCount int
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT count(*) FROM media_files WHERE id = $1`, mediaID).Scan(&mediaCount))
-	assert.Equal(t, 0, mediaCount)
+	assert.Equal(t, 1, mediaCount)
 
 	var used int64
 	require.NoError(t, pool.QueryRow(t.Context(),
 		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgID).Scan(&used))
-	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(8), used)
 
 	var foreignUsed int64
 	require.NoError(t, pool.QueryRow(t.Context(),
@@ -88,8 +95,9 @@ func TestRepositoryDeleteBatchSkipsPublishedAndForeign(t *testing.T) {
 	assert.Equal(t, int64(0), foreignUsed)
 }
 
-// TestRepositoryDeleteBatchKeepsSharedMedia: файл, который остаётся нужен
-// уцелевшему набору, из библиотеки не пропадает.
+// TestRepositoryDeleteBatchKeepsSharedMedia: снимаются ссылки только удалённых
+// наборов. Использование уцелевшего набора остаётся, поэтому крон такой файл
+// не подберёт.
 func TestRepositoryDeleteBatchKeepsSharedMedia(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
@@ -117,6 +125,20 @@ func TestRepositoryDeleteBatchKeepsSharedMedia(t *testing.T) {
 	outcome, err := repo.DeleteBatch(t.Context(), ownerID, []uuid.UUID{deleted.ID}, false)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{deleted.ID}, outcome.Deleted)
+
+	var keptUsage int
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_usages
+		WHERE media_id = $1 AND source_type = 'pack' AND source_id = $2`,
+		mediaID, kept.ID).Scan(&keptUsage))
+	assert.Equal(t, 1, keptUsage)
+
+	var deletedUsage int
+	require.NoError(t, pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_usages
+		WHERE media_id = $1 AND source_type = 'pack' AND source_id = $2`,
+		mediaID, deleted.ID).Scan(&deletedUsage))
+	assert.Equal(t, 0, deletedUsage)
 
 	var mediaCount int
 	require.NoError(t, pool.QueryRow(t.Context(),
