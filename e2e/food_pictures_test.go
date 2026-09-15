@@ -105,10 +105,13 @@ func TestE2E_FoodPicturesFolderAssignedToStudent(t *testing.T) {
 	student := e2eCreateStudent(
 		t, server, token, "food.journey.student@example.com", "Тестовый ученик",
 	)
-	studentShelf := e2eCreateFolder(t, server, token, map[string]any{
-		"section": "students", "kind": "student",
-		"student_id": student.ID, "name": student.Name,
-	})
+	studentFolders := e2eJSON[[]folder.Folder](
+		t,
+		e2eRequest(t, server, token, http.MethodGet, "/api/v1/folders?section=students", nil),
+		http.StatusOK,
+	)
+	require.Len(t, studentFolders, 1)
+	studentShelf := studentFolders[0]
 	assignments := e2eJSON[[]pack.Adaptation](
 		t,
 		e2eRequest(t, server, token, http.MethodPost,

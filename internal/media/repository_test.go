@@ -685,4 +685,3 @@ func TestRepositoryOrphanScannerIgnoresFinishedTTSJobs(t *testing.T) {
 		}).Scan(&nulledLinks))
 	assert.Equal(t, 2, nulledLinks, "finished TTS jobs must not retain media and their FK must be nulled")
 }
-

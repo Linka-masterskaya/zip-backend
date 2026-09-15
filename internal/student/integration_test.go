@@ -56,14 +56,6 @@ func TestStudentCRUDScopeAndFolderDeleteConflict(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, newName, updated.Name)
 
-	_, err = pool.Exec(context.Background(), `
-		INSERT INTO folders (
-			org_id, owner_id, section, kind, student_id, name, depth
-		)
-		SELECT org_id, id, 'students', 'student', $2, 'Анна', 0
-		FROM users WHERE id = $1`, ownerID, created.ID)
-	require.NoError(t, err)
-
 	err = service.Delete(studentContext(ownerID), created.ID)
 	assertStudentStatus(t, err, apperr.ErrConflict.HTTPStatus)
 	_, err = pool.Exec(context.Background(), `DELETE FROM folders WHERE student_id = $1`, created.ID)
