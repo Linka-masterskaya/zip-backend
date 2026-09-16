@@ -41,6 +41,10 @@ func (r *Repository) Create(
 			FROM users u
 			WHERE u.id = $2 AND u.deleted_at IS NULL
 			RETURNING `+studentColumns+`
+		), folder AS (
+			INSERT INTO folders (org_id, owner_id, section, kind, student_id, name, depth)
+			SELECT u.org_id, $2, 'students', 'student', created.id, $4, 0
+			FROM created, users u WHERE u.id = $2
 		)
 		SELECT `+studentColumnsWithAvatar+`
 		FROM created s

@@ -50,6 +50,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &req); err != nil {
 		return apperr.ErrBadRequest
 	}
+
 	result, err := h.service.Create(r.Context(), CreateInput(req))
 	if err != nil {
 		return err

@@ -352,9 +352,14 @@ func TestE2E_P1UserJourney(t *testing.T) {
 	require.Len(t, students.Items, 1)
 	assert.Equal(t, createdStudent.ID, students.Items[0].ID)
 
-	studentFolder := e2eCreateFolder(t, server, ownerToken, map[string]any{
-		"section": "students", "kind": "student", "student_id": createdStudent.ID, "name": "Анна",
-	})
+	studentFolders := e2eJSON[[]folder.Folder](
+		t,
+		e2eRequest(t, server, ownerToken, http.MethodGet, "/api/v1/folders?section=students", nil),
+		http.StatusOK,
+	)
+	require.Len(t, studentFolders, 1)
+	studentFolder := studentFolders[0]
+
 	response = e2eRequest(
 		t,
 		server,
@@ -455,14 +460,22 @@ func TestE2E_RealPackLifecycle(t *testing.T) {
 
 	firstStudent := e2eCreateStudent(t, server, token, "one@example.com", "Первый ребёнок")
 	secondStudent := e2eCreateStudent(t, server, token, "two@example.com", "Второй ребёнок")
-	firstShelf := e2eCreateFolder(t, server, token, map[string]any{
-		"section": "students", "kind": "student",
-		"student_id": firstStudent.ID, "name": firstStudent.Name,
-	})
-	secondShelf := e2eCreateFolder(t, server, token, map[string]any{
-		"section": "students", "kind": "student",
-		"student_id": secondStudent.ID, "name": secondStudent.Name,
-	})
+	studentFolders := e2eJSON[[]folder.Folder](
+		t,
+		e2eRequest(t, server, token, http.MethodGet, "/api/v1/folders?section=students", nil),
+		http.StatusOK,
+	)
+	require.Len(t, studentFolders, 2)
+
+	var firstShelf, secondShelf folder.Folder
+	for _, f := range studentFolders {
+		switch *f.StudentID {
+		case firstStudent.ID:
+			firstShelf = f
+		case secondStudent.ID:
+			secondShelf = f
+		}
+	}
 
 	assignments := e2eJSON[[]pack.Adaptation](
 		t,
