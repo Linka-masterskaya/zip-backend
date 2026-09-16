@@ -2285,7 +2285,11 @@ export interface paths {
             };
         };
         put?: never;
-        /** Создать ученика */
+        /**
+         * Создать ученика
+         * @description Вместе с учеником автоматически создаётся папка kind=student
+         *     в секции students.
+         */
         post: {
             parameters: {
                 query?: never;

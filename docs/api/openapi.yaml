@@ -2235,6 +2235,9 @@ paths:
     post:
       tags: [students]
       summary: Создать ученика
+      description: |
+        Вместе с учеником автоматически создаётся папка kind=student
+        в секции students.
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true

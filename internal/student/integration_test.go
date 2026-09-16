@@ -464,16 +464,14 @@ func TestStudentAvatarUpload(t *testing.T) {
 	assert.Equal(t, before, after, "битый id не должен оставлять файл в банке")
 }
 
-// seedStudentFolder заводит папку ученика с вложенной папкой и возвращает
-// их идентификаторы: корень и вложенную.
+// seedStudentFolder находит автоматически созданную папку ученика и
+// добавляет вложенную. Возвращает идентификаторы: корень и вложенную.
 func seedStudentFolder(t *testing.T, pool *pgxpool.Pool, ownerID, studentID uuid.UUID) (uuid.UUID, uuid.UUID) {
 	t.Helper()
 	var rootID uuid.UUID
 	require.NoError(t, pool.QueryRow(context.Background(), `
-		INSERT INTO folders (org_id, owner_id, section, kind, student_id, name, depth)
-		SELECT org_id, id, 'students', 'student', $2, 'Аня', 0
-		FROM users WHERE id = $1
-		RETURNING id`, ownerID, studentID).Scan(&rootID))
+		SELECT id FROM folders WHERE student_id = $1 AND kind = 'student'`,
+		studentID).Scan(&rootID))
 
 	var childID uuid.UUID
 	require.NoError(t, pool.QueryRow(context.Background(), `
