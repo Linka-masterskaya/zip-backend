@@ -419,9 +419,6 @@ func purgePacks(ctx context.Context, tx pgx.Tx, userID uuid.UUID, packIDs []uuid
 	if _, err = tx.Exec(ctx, deletePacksMediaUsagesQuery, packIDs); err != nil {
 		return fmt.Errorf("pack repository delete media usages: %w", err)
 	}
-	if _, err = tx.Exec(ctx, deletePacksVersionMediaUsagesQuery, packIDs); err != nil {
-		return fmt.Errorf("pack repository delete version media usages: %w", err)
-	}
 	if len(adaptationIDs) > 0 {
 		if _, err = tx.Exec(ctx, deleteAdaptationUsagesForIDsQuery, adaptationIDs); err != nil {
 			return fmt.Errorf("pack repository delete adaptation usages: %w", err)

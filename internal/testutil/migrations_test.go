@@ -112,17 +112,6 @@ func insertTestPack(t *testing.T, orgID, ownerID, folderID uuid.UUID) uuid.UUID 
 	return id
 }
 
-func insertTestPackVersion(t *testing.T, packID, createdBy uuid.UUID, version int) uuid.UUID {
-	t.Helper()
-	id := uuid.New()
-	_, err := pool.Exec(ctx, `
-		INSERT INTO pack_versions (id, pack_id, version, config, created_by)
-		VALUES ($1, $2, $3, '{}', $4)
-	`, id, packID, version, createdBy)
-	require.NoError(t, err)
-	return id
-}
-
 func insertTestPackAdaptation(t *testing.T, packID, studentID, createdBy uuid.UUID) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
@@ -168,7 +157,7 @@ func truncateAll(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		TRUNCATE
 			media_usages, media_files, favorite_packs,
-			pack_adaptations, pack_versions, packs,
+			pack_adaptations, packs,
 			folders, students, users, organizations
 		RESTART IDENTITY CASCADE
 	`)
@@ -236,7 +225,7 @@ func TestFoldersKindStudentIDCheck(t *testing.T) {
 	assert.Equal(t, "folders_kind_student_chk", pgErr.ConstraintName)
 }
 
-func TestDeletePackCascadesFavoritesAndVersions(t *testing.T) {
+func TestDeletePackCascadesFavorites(t *testing.T) {
 	defer truncateAll(t)
 
 	orgID := insertTestOrg(t)
@@ -244,19 +233,15 @@ func TestDeletePackCascadesFavoritesAndVersions(t *testing.T) {
 	folderID := insertTestFolder(t, ownerID, "my", "folder", nil)
 	packID := insertTestPack(t, orgID, ownerID, folderID)
 
-	insertTestPackVersion(t, packID, ownerID, 1)
 	insertTestFavorite(t, ownerID, packID)
 
 	_, err := pool.Exec(ctx, `DELETE FROM packs WHERE id = $1`, packID)
 	require.NoError(t, err)
 
-	var versionsCount, favoritesCount int
-	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT count(*) FROM pack_versions WHERE pack_id = $1`, packID).Scan(&versionsCount))
+	var favoritesCount int
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*) FROM favorite_packs WHERE pack_id = $1`, packID).Scan(&favoritesCount))
 
-	assert.Zero(t, versionsCount)
 	assert.Zero(t, favoritesCount)
 }
 
