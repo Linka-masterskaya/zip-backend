@@ -589,7 +589,6 @@ $5)`
 		params.PasswordHash,
 		params.Role,
 	)
-
 	if err != nil {
 		if isEmailHashUniqueViolation(err) {
 			return errEmailAlreadyExists
@@ -598,7 +597,6 @@ $5)`
 		return fmt.Errorf("authRepo.CreateAuthCred: %w", err)
 	}
 	return nil
-
 }
 
 func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTokenParams) error {
@@ -668,7 +666,7 @@ func (r *authRepo) replaceUnverifiedPassword(
 // адрес: пока он занят, настоящий владелец не может им пользоваться.
 //
 // Пользователи, успевшие что-то создать, не трогаются: packs, folders,
-// students, media_files и pack_versions ссылаются на users без каскада, и
+// students и media_files ссылаются на users без каскада, и
 // фоновая задача не должна удалять данные. В проде такие строки появиться не
 // могут — неподтверждённый пользователь не проходит вход.
 func (r *authRepo) DeleteStaleUnverifiedUsers(ctx context.Context, cutoff time.Time) (int64, error) {
@@ -688,7 +686,6 @@ func (r *authRepo) DeleteStaleUnverifiedUsers(ctx context.Context, cutoff time.T
 		  AND u.created_at < $1
 		  AND NOT EXISTS (SELECT 1 FROM folders     f WHERE f.owner_id = u.id)
 		  AND NOT EXISTS (SELECT 1 FROM packs       p WHERE p.owner_id = u.id)
-		  AND NOT EXISTS (SELECT 1 FROM pack_versions v WHERE v.created_by = u.id)
 		  AND NOT EXISTS (SELECT 1 FROM students    s WHERE s.defectologist_id = u.id)
 		  AND NOT EXISTS (SELECT 1 FROM media_files m WHERE m.uploader_id = u.id)
 	`, cutoff)

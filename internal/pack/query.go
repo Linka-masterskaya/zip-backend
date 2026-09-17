@@ -330,11 +330,6 @@ const deletePackMediaUsagesQuery = `
 const deletePacksMediaUsagesQuery = `
 	DELETE FROM media_usages WHERE source_type = 'pack' AND source_id = ANY($1::uuid[])`
 
-const deletePacksVersionMediaUsagesQuery = `
-	DELETE FROM media_usages
-	WHERE source_type = 'pack_version'
-	  AND source_id IN (SELECT id FROM pack_versions WHERE pack_id = ANY($1::uuid[]))`
-
 const insertPackMediaUsagesQuery = `
 	INSERT INTO media_usages (media_id, source_type, source_id)
 	SELECT unnest($1::uuid[]), 'pack', $2`
