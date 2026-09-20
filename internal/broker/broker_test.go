@@ -2,6 +2,9 @@ package broker_test
 
 import (
 	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,4 +148,133 @@ func TestPublishAndConsumeClamAV(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for message")
 	}
+}
+
+func ttsCfgWithAckWait(url string, ackWait time.Duration) config.NATSConfig {
+	cfg := testNATSConfig(url)
+	cfg.Consumers.TTS.AckWait = ackWait
+	return cfg
+}
+
+func runTTSConsumer(t *testing.T, cfg config.NATSConfig, js jetstream.JetStream, h broker.TTSJobHandler) context.CancelFunc {
+	t.Helper()
+	consumer := broker.NewConsumer(js, cfg.Stream.Name, cfg.Consumers)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = consumer.ConsumeTTSJobs(ctx, h) }()
+	t.Cleanup(cancel)
+	return cancel
+}
+
+func TestKeepAliveExtendsAckWait(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := ttsCfgWithAckWait(url, time.Second)
+
+	_, js := setupBroker(t, natsCfg)
+
+	publisher := broker.NewPublisher(js)
+	job := broker.TTSJob{JobId: "j1", OrgID: "org1", UserID: "u1", Text: "hello", Voice: "alena"}
+	require.NoError(t, publisher.PublishTTSJob(context.Background(), job))
+
+	var calls int32
+	done := make(chan struct{}, 1)
+
+	runTTSConsumer(t, natsCfg, js, func(_ context.Context, _ broker.TTSJob, _ bool) error {
+		atomic.AddInt32(&calls, 1)
+		time.Sleep(3 * time.Second)
+		done <- struct{}{}
+		return nil
+	})
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for handler")
+	}
+
+	time.Sleep(2 * time.Second)
+	require.Equal(t, int32(1), atomic.LoadInt32(&calls), "message was redelivered while handler was running")
+}
+
+func TestPanicInHandlerIsRecovered(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := ttsCfgWithAckWait(url, 2*time.Second)
+
+	_, js := setupBroker(t, natsCfg)
+
+	publisher := broker.NewPublisher(js)
+	job := broker.TTSJob{JobId: "j1", OrgID: "org1", UserID: "u1", Text: "hello", Voice: "alena"}
+	require.NoError(t, publisher.PublishTTSJob(context.Background(), job))
+
+	var calls int32
+	recovered := make(chan struct{}, 1)
+
+	runTTSConsumer(t, natsCfg, js, func(_ context.Context, _ broker.TTSJob, _ bool) error {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			panic("boom")
+		}
+		recovered <- struct{}{}
+		return nil
+	})
+
+	select {
+	case <-recovered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("consumer did not survive panic")
+	}
+}
+
+func TestNakWithDelayBackoff(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := ttsCfgWithAckWait(url, 30*time.Second)
+
+	_, js := setupBroker(t, natsCfg)
+
+	publisher := broker.NewPublisher(js)
+	job := broker.TTSJob{JobId: "j1", OrgID: "org1", UserID: "u1", Text: "hello", Voice: "alena"}
+	require.NoError(t, publisher.PublishTTSJob(context.Background(), job))
+
+	var mu sync.Mutex
+	var at []time.Time
+	second := make(chan struct{}, 1)
+
+	runTTSConsumer(t, natsCfg, js, func(_ context.Context, _ broker.TTSJob, _ bool) error {
+		mu.Lock()
+		at = append(at, time.Now())
+		n := len(at)
+		mu.Unlock()
+		if n == 2 {
+			second <- struct{}{}
+		}
+		return errors.New("boom")
+	})
+
+	select {
+	case <-second:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timeout waiting for redelivery")
+	}
+
+	mu.Lock()
+	gap := at[1].Sub(at[0])
+	mu.Unlock()
+	require.GreaterOrEqual(t, gap, 1500*time.Millisecond, "redelivery was immediate, NakWithDelay not applied")
+}
+
+func TestBadPayloadIsTerminated(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := ttsCfgWithAckWait(url, 2*time.Second)
+
+	_, js := setupBroker(t, natsCfg)
+
+	_, err := js.Publish(context.Background(), broker.SubjectTTSJobs, []byte("{not json"))
+	require.NoError(t, err)
+
+	var calls int32
+	runTTSConsumer(t, natsCfg, js, func(_ context.Context, _ broker.TTSJob, _ bool) error {
+		atomic.AddInt32(&calls, 1)
+		return nil
+	})
+
+	time.Sleep(5 * time.Second) // больше ack_wait, переотдача успела бы произойти
+	require.Zero(t, atomic.LoadInt32(&calls), "handler was called for unparsable message")
 }
