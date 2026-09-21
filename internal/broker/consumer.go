@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
@@ -109,10 +110,11 @@ func handleMsg[T any](
 	cfg config.ConsumerSettings,
 	handler func(context.Context, T, bool) error,
 ) {
+	delay := 2 * time.Second
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("consumeJobs: panic", "consumer", cfg.Durable, "panic", r)
-			if err := msg.Nak(); err != nil {
+			slog.Error("consumeJobs: panic", "stack", string(debug.Stack()), "consumer", cfg.Durable, "panic", r)
+			if err := msg.NakWithDelay(delay); err != nil {
 				slog.Error("consumeJobs: nak failed", "err", err)
 			}
 		}
@@ -129,20 +131,19 @@ func handleMsg[T any](
 
 	meta, metaErr := msg.Metadata()
 	isLastAttempt := metaErr == nil && cfg.MaxDeliver > 0 && meta.NumDelivered >= uint64(cfg.MaxDeliver)
+	if metaErr == nil {
+		n := meta.NumDelivered
+		if n > 10 {
+			n = 10
+		}
+		delay = time.Duration(n) * 2 * time.Second
+	}
 
 	stop := keepAlive(msg, cfg.AckWait/2)
 	defer stop()
 
 	err := handler(ctx, job, isLastAttempt)
 	if err != nil {
-		delay := 2 * time.Second
-		if metaErr == nil {
-			n := meta.NumDelivered
-			if n > 10 {
-				n = 10
-			}
-			delay = time.Duration(n) * 2 * time.Second
-		}
 		slog.Error("consumeJobs: handler", "consumer", cfg.Durable, "err", err)
 		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
 			slog.Error("consumeJobs: nak failed", "consumer", cfg.Durable, "err", nakErr)
