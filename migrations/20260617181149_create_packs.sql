@@ -10,5 +10,16 @@ CREATE TABLE packs (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE pack_versions (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pack_id     UUID NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
+    version     INT NOT NULL,
+    config      JSONB NOT NULL,
+    created_by  UUID NOT NULL REFERENCES users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(pack_id, version)
+);
+
 -- +goose Down
+DROP TABLE pack_versions;
 DROP TABLE packs;
