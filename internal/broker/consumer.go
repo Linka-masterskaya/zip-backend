@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
@@ -95,32 +96,85 @@ func processBatch[T any](
 	handler func(context.Context, T, bool) error,
 ) {
 	for msg := range msgs.Messages() {
-		var job T
-		if err := json.Unmarshal(msg.Data(), &job); err != nil {
-			slog.Error("consumeJobs: unmarshal, terminating message", "consumer", cfg.Durable, "err", err)
-			if termErr := msg.Term(); termErr != nil {
-				slog.Error("consumeJobs: term failed", "consumer", cfg.Durable, "err", termErr)
-			}
-			continue
-		}
-
-		meta, metaErr := msg.Metadata()
-		isLastAttempt := metaErr == nil && cfg.MaxDeliver > 0 && meta.NumDelivered >= uint64(cfg.MaxDeliver)
-
-		if err := handler(ctx, job, isLastAttempt); err != nil {
-			slog.Error("consumeJobs: handler", "consumer", cfg.Durable, "err", err)
-			if nakErr := msg.Nak(); nakErr != nil {
-				slog.Error("consumeJobs: nak failed", "consumer", cfg.Durable, "err", nakErr)
-			}
-			continue
-		}
-
-		if ackErr := msg.Ack(); ackErr != nil {
-			slog.Error("consumeJobs: ack failed", "consumer", cfg.Durable, "err", ackErr)
-		}
+		handleMsg(ctx, msg, cfg, handler)
 	}
 
 	if err := msgs.Error(); err != nil {
 		slog.Error("consumeJobs: fetch batch error", "consumer", cfg.Durable, "err", err)
 	}
+}
+
+func handleMsg[T any](
+	ctx context.Context,
+	msg jetstream.Msg,
+	cfg config.ConsumerSettings,
+	handler func(context.Context, T, bool) error,
+) {
+	delay := 2 * time.Second
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("consumeJobs: panic", "stack", string(debug.Stack()), "consumer", cfg.Durable, "panic", r)
+			if err := msg.NakWithDelay(delay); err != nil {
+				slog.Error("consumeJobs: nak failed", "err", err)
+			}
+		}
+	}()
+
+	var job T
+	if err := json.Unmarshal(msg.Data(), &job); err != nil {
+		slog.Error("consumeJobs: unmarshal, terminating message", "consumer", cfg.Durable, "err", err)
+		if termErr := msg.Term(); termErr != nil {
+			slog.Error("consumeJobs: term failed", "consumer", cfg.Durable, "err", termErr)
+		}
+		return
+	}
+
+	meta, metaErr := msg.Metadata()
+	isLastAttempt := metaErr == nil && cfg.MaxDeliver > 0 && meta.NumDelivered >= uint64(cfg.MaxDeliver)
+	if metaErr == nil {
+		n := meta.NumDelivered
+		if n > 10 {
+			n = 10
+		}
+		delay = time.Duration(n) * 2 * time.Second
+	}
+
+	stop := keepAlive(msg, cfg.AckWait/2)
+	defer stop()
+
+	err := handler(ctx, job, isLastAttempt)
+	if err != nil {
+		slog.Error("consumeJobs: handler", "consumer", cfg.Durable, "err", err)
+		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
+			slog.Error("consumeJobs: nak failed", "consumer", cfg.Durable, "err", nakErr)
+		}
+		return
+	}
+
+	if ackErr := msg.Ack(); ackErr != nil {
+		slog.Error("consumeJobs: ack failed", "consumer", cfg.Durable, "err", ackErr)
+	}
+}
+
+func keepAlive(msg jetstream.Msg, every time.Duration) func() {
+	if every <= 0 {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if err := msg.InProgress(); err != nil {
+					slog.Warn("consumeJobs: in progress failed", "err", err)
+				}
+			}
+		}
+	}()
+	return func() { close(done) }
 }
