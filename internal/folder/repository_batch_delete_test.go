@@ -8,6 +8,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/bulk"
 )
 
 // TestDeleteBatchRemovesNestedFoldersBottomUp: папка, чьи подпапки отмечены в
@@ -109,6 +112,60 @@ func TestDeleteBatchDryRunChangesNothing(t *testing.T) {
 	assert.ElementsMatch(t, dry.Deleted, real.Deleted)
 	assert.Equal(t, skippedIDs(dry), skippedIDs(real))
 	assert.Equal(t, 1, countFolders(t, pool))
+}
+
+// TestDeleteArchivedStudentFolderReturnsNotFound проверяет одиночный DELETE:
+// папка soft-deleted ученика недоступна даже при прямом обращении по id.
+func TestDeleteArchivedStudentFolderReturnsNotFound(t *testing.T) {
+	pool := folderTestDB(t)
+	service, ctx, folderID := seedHiddenStudentFolder(t, pool)
+
+	err := service.Delete(ctx, folderID)
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+	assertFolderExists(t, pool, folderID)
+}
+
+// TestDeleteBatchArchivedStudentFolderReturnsNotFound проверяет массовый путь:
+// скрытая папка не удаляется и возвращается клиенту как not_found.
+func TestDeleteBatchArchivedStudentFolderReturnsNotFound(t *testing.T) {
+	pool := folderTestDB(t)
+	service, ctx, folderID := seedHiddenStudentFolder(t, pool)
+
+	result, err := service.DeleteBatch(ctx, []uuid.UUID{folderID}, false)
+	require.NoError(t, err)
+	assert.Empty(t, result.Deleted)
+	assert.Equal(t, []bulk.Skipped{{ID: folderID, Reason: bulk.ReasonNotFound}}, result.Skipped)
+	assertFolderExists(t, pool, folderID)
+}
+
+// seedHiddenStudentFolder намеренно создаёт состояние напрямую в БД: после
+// #204 штатный soft delete ученика с существующей папкой возвращает 409.
+// Такой seed нужен, чтобы guard оставался покрыт до появления restore API.
+func seedHiddenStudentFolder(t *testing.T, pool *pgxpool.Pool) (*Service, context.Context, uuid.UUID) {
+	t.Helper()
+	ownerID := seedFolderUser(t, pool, "archived delete owner")
+	studentID := seedFolderStudent(t, pool, ownerID)
+	service := NewService(NewRepository(pool), 0)
+	ctx := folderContext(ownerID)
+
+	studentFolder, err := service.Create(ctx, CreateInput{
+		Section: SectionStudents, Kind: KindStudent,
+		StudentID: &studentID, Name: "Архивный ученик",
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `UPDATE students SET deleted_at = now() WHERE id = $1`, studentID)
+	require.NoError(t, err)
+	return service, ctx, studentFolder.ID
+}
+
+func assertFolderExists(t *testing.T, pool *pgxpool.Pool, folderID uuid.UUID) {
+	t.Helper()
+	var count int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM folders WHERE id = $1`, folderID,
+	).Scan(&count))
+	assert.Equal(t, 1, count, "скрытая папка не должна удаляться по известному id")
 }
 
 func skippedIDs(result *BatchDeleteResult) []uuid.UUID {

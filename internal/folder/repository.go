@@ -414,6 +414,7 @@ func lockFoldersForDelete(
 		  AND u.deleted_at IS NULL
 		  AND f.org_id = u.org_id
 		  AND (f.owner_id = u.id OR ($3 AND f.section = 'library'))
+		  `+visibleStudentFolderPredicate+`
 		ORDER BY f.id
 		FOR UPDATE OF f, u`, userID, folderIDs, isAdmin(role))
 	if err != nil {
