@@ -196,10 +196,33 @@ func validateMatching(b Block, validElements map[string]bool) error {
 }
 
 func validateCategories(b Block, validElements map[string]bool) error {
+	headers := make(map[string]string, len(b.Category))
 	for _, cat := range b.Category {
+		if cat.ElementID == "" && cat.Name == "" {
+			return fmt.Errorf("category %s needs element_id or name", cat.ID)
+		}
+		if cat.ElementID != "" {
+			if !validElements[cat.ElementID] {
+				return fmt.Errorf("category %s header: unknown element %s", cat.ID, cat.ElementID)
+			}
+			if other, taken := headers[cat.ElementID]; taken {
+				return fmt.Errorf("element %s is a header of more than one category (%s, %s)",
+					cat.ElementID, other, cat.ID)
+			}
+			headers[cat.ElementID] = cat.ID
+		}
 		for _, itemID := range cat.Items {
 			if !validElements[itemID] {
 				return fmt.Errorf("invalid item_id in category items: %s", itemID)
+			}
+		}
+	}
+	// Карточка не может быть одновременно заголовком и вариантом ответа:
+	// ребёнок не должен раскладывать «лес» в «лес».
+	for _, cat := range b.Category {
+		for _, itemID := range cat.Items {
+			if _, isHeader := headers[itemID]; isHeader {
+				return fmt.Errorf("category %s: header %s is also an item", cat.ID, itemID)
 			}
 		}
 	}
