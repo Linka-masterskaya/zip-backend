@@ -181,10 +181,15 @@ type Pair struct {
 	RightID string `json:"right_id"`
 }
 
+// Category — колонка задания «Распределение». Заголовок — такая же
+// карточка, как и варианты (ElementID): ребёнку, который не читает,
+// показывают картинку леса, а потом медведя. Name — устаревший текстовый
+// заголовок, живёт ради наборов, сохранённых до ElementID.
 type Category struct {
-	ID    string   `json:"id"`
-	Name  string   `json:"name"`
-	Items []string `json:"items"`
+	ID        string   `json:"id"`
+	ElementID string   `json:"element_id,omitempty"`
+	Name      string   `json:"name,omitempty"`
+	Items     []string `json:"items"`
 }
 
 type SeqItem struct {

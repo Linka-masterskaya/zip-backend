@@ -133,11 +133,18 @@
 						"type": "array",
 						"items": {
 							"type": "object",
-							"required": ["id", "name", "items"],
+							"required": ["id", "items"],
 							"additionalProperties": false,
 							"properties": {
 								"id": { "type": "string" },
-								"name": { "type": "string" },
+								"element_id": {
+									"type": "string",
+									"description": "Заголовок категории — карточка из elements: текст, картинка, озвучка."
+								},
+								"name": {
+									"type": "string",
+									"description": "Устаревший текстовый заголовок; принимается ради наборов, сохранённых до element_id."
+								},
 								"items": {
 									"type": "array",
 									"items": { "type": "string" }

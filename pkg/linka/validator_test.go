@@ -216,3 +216,49 @@ func TestValidateConfigCompositeElement(t *testing.T) {
 		})
 	}
 }
+
+func categoriesConfig(categories string) string {
+	return `{
+		"metadata":{"version":"2.0","title":"t"},
+		"settings":{"columns":2,"rows":2},
+		"blocks":[{"id":"b1","type":"categories","elements":[
+			{"id":"forest","kind":"normal","text":"Лес","image":{"media_id":"11111111-1111-4111-8111-111111111111"}},
+			{"id":"bear","kind":"normal","text":"Медведь"},
+			{"id":"cat","kind":"normal","text":"Кошка"}
+		],"categories":[` + categories + `]}]
+	}`
+}
+
+// TestValidateConfigCategoryHeaderIsACard — заголовок категории это
+// такая же карточка, как и варианты: ребёнок, который не читает, тыкает
+// в картинку леса, а потом в медведя. Категория ссылается на элемент по
+// element_id; name остаётся для наборов, сохранённых до этого.
+func TestValidateConfigCategoryHeaderIsACard(t *testing.T) {
+	tests := []struct {
+		name       string
+		categories string
+		wantErr    string
+	}{
+		{"заголовок — карточка", `{"id":"c1","element_id":"forest","items":["bear"]}`, ""},
+		{"старая форма с name", `{"id":"c1","name":"Лес","items":["bear"]}`, ""},
+		{"и то и другое", `{"id":"c1","element_id":"forest","name":"Лес","items":["bear"]}`, ""},
+		{"ни заголовка, ни имени", `{"id":"c1","items":["bear"]}`, "category c1 needs element_id or name"},
+		{"element_id на несуществующий элемент", `{"id":"c1","element_id":"ghost","items":["bear"]}`, "unknown element ghost"},
+		{"заголовок одновременно среди вариантов", `{"id":"c1","element_id":"forest","items":["forest"]}`, "header forest is also an item"},
+		{"один элемент заголовок двух категорий", `{"id":"c1","element_id":"forest","items":["bear"]},{"id":"c2","element_id":"forest","items":["cat"]}`, "element forest is a header of more than one category"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConfig(context.Background(), json.RawMessage(categoriesConfig(tt.categories)))
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
