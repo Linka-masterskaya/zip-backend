@@ -237,6 +237,10 @@ components:
         org_id: { type: string, format: uuid }
         owner_id: { type: string, format: uuid }
         folder_id: { type: string, format: uuid }
+        cover_source_picture_id:
+          type: [string, "null"]
+          format: uuid
+          description: Идентификатор картинки банка, используемой как обложка набора. Содержимое доступно по `GET /api/v1/pictures/{id}/content`.
         library_folder_id: { type: [string, "null"], format: uuid }
         published_at: { type: [string, "null"], format: date-time }
         title: { type: string }
@@ -288,6 +292,7 @@ components:
       properties:
         title: { type: string }
         folder_id: { type: string, format: uuid }
+        cover_source_picture_id: { type: string, format: uuid }
         age: { type: [integer, "null"], minimum: 3, maximum: 18 }
         difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }
@@ -648,6 +653,10 @@ components:
           type: [string, "null"]
           enum: [easy, medium, hard, null]
           description: Сложность набора; возвращается только для `type = pack`, может быть `null`
+        cover_source_picture_id:
+          type: [string, "null"]
+          format: uuid
+          description: Обложка набора; возвращается только для `type = pack`, может быть `null`
         updated_at: { type: string, format: date-time }
 
     CurrentFolder:

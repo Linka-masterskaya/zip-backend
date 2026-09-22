@@ -116,6 +116,9 @@ func TestRepositoryListFavoritesReturnsAccessibleBookmarksInOrder(t *testing.T) 
 
 	ownPack, err := repo.Create(t.Context(), userID, CreateInput{Title: "Own", FolderID: myFolderID, Config: config})
 	require.NoError(t, err)
+	coverID := uuid.New()
+	ownPack, err = repo.Update(t.Context(), userID, ownPack.ID, UpdateInput{CoverSourcePictureID: &coverID})
+	require.NoError(t, err)
 	publishedPack, err := repo.Create(
 		t.Context(), colleagueID, CreateInput{Title: "Published", FolderID: colleagueFolderID, Config: config},
 	)
@@ -150,10 +153,12 @@ func TestRepositoryListFavoritesReturnsAccessibleBookmarksInOrder(t *testing.T) 
 	require.Len(t, listed, 2)
 	assert.Equal(t, publishedPack.ID, listed[0].ID)
 	assert.Equal(t, libraryFolderID, listed[0].FolderID)
+	assert.Nil(t, listed[0].CoverSourcePictureID, "набор без обложки отдаётся с пустым полем")
 	assert.Equal(t, "library", listed[0].Section)
 	assert.True(t, listed[0].IsFavorite)
 	assert.Equal(t, ownPack.ID, listed[1].ID)
 	assert.Equal(t, myFolderID, listed[1].FolderID)
+	assert.Equal(t, &coverID, listed[1].CoverSourcePictureID)
 	assert.Equal(t, "my", listed[1].Section)
 }
 

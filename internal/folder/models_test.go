@@ -14,6 +14,7 @@ func TestContentItemMarshalJSONMetadataByType(t *testing.T) {
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	updatedAt := time.Date(2026, time.August, 29, 1, 2, 3, 0, time.UTC)
 	age, difficulty, kind := 5, "medium", KindFolder
+	coverID := uuid.MustParse("00000000-0000-0000-0000-0000000000ff")
 
 	tests := []struct {
 		name     string
@@ -29,6 +30,7 @@ func TestContentItemMarshalJSONMetadataByType(t *testing.T) {
 			expected: `{
 				"type":"pack","id":"00000000-0000-0000-0000-000000000001",
 				"name":"Filled","published":true,"age":5,"difficulty":"medium",
+				"cover_source_picture_id":null,
 				"updated_at":"2026-08-29T01:02:03Z"
 			}`,
 		},
@@ -40,6 +42,20 @@ func TestContentItemMarshalJSONMetadataByType(t *testing.T) {
 			expected: `{
 				"type":"pack","id":"00000000-0000-0000-0000-000000000001",
 				"name":"Empty","age":null,"difficulty":null,
+				"cover_source_picture_id":null,
+				"updated_at":"2026-08-29T01:02:03Z"
+			}`,
+		},
+		{
+			name: "pack with cover",
+			item: ContentItem{
+				Type: "pack", ID: id, Name: "Covered",
+				CoverSourcePictureID: &coverID, UpdatedAt: updatedAt,
+			},
+			expected: `{
+				"type":"pack","id":"00000000-0000-0000-0000-000000000001",
+				"name":"Covered","age":null,"difficulty":null,
+				"cover_source_picture_id":"00000000-0000-0000-0000-0000000000ff",
 				"updated_at":"2026-08-29T01:02:03Z"
 			}`,
 		},
@@ -47,7 +63,8 @@ func TestContentItemMarshalJSONMetadataByType(t *testing.T) {
 			name: "folder omits pack metadata",
 			item: ContentItem{
 				Type: "folder", ID: id, Name: "Folder", Kind: &kind,
-				Age: &age, Difficulty: &difficulty, UpdatedAt: updatedAt,
+				Age: &age, Difficulty: &difficulty,
+				CoverSourcePictureID: &coverID, UpdatedAt: updatedAt,
 			},
 			expected: `{
 				"type":"folder","id":"00000000-0000-0000-0000-000000000001",

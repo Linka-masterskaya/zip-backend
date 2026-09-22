@@ -71,12 +71,13 @@ type duplicatePackRequest struct {
 }
 
 type updatePackRequest struct {
-	Title      *string                   `json:"title"`
-	FolderID   *uuid.UUID                `json:"folder_id"`
-	Age        nullableJSONField[int]    `json:"age"`
-	Difficulty nullableJSONField[string] `json:"difficulty"`
-	Goals      *[]string                 `json:"goals"`
-	Notes      nullableJSONField[string] `json:"notes"`
+	Title                *string                   `json:"title"`
+	CoverSourcePictureID *uuid.UUID                `json:"cover_source_picture_id"`
+	FolderID             *uuid.UUID                `json:"folder_id"`
+	Age                  nullableJSONField[int]    `json:"age"`
+	Difficulty           nullableJSONField[string] `json:"difficulty"`
+	Goals                *[]string                 `json:"goals"`
+	Notes                nullableJSONField[string] `json:"notes"`
 }
 
 type movePackRequest struct {
@@ -244,7 +245,7 @@ func (h *Handler) UnpublishPack(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (r updatePackRequest) updateInput() UpdateInput {
-	input := UpdateInput{Title: r.Title, FolderID: r.FolderID, Notes: r.Notes.patch()}
+	input := UpdateInput{Title: r.Title, FolderID: r.FolderID, CoverSourcePictureID: r.CoverSourcePictureID, Notes: r.Notes.patch()}
 	if r.hasFilterMetadata() {
 		input.FilterMetadata = &FilterMetadataPatch{
 			Age:        r.Age.patch(),

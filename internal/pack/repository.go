@@ -100,6 +100,7 @@ func (r *Repository) Duplicate(
 		source.Goals,
 		source.Notes,
 		source.Config,
+		source.CoverSourcePictureID,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("pack duplicate insert: %w", err)
@@ -293,7 +294,7 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 
 	metadata := filterPatch(input.FilterMetadata)
 	result, err := scanPack(tx.QueryRow(ctx, updatePackQuery,
-		userID, packID, input.Title, input.FolderID,
+		userID, packID, input.Title, input.FolderID, input.CoverSourcePictureID,
 		metadata.age.Set, metadata.age.Value,
 		metadata.difficulty.Set, metadata.difficulty.Value, metadata.goals,
 		input.Notes.Set, input.Notes.Value,
@@ -566,7 +567,7 @@ func scanPack(row rowScanner) (*Pack, error) {
 	var result Pack
 	err := row.Scan(
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
-		&result.LibraryFolderID, &result.PublishedAt,
+		&result.CoverSourcePictureID, &result.LibraryFolderID, &result.PublishedAt,
 		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.CreatedAt, &result.UpdatedAt,
@@ -580,7 +581,7 @@ func scanPack(row rowScanner) (*Pack, error) {
 func listItemScanTargets(result *ListItem) []any {
 	return []any{
 		&result.ID, &result.OrgID, &result.OwnerID, &result.FolderID,
-		&result.LibraryFolderID, &result.PublishedAt,
+		&result.CoverSourcePictureID, &result.LibraryFolderID, &result.PublishedAt,
 		&result.Title, &result.Status, &result.Age,
 		&result.Difficulty, &result.Goals, &result.Notes, &result.Config,
 		&result.IsFavorite, &result.Section,

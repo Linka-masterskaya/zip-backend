@@ -10,21 +10,22 @@ import (
 
 // Pack describes a persisted Linka pack.
 type Pack struct {
-	ID              uuid.UUID       `json:"id"`
-	OrgID           uuid.UUID       `json:"org_id"`
-	OwnerID         uuid.UUID       `json:"owner_id"`
-	FolderID        uuid.UUID       `json:"folder_id"`
-	LibraryFolderID *uuid.UUID      `json:"library_folder_id,omitempty"`
-	PublishedAt     *time.Time      `json:"published_at,omitempty"`
-	Title           string          `json:"title"`
-	Status          string          `json:"status"`
-	Age             *int            `json:"age,omitempty"`
-	Difficulty      *string         `json:"difficulty,omitempty"`
-	Goals           []string        `json:"goals"`
-	Notes           string          `json:"notes"`
-	Config          json.RawMessage `json:"config"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	ID                   uuid.UUID       `json:"id"`
+	OrgID                uuid.UUID       `json:"org_id"`
+	OwnerID              uuid.UUID       `json:"owner_id"`
+	FolderID             uuid.UUID       `json:"folder_id"`
+	CoverSourcePictureID *uuid.UUID      `json:"cover_source_picture_id"`
+	LibraryFolderID      *uuid.UUID      `json:"library_folder_id,omitempty"`
+	PublishedAt          *time.Time      `json:"published_at,omitempty"`
+	Title                string          `json:"title"`
+	Status               string          `json:"status"`
+	Age                  *int            `json:"age,omitempty"`
+	Difficulty           *string         `json:"difficulty,omitempty"`
+	Goals                []string        `json:"goals"`
+	Notes                string          `json:"notes"`
+	Config               json.RawMessage `json:"config"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
 }
 
 // Adaptation is a snapshot of a pack assigned to one student.
@@ -63,23 +64,24 @@ type DuplicateInput struct {
 
 // ListItem describes one pack placement returned by the global pack list.
 type ListItem struct {
-	ID              uuid.UUID       `json:"id"`
-	OrgID           uuid.UUID       `json:"org_id"`
-	OwnerID         uuid.UUID       `json:"owner_id"`
-	FolderID        uuid.UUID       `json:"folder_id"`
-	LibraryFolderID *uuid.UUID      `json:"library_folder_id,omitempty"`
-	PublishedAt     *time.Time      `json:"published_at,omitempty"`
-	Title           string          `json:"title"`
-	Status          string          `json:"status"`
-	Age             *int            `json:"age,omitempty"`
-	Difficulty      *string         `json:"difficulty,omitempty"`
-	Goals           []string        `json:"goals"`
-	Notes           string          `json:"notes"`
-	Config          json.RawMessage `json:"config"`
-	IsFavorite      bool            `json:"is_favorite"`
-	Section         string          `json:"section"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	ID                   uuid.UUID       `json:"id"`
+	OrgID                uuid.UUID       `json:"org_id"`
+	OwnerID              uuid.UUID       `json:"owner_id"`
+	FolderID             uuid.UUID       `json:"folder_id"`
+	CoverSourcePictureID *uuid.UUID      `json:"cover_source_picture_id"`
+	LibraryFolderID      *uuid.UUID      `json:"library_folder_id,omitempty"`
+	PublishedAt          *time.Time      `json:"published_at,omitempty"`
+	Title                string          `json:"title"`
+	Status               string          `json:"status"`
+	Age                  *int            `json:"age,omitempty"`
+	Difficulty           *string         `json:"difficulty,omitempty"`
+	Goals                []string        `json:"goals"`
+	Notes                string          `json:"notes"`
+	Config               json.RawMessage `json:"config"`
+	IsFavorite           bool            `json:"is_favorite"`
+	Section              string          `json:"section"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
 }
 
 type ListPage struct {
@@ -121,8 +123,9 @@ type FilterMetadataPatch struct {
 
 // UpdateInput contains fields accepted by PATCH /packs/{id}.
 type UpdateInput struct {
-	Title          *string
-	FolderID       *uuid.UUID
-	FilterMetadata *FilterMetadataPatch
-	Notes          NullablePatch[string]
+	Title                *string
+	CoverSourcePictureID *uuid.UUID
+	FolderID             *uuid.UUID
+	FilterMetadata       *FilterMetadataPatch
+	Notes                NullablePatch[string]
 }

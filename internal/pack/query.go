@@ -44,9 +44,9 @@ const lockDuplicateFolderQuery = `
 const insertDuplicatePackQuery = `
 	INSERT INTO packs (
 		org_id, owner_id, folder_id, title,
-		age, difficulty, goals, notes, config
+		age, difficulty, goals, notes, config, cover_source_picture_id
 	)
-	SELECT u.org_id, u.id, $2, $3, $4, $5, $6, $7, $8
+	SELECT u.org_id, u.id, $2, $3, $4, $5, $6, $7, $8, $9
 	FROM users u
 	WHERE u.id = $1
 	RETURNING ` + packColumns
@@ -177,7 +177,7 @@ func listPacksQuery(sortBy, order string) string {
 		ORDER BY ` + column + ` ` + direction + `, id, section, result_folder_id
 		LIMIT $9 OFFSET $10
 	)
-	SELECT p.id, p.org_id, p.owner_id, page.result_folder_id, p.library_folder_id,
+	SELECT p.id, p.org_id, p.owner_id, page.result_folder_id, p.cover_source_picture_id, p.library_folder_id,
 	       p.published_at, p.title, p.status, p.age, p.difficulty,
 	       p.goals, p.notes, p.config,
 	       EXISTS (
@@ -217,10 +217,11 @@ const updatePackQuery = `
 	UPDATE packs p
 	SET title = COALESCE($3::text, p.title),
 	    folder_id = COALESCE($4::uuid, p.folder_id),
-	    age = CASE WHEN $5::boolean THEN $6::int ELSE p.age END,
-	    difficulty = CASE WHEN $7::boolean THEN $8::text ELSE p.difficulty END,
-	    goals = COALESCE($9::text[], p.goals),
-	    notes = CASE WHEN $10::boolean THEN COALESCE($11::text, '') ELSE p.notes END,
+	    cover_source_picture_id = COALESCE($5::uuid, p.cover_source_picture_id),
+	    age = CASE WHEN $6::boolean THEN $7::int ELSE p.age END,
+	    difficulty = CASE WHEN $8::boolean THEN $9::text ELSE p.difficulty END,
+	    goals = COALESCE($10::text[], p.goals),
+	    notes = CASE WHEN $11::boolean THEN COALESCE($12::text, '') ELSE p.notes END,
 	    updated_at = now()
 	WHERE p.id = $2
 	  AND p.owner_id = $1
@@ -529,6 +530,7 @@ const listFavoritePacksBaseQuery = `
 		SELECT p.id, p.org_id, p.owner_id,
 					CASE WHEN p.owner_id = u.id THEN p.folder_id ELSE p.library_folder_id
 					END AS result_folder_id,
+					p.cover_source_picture_id,
 					p.library_folder_id, p.published_at, p.title, p.status,
 					p.age, p.difficulty, p.goals, p.notes, p.config,
 					p.created_at, p.updated_at,
@@ -544,7 +546,7 @@ const listFavoritePacksBaseQuery = `
 	)`
 
 const listFavoritePacksQuery = listFavoritePacksBaseQuery + `
-	SELECT id, org_id, owner_id, result_folder_id, library_folder_id,
+	SELECT id, org_id, owner_id, result_folder_id, cover_source_picture_id, library_folder_id,
 	       published_at, title, status, age, difficulty,
 	       goals, notes, config, true AS is_favorite, section, created_at, updated_at
 	FROM favorites
@@ -555,12 +557,12 @@ const countFavoritePacksQuery = listFavoritePacksBaseQuery + `
 	SELECT count(*) FROM favorites`
 
 const packColumns = `
-	id, org_id, owner_id, folder_id, library_folder_id, published_at,
+	id, org_id, owner_id, folder_id, cover_source_picture_id, library_folder_id, published_at,
 	title, status, age,
 	difficulty, goals, notes, config, created_at, updated_at`
 
 const qualifiedPackColumns = `
-	p.id, p.org_id, p.owner_id, p.folder_id, p.library_folder_id,
+	p.id, p.org_id, p.owner_id, p.folder_id, p.cover_source_picture_id, p.library_folder_id,
 	p.published_at, p.title, p.status,
 	p.age, p.difficulty, p.goals, p.notes, p.config,
 	p.created_at, p.updated_at`
