@@ -640,12 +640,26 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 	if input.ParentID == nil {
 		// Корень раздела содержит только папки: packs.folder_id объявлен
 		// NOT NULL, то есть набор всегда лежит внутри какой-то папки.
+		// Исключение — библиотека: глобально опубликованные наборы чужих
+		// организаций лежат в папках своей org, которая нам не видна,
+		// поэтому в нашем корне они показываются плоско.
 		args := []any{input.Section, userID}
 		folderScope := "AND f.owner_id = $2"
+		globalPacks := ""
 		if input.Section == SectionLibrary {
 			args[1] = orgID
 			folderScope = "AND f.org_id = $2"
+			globalPacks = `
+				UNION ALL
+				SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
+							true, p.updated_at,
+							p.age, p.difficulty
+				FROM packs p
+				WHERE p.published_globally = true
+					AND p.published_at IS NOT NULL
+					AND p.org_id <> $2`
 		}
+
 		query := `
 		WITH items AS (
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
@@ -657,7 +671,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			WHERE f.parent_id IS NULL
 			  AND f.section = $1
 			  ` + folderScope + `
-			  ` + visibleStudentFolderPredicate + `
+			  ` + visibleStudentFolderPredicate + globalPacks + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
 		       age, difficulty, cover_source_picture_id

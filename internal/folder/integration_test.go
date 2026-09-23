@@ -980,3 +980,77 @@ func TestContentsRejectsForeignAncestorInMiddleOfChain(t *testing.T) {
 	})
 	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
+
+func TestContentsLibraryRootShowsGloballyPublishedPacksOfOtherOrganizations(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "library root owner")
+	foreignID := seedFolderUser(t, pool, "library root foreign")
+	service := NewService(NewRepository(pool), 0)
+	ctx := t.Context()
+
+	ownLibrary, err := service.Create(folderContext(ownerID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Своя библиотека",
+	})
+	require.NoError(t, err)
+
+	// Чужая организация: папка библиотеки и личная папка, где живут наборы.
+	foreignLibrary, err := service.Create(folderContext(foreignID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Чужая библиотека",
+	})
+	require.NoError(t, err)
+	foreignOwn, err := service.Create(folderContext(foreignID), CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Чужие наборы",
+	})
+	require.NoError(t, err)
+
+	var foreignOrgID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT org_id FROM users WHERE id = $1`, foreignID).Scan(&foreignOrgID))
+
+	seedForeignPack := func(title string, globally bool) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		require.NoError(t, pool.QueryRow(ctx, `
+			INSERT INTO packs (
+				org_id, owner_id, folder_id, library_folder_id,
+				title, config, status, published_at, published_globally
+			)
+			VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 'published', now(), $6)
+			RETURNING id`,
+			foreignOrgID, foreignID, foreignOwn.ID, foreignLibrary.ID, title, globally,
+		).Scan(&id))
+		return id
+	}
+
+	globalPackID := seedForeignPack("Глобальный набор", true)
+	seedForeignPack("Локальный чужой набор", false)
+
+	page, err := service.Contents(folderContext(ownerID), ContentsInput{
+		Section: SectionLibrary,
+	})
+	require.NoError(t, err)
+
+	// Глобальный набор чужой организации лежит в корне: его библиотечная папка
+	// принадлежит другой организации и в нашем дереве не существует.
+	require.Len(t, page.Items, 2)
+	assert.Equal(t, 2, page.Total)
+	assert.Equal(t, "pack", page.Items[0].Type)
+	assert.Equal(t, globalPackID, page.Items[0].ID)
+	assert.True(t, page.Items[0].Published)
+	assert.Equal(t, "folder", page.Items[1].Type)
+	assert.Equal(t, ownLibrary.ID, page.Items[1].ID)
+
+	// Чужая библиотечная папка в корень не попадает.
+	for _, item := range page.Items {
+		assert.NotEqual(t, foreignLibrary.ID, item.ID)
+	}
+
+	// Разделы "Мои" и "Ученики" глобальные наборы не показывают.
+	for _, section := range []string{SectionMy, SectionStudents} {
+		other, otherErr := service.Contents(folderContext(ownerID), ContentsInput{
+			Section: section,
+		})
+		require.NoError(t, otherErr)
+		assert.Empty(t, other.Items, "section %s", section)
+	}
+}
