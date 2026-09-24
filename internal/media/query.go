@@ -96,7 +96,7 @@ const lockMediaQuery = `
 	FOR UPDATE OF m, u`
 
 const lockMediaBatchQuery = `
-	SELECT m.id, m.org_id, m.size_bytes
+	SELECT m.id
 	FROM media_files m
 	JOIN users u ON u.id = $1 AND u.org_id = m.org_id AND u.deleted_at IS NULL
 	WHERE m.id = ANY($2::uuid[])
@@ -117,7 +117,46 @@ const deleteMediaQuery = `
 	DELETE FROM media_files WHERE id = $1`
 
 const deleteMediaBatchQuery = `
-	DELETE FROM media_files WHERE id = ANY($1::uuid[])`
+	WITH deleted AS (
+		DELETE FROM media_files
+		WHERE id = ANY($1::uuid[])
+		RETURNING org_id, minio_key, size_bytes
+	), released AS (
+		SELECT DISTINCT ON (d.org_id, d.minio_key) d.org_id, d.size_bytes
+		FROM deleted d
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM media_files mf2
+			WHERE mf2.org_id = d.org_id
+			  AND mf2.minio_key = d.minio_key
+			  AND mf2.id != ALL($1::uuid[])
+		)
+	), updated AS (
+		UPDATE organizations o
+		SET storage_used_bytes = GREATEST(o.storage_used_bytes - r.total_bytes, 0)
+		FROM (
+			SELECT org_id, SUM(size_bytes) AS total_bytes
+			FROM released
+			GROUP BY org_id
+		) r
+		WHERE o.id = r.org_id
+	)
+	SELECT COALESCE(SUM(size_bytes), 0) FROM released`
+
+const previewMediaBatchFreedBytesQuery = `
+	SELECT COALESCE(SUM(x.size_bytes), 0)
+	FROM (
+		SELECT DISTINCT ON (mf.org_id, mf.minio_key) mf.org_id, mf.minio_key, mf.size_bytes
+		FROM media_files mf
+		WHERE mf.id = ANY($1::uuid[])
+	) x
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM media_files mf2
+		WHERE mf2.org_id = x.org_id
+		  AND mf2.minio_key = x.minio_key
+		  AND mf2.id != ALL($1::uuid[])
+	)`
 
 const releaseMediaQuotaQuery = `
 	UPDATE organizations

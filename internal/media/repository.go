@@ -65,12 +65,23 @@ func (r *Repository) Upsert(ctx context.Context, input File) (*File, error) {
 	}
 
 	var quotaAccepted bool
-	err = tx.QueryRow(ctx, reserveQuotaQuery, input.OrgID, input.SizeBytes).Scan(&quotaAccepted)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrQuotaExceeded
-	}
+	var mediaFileFound bool
+	err = tx.QueryRow(ctx,
+		`SELECT EXISTS (
+		 SELECT 1 FROM media_files 
+		 WHERE minio_key = $1 AND org_id = $2
+		 )`, input.MinIOKey, input.OrgID).Scan(&mediaFileFound)
 	if err != nil {
-		return nil, fmt.Errorf("media repository reserve quota: %w", err)
+		return nil, fmt.Errorf("media repository getting the number of records: %w", err)
+	}
+	if !mediaFileFound {
+		err = tx.QueryRow(ctx, reserveQuotaQuery, input.OrgID, input.SizeBytes).Scan(&quotaAccepted)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrQuotaExceeded
+		}
+		if err != nil {
+			return nil, fmt.Errorf("media repository reserve quota: %w", err)
+		}
 	}
 
 	err = tx.QueryRow(ctx, insertMediaQuery,
@@ -213,9 +224,21 @@ func (r *Repository) Delete(
 	if _, err = tx.Exec(ctx, deleteMediaQuery, mediaID); err != nil {
 		return nil, fmt.Errorf("media repository delete row: %w", err)
 	}
-	if _, err = tx.Exec(ctx, releaseMediaQuotaQuery, result.OrgID, result.SizeBytes); err != nil {
-		return nil, fmt.Errorf("media repository release quota: %w", err)
+	var mediaFileFound bool
+	err = tx.QueryRow(ctx,
+		`SELECT EXISTS (
+		 SELECT 1 FROM media_files 
+		 WHERE minio_key = $1 AND org_id = $2
+		 )`, result.MinIOKey, result.OrgID).Scan(&mediaFileFound)
+	if err != nil {
+		return nil, fmt.Errorf("media repository getting the number of records: %w", err)
 	}
+	if !mediaFileFound {
+		if _, err = tx.Exec(ctx, releaseMediaQuotaQuery, result.OrgID, result.SizeBytes); err != nil {
+			return nil, fmt.Errorf("media repository release quota: %w", err)
+		}
+	}
+
 	if err = tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("media repository delete commit: %w", err)
 	}
@@ -244,12 +267,15 @@ func (r *Repository) DeleteBatch(
 	}
 
 	outcome := splitBatch(owned, referenced)
-	if len(outcome.Deleted) > 0 && !dryRun {
-		if _, err = tx.Exec(ctx, deleteMediaBatchQuery, outcome.Deleted); err != nil {
-			return nil, fmt.Errorf("media repository batch delete rows: %w", err)
-		}
-		if _, err = tx.Exec(ctx, releaseMediaQuotaQuery, outcome.orgID, outcome.FreedBytes); err != nil {
-			return nil, fmt.Errorf("media repository batch release quota: %w", err)
+	if len(outcome.Deleted) > 0 {
+		if dryRun {
+			if err = tx.QueryRow(ctx, previewMediaBatchFreedBytesQuery, outcome.Deleted).Scan(&outcome.FreedBytes); err != nil {
+				return nil, fmt.Errorf("media repository batch delete preview: %w", err)
+			}
+		} else {
+			if err = tx.QueryRow(ctx, deleteMediaBatchQuery, outcome.Deleted).Scan(&outcome.FreedBytes); err != nil {
+				return nil, fmt.Errorf("media repository batch delete rows: %w", err)
+			}
 		}
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -266,16 +292,12 @@ func splitBatch(owned []ownedMedia, referenced map[uuid.UUID]struct{}) *BatchOut
 			continue
 		}
 		outcome.Deleted = append(outcome.Deleted, item.id)
-		outcome.orgID = item.orgID
-		outcome.FreedBytes += item.sizeBytes
 	}
 	return outcome
 }
 
 type ownedMedia struct {
-	id        uuid.UUID
-	orgID     uuid.UUID
-	sizeBytes int64
+	id uuid.UUID
 }
 
 func lockMediaBatch(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ids []uuid.UUID) ([]ownedMedia, error) {
@@ -288,7 +310,7 @@ func lockMediaBatch(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ids []uuid
 	var owned []ownedMedia
 	for rows.Next() {
 		var item ownedMedia
-		if err = rows.Scan(&item.id, &item.orgID, &item.sizeBytes); err != nil {
+		if err = rows.Scan(&item.id); err != nil {
 			return nil, fmt.Errorf("media repository batch delete lock scan: %w", err)
 		}
 		owned = append(owned, item)

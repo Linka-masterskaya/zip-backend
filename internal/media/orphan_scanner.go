@@ -152,16 +152,25 @@ const deleteLockedOrphansQuery = `
 				WHERE j.media_id = mf.id
 				  AND j.status IN ('pending', 'in_progress')
 			)
-		RETURNING mf.org_id, mf.size_bytes
+		RETURNING mf.id, mf.org_id, mf.minio_key, mf.size_bytes
+	), released AS (
+		SELECT DISTINCT ON (d.org_id, d.minio_key) d.org_id, d.size_bytes
+		FROM deleted d
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM media_files mf2
+			WHERE mf2.org_id = d.org_id
+			  AND mf2.minio_key = d.minio_key
+			  AND mf2.id NOT IN (SELECT id FROM deleted)
+		)
 	), updated AS (
 		UPDATE organizations o
-		SET storage_used_bytes = GREATEST(o.storage_used_bytes - d.total_bytes, 0)
+		SET storage_used_bytes = GREATEST(o.storage_used_bytes - r.total_bytes, 0)
 		FROM (
 			SELECT org_id, SUM(size_bytes) AS total_bytes
-			FROM deleted
+			FROM released
 			GROUP BY org_id
-		) d
-		WHERE o.id = d.org_id
+		) r
+		WHERE o.id = r.org_id
 	)
-	SELECT count(*), COALESCE(SUM(size_bytes), 0)
-	FROM deleted`
+	SELECT (SELECT count(*) FROM deleted), (SELECT COALESCE(SUM(size_bytes), 0) FROM released)`

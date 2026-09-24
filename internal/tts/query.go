@@ -43,16 +43,10 @@ FROM tts_jobs
 WHERE id=$1 AND org_id=$2`
 
 const insertMediaFromTTS = `
-WITH ins AS (
-    INSERT INTO media_files (org_id, uploader_id, sha256, mime_type, size_bytes, minio_key, name, media_type)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    ON CONFLICT (org_id, minio_key) DO NOTHING
-    RETURNING id
-)
-SELECT id FROM ins
-UNION ALL
-SELECT id FROM media_files WHERE minio_key = $6 AND org_id = $1
-LIMIT 1`
+INSERT INTO media_files (org_id, uploader_id, sha256, mime_type, size_bytes, minio_key, name, media_type)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id
+`
 
 const updateOrgQuota = `
 UPDATE organizations 

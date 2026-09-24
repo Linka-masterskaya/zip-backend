@@ -271,7 +271,6 @@ type BatchOutcome struct {
 	Deleted    []uuid.UUID
 	InUse      []uuid.UUID
 	FreedBytes int64
-	orgID      uuid.UUID
 }
 
 type SkippedMedia struct {

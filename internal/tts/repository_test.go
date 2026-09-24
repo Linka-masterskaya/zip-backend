@@ -69,10 +69,18 @@ func TestCreateMediaIsolatesOrgs(t *testing.T) {
 	assert.Equal(t, 1, countA)
 	assert.Equal(t, 1, countB)
 
-	// повторный вызов для той же орги — тот же media_id
+	// повторный вызов для той же орги с тем же minio_key — отдельная запись
+	// media_files (каждая запись уникальна), но квота списывается один раз
 	mediaAAgain, err := repo.CreateMediaAndCompleteJob(ctx, jobA2, orgA, userA, input)
 	require.NoError(t, err)
-	assert.Equal(t, mediaA, mediaAAgain, "повторный вызов для той же org должен вернуть ту же media_files.id")
+	assert.NotEqual(t, mediaA, mediaAAgain,
+		"повторный вызов для той же org должен создать отдельную media_files.id даже при том же minio_key")
+
+	var quotaUsedA int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT storage_used_bytes FROM organizations WHERE id = $1`, orgA).Scan(&quotaUsedA))
+	assert.Equal(t, input.SizeBytes, quotaUsedA,
+		"квота списывается один раз за minio_key, а не за каждую запись media_files")
 }
 
 func TestGetJobOrgScoped(t *testing.T) {
