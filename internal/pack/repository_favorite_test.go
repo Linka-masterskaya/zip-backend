@@ -117,7 +117,7 @@ func TestRepositoryListFavoritesReturnsAccessibleBookmarksInOrder(t *testing.T) 
 	ownPack, err := repo.Create(t.Context(), userID, CreateInput{Title: "Own", FolderID: myFolderID, Config: config})
 	require.NoError(t, err)
 	coverID := uuid.New()
-	ownPack, err = repo.Update(t.Context(), userID, ownPack.ID, UpdateInput{CoverSourcePictureID: &coverID})
+	ownPack, err = repo.Update(t.Context(), userID, ownPack.ID, UpdateInput{CoverSourcePictureID: NullablePatch[uuid.UUID]{Set: true, Value: &coverID}})
 	require.NoError(t, err)
 	publishedPack, err := repo.Create(
 		t.Context(), colleagueID, CreateInput{Title: "Published", FolderID: colleagueFolderID, Config: config},

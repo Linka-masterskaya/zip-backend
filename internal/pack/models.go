@@ -124,7 +124,7 @@ type FilterMetadataPatch struct {
 // UpdateInput contains fields accepted by PATCH /packs/{id}.
 type UpdateInput struct {
 	Title                *string
-	CoverSourcePictureID *uuid.UUID
+	CoverSourcePictureID NullablePatch[uuid.UUID]
 	FolderID             *uuid.UUID
 	FilterMetadata       *FilterMetadataPatch
 	Notes                NullablePatch[string]

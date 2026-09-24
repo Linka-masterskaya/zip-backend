@@ -41,7 +41,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	coverID := uuid.New()
 	updated, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
 		Title:                &title,
-		CoverSourcePictureID: &coverID,
+		CoverSourcePictureID: NullablePatch[uuid.UUID]{Set: true, Value: &coverID},
 		FilterMetadata: &FilterMetadataPatch{
 			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
@@ -83,6 +83,13 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, secondFolderID, fetched.FolderID)
 	assert.Equal(t, &coverID, fetched.CoverSourcePictureID)
+
+	coverCleared, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
+		CoverSourcePictureID: NullablePatch[uuid.UUID]{Set: true},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, coverCleared.CoverSourcePictureID, "явный null снимает обложку")
+
 	require.NoError(t, repo.Delete(context.Background(), userID, created.ID))
 	_, err = repo.Get(context.Background(), userID, created.ID)
 	assert.ErrorIs(t, err, ErrPackNotFound)

@@ -292,7 +292,7 @@ components:
       properties:
         title: { type: string }
         folder_id: { type: string, format: uuid }
-        cover_source_picture_id: { type: string, format: uuid }
+        cover_source_picture_id: { type: [string, "null"], format: uuid }
         age: { type: [integer, "null"], minimum: 3, maximum: 18 }
         difficulty: { type: [string, "null"], enum: [easy, medium, hard, null] }
         goals: { type: array, items: { type: string } }

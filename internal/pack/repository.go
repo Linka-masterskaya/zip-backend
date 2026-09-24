@@ -294,7 +294,8 @@ func (r *Repository) Update(ctx context.Context, userID, packID uuid.UUID, input
 
 	metadata := filterPatch(input.FilterMetadata)
 	result, err := scanPack(tx.QueryRow(ctx, updatePackQuery,
-		userID, packID, input.Title, input.FolderID, input.CoverSourcePictureID,
+		userID, packID, input.Title, input.FolderID,
+		input.CoverSourcePictureID.Set, input.CoverSourcePictureID.Value,
 		metadata.age.Set, metadata.age.Value,
 		metadata.difficulty.Set, metadata.difficulty.Value, metadata.goals,
 		input.Notes.Set, input.Notes.Value,

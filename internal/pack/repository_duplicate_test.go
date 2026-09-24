@@ -23,7 +23,7 @@ func TestRepositoryDuplicateCopiesPackAndReusesMedia(t *testing.T) {
 	goals, notes := []string{"speech", "attention"}, "Исходные заметки"
 	coverID := uuid.New()
 	source, err = repo.Update(t.Context(), ownerID, source.ID, UpdateInput{
-		CoverSourcePictureID: &coverID,
+		CoverSourcePictureID: NullablePatch[uuid.UUID]{Set: true, Value: &coverID},
 		FilterMetadata: &FilterMetadataPatch{
 			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},

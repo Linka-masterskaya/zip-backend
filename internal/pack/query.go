@@ -217,11 +217,11 @@ const updatePackQuery = `
 	UPDATE packs p
 	SET title = COALESCE($3::text, p.title),
 	    folder_id = COALESCE($4::uuid, p.folder_id),
-	    cover_source_picture_id = COALESCE($5::uuid, p.cover_source_picture_id),
-	    age = CASE WHEN $6::boolean THEN $7::int ELSE p.age END,
-	    difficulty = CASE WHEN $8::boolean THEN $9::text ELSE p.difficulty END,
-	    goals = COALESCE($10::text[], p.goals),
-	    notes = CASE WHEN $11::boolean THEN COALESCE($12::text, '') ELSE p.notes END,
+	    cover_source_picture_id = CASE WHEN $5::boolean THEN $6::uuid ELSE p.cover_source_picture_id END,
+	    age = CASE WHEN $7::boolean THEN $8::int ELSE p.age END,
+	    difficulty = CASE WHEN $9::boolean THEN $10::text ELSE p.difficulty END,
+	    goals = COALESCE($11::text[], p.goals),
+	    notes = CASE WHEN $12::boolean THEN COALESCE($13::text, '') ELSE p.notes END,
 	    updated_at = now()
 	WHERE p.id = $2
 	  AND p.owner_id = $1

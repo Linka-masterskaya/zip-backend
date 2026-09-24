@@ -3148,7 +3148,7 @@ export interface components {
             /** Format: uuid */
             folder_id?: string;
             /** Format: uuid */
-            cover_source_picture_id?: string;
+            cover_source_picture_id?: string | null;
             age?: number | null;
             /** @enum {string|null} */
             difficulty?: "easy" | "medium" | "hard" | null;
