@@ -197,7 +197,7 @@ func rollback(ctx context.Context, tx pgx.Tx) {
 	}
 }
 
-func (r *Repository) createOrFindMedia(
+func (r *Repository) createMedia(
 	ctx context.Context,
 	tx pgx.Tx,
 	orgID, userID uuid.UUID,
@@ -208,27 +208,28 @@ func (r *Repository) createOrFindMedia(
 		`SELECT id FROM organizations WHERE id = $1 FOR UPDATE`,
 		orgID).Scan(&org)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("tts.createOrFindMedia: %w", err)
+		return uuid.Nil, fmt.Errorf("tts.createMedia: %w", err)
 	}
 
 	var mediaID uuid.UUID
+	var mediaFileFound bool
 	err = tx.QueryRow(ctx,
-		`SELECT id FROM media_files WHERE minio_key = $1 AND org_id = $2`,
-		input.MinioKey, orgID).Scan(&mediaID)
-	if err == nil {
-		return mediaID, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, fmt.Errorf("tts.createOrFindMedia: %w", err)
-	}
-
-	var quota bool
-	err = tx.QueryRow(ctx, updateOrgQuota, orgID, input.SizeBytes).Scan(&quota)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, ErrQuotaExceeded
-	}
+		`SELECT EXISTS (
+		 SELECT 1 FROM media_files 
+		 WHERE minio_key = $1 AND org_id = $2
+		 )`, input.MinioKey, orgID).Scan(&mediaFileFound)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("tts.createOrFindMedia: %w", err)
+		return uuid.Nil, fmt.Errorf("tts.createMedia: %w", err)
+	}
+	if !mediaFileFound {
+		var quota bool
+		err = tx.QueryRow(ctx, updateOrgQuota, orgID, input.SizeBytes).Scan(&quota)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrQuotaExceeded
+		}
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("tts.createMedia: %w", err)
+		}
 	}
 
 	mediaType, _, _ := strings.Cut(input.MimeType, "/")
@@ -237,7 +238,7 @@ func (r *Repository) createOrFindMedia(
 		input.Name, mediaType,
 	).Scan(&mediaID)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("tts.createOrFindMedia: %w", err)
+		return uuid.Nil, fmt.Errorf("tts.createMedia: %w", err)
 	}
 
 	return mediaID, nil
@@ -254,7 +255,7 @@ func (r *Repository) CreateMediaAndCompleteJob(
 	}
 	defer rollback(ctx, tx)
 
-	mediaID, err := r.createOrFindMedia(ctx, tx, orgID, userID, input)
+	mediaID, err := r.createMedia(ctx, tx, orgID, userID, input)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -281,7 +282,7 @@ func (r *Repository) CreateMediaWithSucceededJob(
 	}
 	defer rollback(ctx, tx)
 
-	mediaID, err := r.createOrFindMedia(ctx, tx, orgID, userID, input)
+	mediaID, err := r.createMedia(ctx, tx, orgID, userID, input)
 	if err != nil {
 		return uuid.Nil, uuid.Nil, err
 	}

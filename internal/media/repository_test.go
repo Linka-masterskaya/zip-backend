@@ -213,6 +213,25 @@ func TestRepositoryDeleteUsesSameReferencePredicateAsBatchAndUnused(t *testing.T
 	}
 }
 
+func TestRepositoryDeleteReleasesQuotaOnlyForLastRowSharingKey(t *testing.T) {
+	env := newMediaEnv(t)
+
+	first := env.seed(env.orgID, env.userID, "sha-shared-a", 50)
+	second := env.seedDuplicateKey(first.MinIOKey, "sha-shared-b", 50)
+	require.Equal(t, int64(50), env.storageUsed(env.orgID),
+		"quota is charged once per minio_key, not per row")
+
+	_, err := env.repo.Delete(t.Context(), env.userID, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(50), env.storageUsed(env.orgID),
+		"quota stays reserved while a sibling row still references the key")
+
+	_, err = env.repo.Delete(t.Context(), env.userID, second.ID)
+	require.NoError(t, err)
+	assert.Zero(t, env.storageUsed(env.orgID),
+		"quota is released once the last row for the key is gone")
+}
+
 func TestRepositoryDeleteBatchSkipsEveryKindOfReference(t *testing.T) {
 	env := newMediaEnv(t)
 
@@ -298,6 +317,25 @@ func TestRepositoryDeleteBatchOfForeignFilesOnly(t *testing.T) {
 	require.NoError(t, env.pool.QueryRow(t.Context(),
 		`SELECT count(*) FROM media_files WHERE id = $1`, own.ID).Scan(&alive))
 	assert.Equal(t, 1, alive)
+}
+func TestRepositoryDeleteBatchFreesQuotaOncePerSharedKey(t *testing.T) {
+	env := newMediaEnv(t)
+
+	first := env.seed(env.orgID, env.userID, "sha-batch-shared-a", 50)
+	second := env.seedDuplicateKey(first.MinIOKey, "sha-batch-shared-b", 50)
+	other := env.seed(env.orgID, env.userID, "sha-batch-other", 10)
+
+	partial, err := env.repo.DeleteBatch(t.Context(), env.userID, []uuid.UUID{first.ID}, false)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{first.ID}, partial.Deleted)
+	assert.Zero(t, partial.FreedBytes, "sibling row still references the key, nothing freed yet")
+	assert.Equal(t, int64(60), env.storageUsed(env.orgID))
+
+	rest, err := env.repo.DeleteBatch(t.Context(), env.userID, []uuid.UUID{second.ID, other.ID}, false)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []uuid.UUID{second.ID, other.ID}, rest.Deleted)
+	assert.Equal(t, int64(60), rest.FreedBytes, "last row for the shared key plus the unrelated file")
+	assert.Zero(t, env.storageUsed(env.orgID))
 }
 
 // mediaEnv поднимает базу с двумя организациями, тремя пользователями и учеником,
@@ -411,6 +449,18 @@ func applyMediaMigrations(db *sql.DB) error {
 		return err
 	}
 	return goose.Up(db, "../../migrations")
+}
+
+func (e *mediaEnv) seedDuplicateKey(minioKey, sha string, size int64) File {
+	var f File
+	err := e.pool.QueryRow(e.t.Context(), insertMediaQuery,
+		e.orgID, e.userID, sha, sha, "image/png", "image", size, minioKey,
+	).Scan(
+		&f.ID, &f.OrgID, &f.UploaderID, &f.Name, &f.SHA256,
+		&f.MIMEType, &f.MediaType, &f.SizeBytes, &f.MinIOKey, &f.CreatedAt,
+	)
+	require.NoError(e.t, err)
+	return f
 }
 
 func TestRepositoryOrphanScannerDeletesInBatchesAndReturnsQuota(t *testing.T) {
@@ -684,4 +734,23 @@ func TestRepositoryOrphanScannerIgnoresFinishedTTSJobs(t *testing.T) {
 			"finished-failed-" + failed.ID.String(),
 		}).Scan(&nulledLinks))
 	assert.Equal(t, 2, nulledLinks, "finished TTS jobs must not retain media and their FK must be nulled")
+}
+
+func TestRepositoryOrphanScannerFreesQuotaOncePerSharedKey(t *testing.T) {
+	env := newMediaEnv(t)
+
+	first := env.seed(env.orgID, env.userID, "sha-orphan-shared-a", 25)
+	second := env.seedDuplicateKey(first.MinIOKey, "sha-orphan-shared-b", 25)
+
+	batch, err := env.repo.DeleteOrphanBatch(t.Context(), 10, time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), batch.Count, "both rows sharing the key are orphaned and removed")
+	assert.Equal(t, int64(25), batch.Bytes, "quota for the shared key is freed exactly once")
+	assert.Zero(t, env.storageUsed(env.orgID))
+
+	var alive int
+	require.NoError(t, env.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM media_files WHERE id = ANY($1::uuid[])`,
+		[]uuid.UUID{first.ID, second.ID}).Scan(&alive))
+	assert.Zero(t, alive)
 }
