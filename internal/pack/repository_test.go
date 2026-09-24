@@ -1527,13 +1527,13 @@ func TestRepositoryAssignLeavesOrphanForScanner(t *testing.T) {
 	assert.Equal(t, int64(15), used)
 }
 
-func TestRepositoryDeleteClearsPackVersionUsageForScanner(t *testing.T) {
+func TestRepositoryDeleteClearsPackUsageForScanner(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
-	orgID, ownerID, folderID := seedPackOwner(t, pool, "pack version orphan org")
+	orgID, ownerID, folderID := seedPackOwner(t, pool, "pack orphan org")
 
 	created, err := repo.Create(t.Context(), ownerID, CreateInput{
-		Title:    "Versioned Pack",
+		Title:    "Test Pack",
 		FolderID: folderID,
 		Config:   []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`),
 	})
@@ -1544,19 +1544,15 @@ func TestRepositoryDeleteClearsPackVersionUsageForScanner(t *testing.T) {
 		INSERT INTO media_files (
 			id, org_id, uploader_id, name, sha256, mime_type, media_type, size_bytes, minio_key
 		)
-		VALUES ($1, $2, $3, 'version.png', $4, 'image/png', 'image', 11, $5)`,
-		mediaID, orgID, ownerID, "pack-version-orphan-sha", "media/"+mediaID.String())
+		VALUES ($1, $2, $3, 'test.png', $4, 'image/png', 'image', 11, $5)`,
+		mediaID, orgID, ownerID, "pack-orphan-sha", "media/"+mediaID.String())
 	require.NoError(t, err)
 
-	versionID := uuid.New()
-	_, err = pool.Exec(t.Context(), `
-		INSERT INTO pack_versions (id, pack_id, version, config, created_by)
-		VALUES ($1, $2, 1, '{}'::jsonb, $3)`, versionID, created.ID, ownerID)
-	require.NoError(t, err)
 	_, err = pool.Exec(t.Context(), `
 		INSERT INTO media_usages (media_id, source_type, source_id)
-		VALUES ($1, 'pack_version', $2)`, mediaID, versionID)
+		VALUES ($1, 'pack', $2)`, mediaID, created.ID)
 	require.NoError(t, err)
+
 	_, err = pool.Exec(t.Context(),
 		`UPDATE organizations SET storage_used_bytes = 11 WHERE id = $1`, orgID)
 	require.NoError(t, err)
@@ -1566,7 +1562,7 @@ func TestRepositoryDeleteClearsPackVersionUsageForScanner(t *testing.T) {
 	var usages int
 	require.NoError(t, pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM media_usages WHERE media_id = $1`, mediaID).Scan(&usages))
-	assert.Zero(t, usages, "pack_version usage must not outlive its cascaded pack_version row")
+	assert.Zero(t, usages, "pack usage must be cleared on pack deletion")
 
 	var mediaCount int
 	require.NoError(t, pool.QueryRow(t.Context(), `

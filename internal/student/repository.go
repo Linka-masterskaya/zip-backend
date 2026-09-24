@@ -431,17 +431,6 @@ func purgeStudentPacks(
 			  )`, folderIDs); err != nil {
 			return fmt.Errorf("student force delete pack adaptation usages: %w", err)
 		}
-		// Версии наборов уходят каскадом вместе с наборами.
-		if _, err := tx.Exec(ctx, `
-			DELETE FROM media_usages
-			WHERE source_type = 'pack_version'
-			  AND source_id IN (
-				SELECT pv.id FROM pack_versions pv
-				JOIN packs p ON p.id = pv.pack_id
-				WHERE p.folder_id = ANY($1)
-			  )`, folderIDs); err != nil {
-			return fmt.Errorf("student force delete pack version usages: %w", err)
-		}
 	}
 	// Адаптации самого ученика уходят каскадом вместе с ним, включая те,
 	// что сделаны из чужих наборов, — их следы тоже надо снять.

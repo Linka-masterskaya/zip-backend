@@ -16,7 +16,7 @@ type PackHandlers struct {
 }
 
 // RegisterPackRoutes registers pack CRUD, publication, config, import/export,
-// student assignment, and version history routes.
+// and student assignment routes.
 func RegisterPackRoutes(
 	mux Mux,
 	authMW *middleware.AuthMW,
