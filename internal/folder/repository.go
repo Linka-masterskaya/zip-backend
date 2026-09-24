@@ -653,7 +653,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 				UNION ALL
 				SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 							true, p.updated_at,
-							p.age, p.difficulty
+							p.age, p.difficulty, p.cover_source_picture_id
 				FROM packs p
 				WHERE p.published_globally = true
 					AND p.published_at IS NOT NULL
