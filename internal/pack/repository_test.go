@@ -31,14 +31,17 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, folderID, created.FolderID)
 	assert.JSONEq(t, string(config), string(created.Config))
+	assert.Nil(t, created.CoverSourcePictureID, "новый набор создаётся без обложки")
 
 	age := 5
 	difficulty := "medium"
 	notes := "notes"
 	goals := []string{"speech", "attention"}
 	title := "Updated pack"
+	coverID := uuid.New()
 	updated, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
-		Title: &title,
+		Title:                &title,
+		CoverSourcePictureID: NullablePatch[uuid.UUID]{Set: true, Value: &coverID},
 		FilterMetadata: &FilterMetadataPatch{
 			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
@@ -49,6 +52,7 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, title, updated.Title)
 	assert.Equal(t, goals, updated.Goals)
+	assert.Equal(t, &coverID, updated.CoverSourcePictureID)
 	assert.JSONEq(t, string(config), string(updated.Config), "PATCH must not change config")
 
 	cleared, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
@@ -63,11 +67,13 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	assert.Nil(t, cleared.Difficulty)
 	assert.Empty(t, cleared.Notes)
 	assert.JSONEq(t, string(config), string(cleared.Config))
+	assert.Equal(t, &coverID, cleared.CoverSourcePictureID, "обложка переживает сброс остальных метаданных")
 
 	listed, _, err := repo.ListWithTotal(context.Background(), userID, ListInput{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, created.ID, listed[0].ID)
+	assert.Equal(t, &coverID, listed[0].CoverSourcePictureID)
 
 	moved, err := repo.Move(context.Background(), userID, created.ID, secondFolderID)
 	require.NoError(t, err)
@@ -76,6 +82,14 @@ func TestRepositoryCRUDPreservesConfigAndClearsMetadata(t *testing.T) {
 	fetched, err := repo.Get(context.Background(), userID, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, secondFolderID, fetched.FolderID)
+	assert.Equal(t, &coverID, fetched.CoverSourcePictureID)
+
+	coverCleared, err := repo.Update(context.Background(), userID, created.ID, UpdateInput{
+		CoverSourcePictureID: NullablePatch[uuid.UUID]{Set: true},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, coverCleared.CoverSourcePictureID, "явный null снимает обложку")
+
 	require.NoError(t, repo.Delete(context.Background(), userID, created.ID))
 	_, err = repo.Get(context.Background(), userID, created.ID)
 	assert.ErrorIs(t, err, ErrPackNotFound)

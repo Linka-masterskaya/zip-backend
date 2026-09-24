@@ -3092,6 +3092,11 @@ export interface components {
             owner_id: string;
             /** Format: uuid */
             folder_id: string;
+            /**
+             * Format: uuid
+             * @description Идентификатор картинки банка, используемой как обложка набора. Содержимое доступно по `GET /api/v1/pictures/{id}/content`.
+             */
+            cover_source_picture_id?: string | null;
             /** Format: uuid */
             library_folder_id?: string | null;
             /** Format: date-time */
@@ -3142,6 +3147,8 @@ export interface components {
             title?: string;
             /** Format: uuid */
             folder_id?: string;
+            /** Format: uuid */
+            cover_source_picture_id?: string | null;
             age?: number | null;
             /** @enum {string|null} */
             difficulty?: "easy" | "medium" | "hard" | null;
@@ -3403,6 +3410,11 @@ export interface components {
              * @enum {string|null}
              */
             difficulty?: "easy" | "medium" | "hard" | null;
+            /**
+             * Format: uuid
+             * @description Обложка набора; возвращается только для `type = pack`, может быть `null`
+             */
+            cover_source_picture_id?: string | null;
             /** Format: date-time */
             updated_at: string;
         };

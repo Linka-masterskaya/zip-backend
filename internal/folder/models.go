@@ -83,15 +83,16 @@ type ContentsInput struct {
 
 // ContentItem is a response-only DTO for folder contents.
 type ContentItem struct {
-	Type       string     `json:"type"`
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	Kind       *string    `json:"kind,omitempty"`
-	StudentID  *uuid.UUID `json:"student_id,omitempty"`
-	Published  bool       `json:"published,omitempty"`
-	Age        *int       `json:"age"`
-	Difficulty *string    `json:"difficulty"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	Type                 string     `json:"type"`
+	ID                   uuid.UUID  `json:"id"`
+	Name                 string     `json:"name"`
+	Kind                 *string    `json:"kind,omitempty"`
+	StudentID            *uuid.UUID `json:"student_id,omitempty"`
+	Published            bool       `json:"published,omitempty"`
+	Age                  *int       `json:"age"`
+	Difficulty           *string    `json:"difficulty"`
+	CoverSourcePictureID *uuid.UUID `json:"cover_source_picture_id"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 // MarshalJSON defines the response shape: pack metadata remains present when
@@ -110,12 +111,14 @@ func (i ContentItem) MarshalJSON() ([]byte, error) {
 	if i.Type == "pack" {
 		return json.Marshal(struct {
 			common
-			Published  bool    `json:"published,omitempty"`
-			Age        *int    `json:"age"`
-			Difficulty *string `json:"difficulty"`
+			Published            bool       `json:"published,omitempty"`
+			Age                  *int       `json:"age"`
+			Difficulty           *string    `json:"difficulty"`
+			CoverSourcePictureID *uuid.UUID `json:"cover_source_picture_id"`
 		}{
 			common: base, Published: i.Published,
 			Age: i.Age, Difficulty: i.Difficulty,
+			CoverSourcePictureID: i.CoverSourcePictureID,
 		})
 	}
 

@@ -21,7 +21,9 @@ func TestRepositoryDuplicateCopiesPackAndReusesMedia(t *testing.T) {
 
 	age, difficulty := 5, "medium"
 	goals, notes := []string{"speech", "attention"}, "Исходные заметки"
+	coverID := uuid.New()
 	source, err = repo.Update(t.Context(), ownerID, source.ID, UpdateInput{
+		CoverSourcePictureID: NullablePatch[uuid.UUID]{Set: true, Value: &coverID},
 		FilterMetadata: &FilterMetadataPatch{
 			Age:        NullablePatch[int]{Set: true, Value: &age},
 			Difficulty: NullablePatch[string]{Set: true, Value: &difficulty},
@@ -65,6 +67,7 @@ func TestRepositoryDuplicateCopiesPackAndReusesMedia(t *testing.T) {
 	assert.Equal(t, source.Difficulty, duplicated.Difficulty)
 	assert.Equal(t, source.Goals, duplicated.Goals)
 	assert.Equal(t, source.Notes, duplicated.Notes)
+	assert.Equal(t, source.CoverSourcePictureID, duplicated.CoverSourcePictureID)
 	assert.JSONEq(t, string(source.Config), string(duplicated.Config))
 
 	var duplicatedUsageIDs []uuid.UUID

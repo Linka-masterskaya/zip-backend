@@ -358,7 +358,7 @@ func validSection(value string) bool {
 }
 
 func validateUpdate(input *UpdateInput) error {
-	if input.Title == nil && input.FolderID == nil && input.FilterMetadata == nil && !input.Notes.Set {
+	if input.Title == nil && !input.CoverSourcePictureID.Set && input.FolderID == nil && input.FilterMetadata == nil && !input.Notes.Set {
 		return apperr.ErrBadRequest.WithMessage("patch must contain editable fields")
 	}
 	if input.Title != nil {

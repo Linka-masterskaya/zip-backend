@@ -495,7 +495,7 @@ func (r *Repository) Contents(
 		var item ContentItem
 		if err = rows.Scan(
 			&item.Type, &item.ID, &item.Name, &item.Kind, &item.StudentID,
-			&item.Published, &item.UpdatedAt, &item.Age, &item.Difficulty,
+			&item.Published, &item.UpdatedAt, &item.Age, &item.Difficulty, &item.CoverSourcePictureID,
 		); err != nil {
 			return nil, fmt.Errorf("folder contents scan: %w", err)
 		}
@@ -651,7 +651,8 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
 			       f.student_id, false AS published, f.updated_at,
 			       NULL::int AS age,
-			       NULL::text AS difficulty
+			       NULL::text AS difficulty,
+			       NULL::uuid AS cover_source_picture_id
 			FROM folders f
 			WHERE f.parent_id IS NULL
 			  AND f.section = $1
@@ -659,7 +660,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			  ` + visibleStudentFolderPredicate + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
-		       age, difficulty
+		       age, difficulty, cover_source_picture_id
 		FROM items`
 		return appendContentsFilters(query, args, input)
 	}
@@ -680,7 +681,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 		studentAssignments = `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       false, p.updated_at, p.age, p.difficulty
+			       false, p.updated_at, p.age, p.difficulty, p.cover_source_picture_id
 			FROM folders student_folder
 			JOIN students s ON s.id = student_folder.student_id
 			               AND s.deleted_at IS NULL
@@ -696,7 +697,8 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			SELECT 'folder'::text AS type, f.id, f.name, f.kind,
 			       f.student_id, false AS published, f.updated_at,
 			       NULL::int AS age,
-			       NULL::text AS difficulty
+			       NULL::text AS difficulty,
+						 NULL::uuid AS cover_source_picture_id
 			FROM folders f
 			WHERE f.parent_id = $1
 			  AND f.section = $3
@@ -705,12 +707,12 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       p.published_at IS NOT NULL, p.updated_at,
-			       p.age, p.difficulty
+			       p.age, p.difficulty, p.cover_source_picture_id
 			FROM packs p
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
-		       age, difficulty
+		       age, difficulty, cover_source_picture_id
 		FROM items`
 	return appendContentsFilters(query, args, input)
 }
