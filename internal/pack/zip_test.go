@@ -194,6 +194,33 @@ func TestBuildArchiveRejectsMissingPicturesBankReference(t *testing.T) {
 	require.ErrorIs(t, err, ErrMissingMediaReference)
 }
 
+func TestBuildArchiveResolvesPicturesBankReferenceForLooks3(t *testing.T) {
+	pictureID := uuid.New()
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{"id":"b","type":"grid","elements":[{
+			"id":"e","kind":"image","source_picture_id":"` + pictureID.String() + `"
+		}]}]
+	}`)
+	archive, err := buildArchive(
+		context.Background(), config, nil, fakeArchiveStorage{},
+		linka.FormatLooks3,
+		func(_ context.Context, id uuid.UUID) ([]byte, string, error) {
+			assert.Equal(t, pictureID, id)
+			return []byte{1, 2, 3}, "image/png", nil
+		},
+	)
+	require.NoError(t, err)
+	data := readArchive(t, archive)
+	require.NoError(t, archive.Close())
+	parsed, err := parseArchive(data)
+	require.NoError(t, err)
+	path := "media/picture-" + pictureID.String() + ".png"
+	assert.Equal(t, []byte{1, 2, 3}, parsed.Files[path])
+	assert.Contains(t, string(parsed.Config), `"imagePath":"`+path+`"`)
+}
+
 func archiveConfigWithMediaID(mediaID uuid.UUID) json.RawMessage {
 	return json.RawMessage(`{
 		"metadata":{"version":"2.0"},

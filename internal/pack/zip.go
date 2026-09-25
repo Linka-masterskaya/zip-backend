@@ -124,18 +124,12 @@ func buildArchiveWithLimit(
 	if err != nil {
 		return nil, err
 	}
-	// Конвертация идёт после prepareArchiveConfig: Linka Looks знает
-	// только пути медиа внутри архива, а их проставляет именно она.
-	configPayload, err := exportPayload(archiveConfig, format)
-	if err != nil {
-		return nil, err
-	}
 	temporary, err := os.CreateTemp("", "linka-export-*.linka")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary archive: %w", err)
 	}
 	archive, err := writeTemporaryArchive(
-		ctx, temporary, archiveConfig, configPayload, archiveFiles, storageClient, pictureLoader, maxSize,
+		ctx, temporary, archiveConfig, format, archiveFiles, storageClient, pictureLoader, maxSize,
 	)
 	if err != nil {
 		cleanupTemporaryArchive(temporary)
@@ -148,7 +142,7 @@ func writeTemporaryArchive(
 	ctx context.Context,
 	temporary *os.File,
 	config *linka.Config,
-	configPayload any,
+	format linka.Format,
 	files []*media.File,
 	storageClient archiveStorage,
 	pictureLoader PictureLoader,
@@ -162,6 +156,14 @@ func writeTemporaryArchive(
 		}
 	}
 	if err := writeArchivePictures(ctx, writer, config, pictureLoader); err != nil {
+		return nil, err
+	}
+	// Конвертация идёт здесь, а не раньше: Linka Looks знает только пути
+	// медиа внутри архива, а проставляют их prepareArchiveConfig (по
+	// media_id) и writeArchivePictures (по source_picture_id) — то есть
+	// пути готовы только к этому моменту.
+	configPayload, err := exportPayload(config, format)
+	if err != nil {
 		return nil, err
 	}
 	exportedConfig, err := json.Marshal(configPayload)

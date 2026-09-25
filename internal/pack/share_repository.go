@@ -19,6 +19,7 @@ var (
 type shareJobRecord struct {
 	ID            uuid.UUID
 	OwnerID       uuid.UUID
+	OwnerRole     string
 	PackID        uuid.UUID
 	StudentID     uuid.UUID
 	RequestID     string
@@ -35,7 +36,7 @@ type shareJobRecord struct {
 }
 
 type shareJobRepository interface {
-	EnqueueShareJob(context.Context, shareJobRecord) error
+	EnqueueShareJob(context.Context, *shareJobRecord) error
 	ClaimShareJob(context.Context, time.Duration, int) (*shareJobRecord, error)
 	GetShareJob(context.Context, uuid.UUID) (*shareJobRecord, error)
 	MarkShareJobEmailSent(context.Context, uuid.UUID, uuid.UUID) error
@@ -46,13 +47,15 @@ type shareJobRepository interface {
 }
 
 // EnqueueShareJob persists a queued pack-share delivery before HTTP 202 is returned.
-func (r *Repository) EnqueueShareJob(ctx context.Context, job shareJobRecord) error {
-	_, err := r.pool.Exec(ctx, `
+func (r *Repository) EnqueueShareJob(ctx context.Context, job *shareJobRecord) error {
+	err := r.pool.QueryRow(ctx, `
 		INSERT INTO pack_share_jobs (
-			id, owner_id, pack_id, student_id, request_id, status, message, last_error,
+			id, owner_id, owner_role, pack_id, student_id, request_id, status, message, last_error,
 			next_attempt_at, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), 'queued', '', '', $6, $6, $6)
-	`, job.ID, job.OwnerID, job.PackID, job.StudentID, job.RequestID, job.CreatedAt)
+		) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), 'queued', '', '', now(), now(), now())
+		RETURNING next_attempt_at, created_at, updated_at
+	`, job.ID, job.OwnerID, job.OwnerRole, job.PackID, job.StudentID, job.RequestID,
+	).Scan(&job.NextAttemptAt, &job.CreatedAt, &job.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("enqueue pack share job: %w", err)
 	}
@@ -119,7 +122,7 @@ func (r *Repository) ClaimShareJob(ctx context.Context, lease time.Duration, max
 			completed_at = NULL
 		FROM candidate c
 		WHERE j.id = c.id
-		RETURNING j.id, j.owner_id, j.pack_id, j.student_id,
+		RETURNING j.id, j.owner_id, j.owner_role, j.pack_id, j.student_id,
 		          COALESCE(j.request_id, ''), j.status, j.message, j.last_error, j.attempts,
 		          j.lease_token, j.lease_until, j.email_sent_at, j.next_attempt_at,
 		          j.created_at, j.updated_at
@@ -136,7 +139,7 @@ func (r *Repository) ClaimShareJob(ctx context.Context, lease time.Duration, max
 // GetShareJob returns durable delivery state by task ID.
 func (r *Repository) GetShareJob(ctx context.Context, id uuid.UUID) (*shareJobRecord, error) {
 	job, err := scanShareJob(r.pool.QueryRow(ctx, `
-		SELECT id, owner_id, pack_id, student_id, COALESCE(request_id, ''),
+		SELECT id, owner_id, owner_role, pack_id, student_id, COALESCE(request_id, ''),
 		       status, message, last_error, attempts, lease_token, lease_until,
 		       email_sent_at, next_attempt_at, created_at, updated_at
 		FROM pack_share_jobs
@@ -276,6 +279,7 @@ func scanShareJob(row shareJobScanner) (*shareJobRecord, error) {
 	if err := row.Scan(
 		&job.ID,
 		&job.OwnerID,
+		&job.OwnerRole,
 		&job.PackID,
 		&job.StudentID,
 		&job.RequestID,

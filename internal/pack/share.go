@@ -339,6 +339,10 @@ func (s *ShareService) shareWithStudent(
 	if err != nil {
 		return nil, err
 	}
+	role, err := authctx.RoleFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Validate ownership before persisting any outbound work. The outbox stores
 	// only IDs, never the student's decrypted email address.
@@ -378,6 +382,7 @@ func (s *ShareService) shareWithStudent(
 	job := shareJobRecord{
 		ID:            uuid.New(),
 		OwnerID:       userID,
+		OwnerRole:     role,
 		PackID:        packID,
 		StudentID:     studentID,
 		RequestID:     authctx.RequestIDFromCtx(ctx),
@@ -386,7 +391,7 @@ func (s *ShareService) shareWithStudent(
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	if err := s.jobs.EnqueueShareJob(ctx, job); err != nil {
+	if err := s.jobs.EnqueueShareJob(ctx, &job); err != nil {
 		return nil, apperr.ErrServiceUnavailable.
 			WithError(err).
 			WithMessage("pack share outbox is unavailable")
@@ -539,7 +544,13 @@ func (s *ShareService) processJob(job *shareJobRecord) {
 		return
 	}
 
+	if job.OwnerRole == "" {
+		s.failJob(job, "sender role is unknown; re-send the pack", errors.New("share job has no owner role"))
+		return
+	}
+
 	baseCtx := authctx.SetUserIDToCtx(s.workerCtx, job.OwnerID)
+	baseCtx = authctx.SetRoleToCtx(baseCtx, job.OwnerRole)
 	if job.RequestID != "" {
 		baseCtx = authctx.SetRequestIDToCtx(baseCtx, job.RequestID)
 	}
