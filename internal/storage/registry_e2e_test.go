@@ -29,7 +29,7 @@ func TestE2EStorageRegistryLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, migrations.Run(sqlDB))
 
-	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
+	objectStorage, cleanupStorage := testutil.NewObjectStorage(t, pool)
 	t.Cleanup(cleanupStorage)
 
 	ctx := t.Context()
@@ -69,7 +69,7 @@ func TestE2EStorageReaperDeletesUnreferencedObject(t *testing.T) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, migrations.Run(sqlDB))
 
-	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
+	objectStorage, cleanupStorage := testutil.NewObjectStorage(t, pool)
 	t.Cleanup(cleanupStorage)
 
 	ctx := t.Context()
@@ -96,7 +96,7 @@ func TestE2EStoragePutCompensatesRegistryFailure(t *testing.T) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, migrations.Run(sqlDB))
 
-	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
+	objectStorage, cleanupStorage := testutil.NewObjectStorage(t, pool)
 	t.Cleanup(cleanupStorage)
 
 	ctx := t.Context()
@@ -134,7 +134,7 @@ func TestE2EStoragePutPreservesPreexistingSharedKeyOnRegistryFailure(t *testing.
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, migrations.Run(sqlDB))
 
-	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
+	objectStorage, cleanupStorage := testutil.NewObjectStorage(t, pool)
 	t.Cleanup(cleanupStorage)
 
 	ctx := t.Context()
@@ -177,7 +177,7 @@ func TestE2EStorageRemoveDoesNotRollbackAfterRegistryFailure(t *testing.T) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, migrations.Run(sqlDB))
 
-	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
+	objectStorage, cleanupStorage := testutil.NewObjectStorage(t, pool)
 	t.Cleanup(cleanupStorage)
 
 	ctx := t.Context()
@@ -227,7 +227,7 @@ func TestE2EStoragePutSerializesByObjectKey(t *testing.T) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, migrations.Run(sqlDB))
 
-	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
+	objectStorage, cleanupStorage := testutil.NewObjectStorage(t, pool)
 	t.Cleanup(cleanupStorage)
 
 	ctx := t.Context()

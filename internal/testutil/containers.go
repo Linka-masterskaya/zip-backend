@@ -19,36 +19,39 @@ import (
 	"github.com/Linka-masterskaya/zip-backend/internal/storage"
 )
 
-// NewMinIO starts a private temporary object store and returns the application client.
-func NewMinIO(t *testing.T, registries ...*pgxpool.Pool) (*storage.Client, func()) {
+// objectStorageImage is pinned by digest: LocalStack keeps no immutable tag for
+// the community image.
+const objectStorageImage = "localstack/localstack:4.0@sha256:" +
+	"17c2f79ca4e1f804eb912291a19713d4134806325ef0d21d4c1053161dfa72d0"
+
+// NewObjectStorage starts a temporary S3-compatible object store and returns the
+// application client. LocalStack replaces MinIO here: MinIO no longer publishes
+// community images that can be pulled without a subscription.
+func NewObjectStorage(t *testing.T, registries ...*pgxpool.Pool) (*storage.Client, func()) {
 	t.Helper()
 	ctx := context.Background()
 	const accessKey = "test-access-key"
 	const secretKey = "test-secret-key-12345"
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z",
-			ExposedPorts: []string{"9000/tcp"},
-			Env: map[string]string{
-				"MINIO_ROOT_USER":     accessKey,
-				"MINIO_ROOT_PASSWORD": secretKey,
-			},
-			Cmd: []string{"server", "/data"},
-			WaitingFor: wait.ForHTTP("/minio/health/ready").
-				WithPort("9000/tcp").
-				WithStartupTimeout(30 * time.Second),
+			Image:        objectStorageImage,
+			ExposedPorts: []string{"4566/tcp"},
+			Env:          map[string]string{"SERVICES": "s3"},
+			WaitingFor: wait.ForHTTP("/_localstack/health").
+				WithPort("4566/tcp").
+				WithStartupTimeout(120 * time.Second),
 		},
 		Started: true,
 	})
 	if err != nil {
-		t.Fatalf("failed to start MinIO container: %v", err)
+		t.Fatalf("failed to start object storage container: %v", err)
 	}
-	endpoint, err := container.PortEndpoint(ctx, "9000/tcp", "")
+	endpoint, err := container.PortEndpoint(ctx, "4566/tcp", "")
 	if err != nil {
 		if terminateErr := container.Terminate(ctx); terminateErr != nil {
-			t.Logf("terminate MinIO after endpoint error: %v", terminateErr)
+			t.Logf("terminate object storage after endpoint error: %v", terminateErr)
 		}
-		t.Fatalf("failed to get MinIO endpoint: %v", err)
+		t.Fatalf("failed to get object storage endpoint: %v", err)
 	}
 	storageConfig := config.MinIOConfig{
 		Endpoint: endpoint, AccessKey: accessKey, SecretKey: secretKey,
@@ -65,13 +68,13 @@ func NewMinIO(t *testing.T, registries ...*pgxpool.Pool) (*storage.Client, func(
 	}
 	if err != nil {
 		if terminateErr := container.Terminate(ctx); terminateErr != nil {
-			t.Logf("terminate MinIO after client error: %v", terminateErr)
+			t.Logf("terminate object storage after client error: %v", terminateErr)
 		}
-		t.Fatalf("failed to create MinIO client: %v", err)
+		t.Fatalf("failed to create object storage client: %v", err)
 	}
 	return client, func() {
 		if err := container.Terminate(ctx); err != nil {
-			t.Logf("failed to terminate MinIO container: %v", err)
+			t.Logf("failed to terminate object storage container: %v", err)
 		}
 	}
 }
