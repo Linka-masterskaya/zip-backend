@@ -1011,7 +1011,7 @@ func TestRepositoryPackShareOutboxPersistsAndReclaimsLease(t *testing.T) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), &job))
 
 	stored, err := repo.GetShareJob(t.Context(), job.ID)
 	require.NoError(t, err)
@@ -1091,7 +1091,7 @@ func TestRepositoryPackShareOutboxStopsAfterMaxAttempts(t *testing.T) {
 		ID: uuid.New(), OwnerID: ownerID, PackID: uuid.New(), StudentID: uuid.New(),
 		Status: ShareTaskQueued, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now,
 	}
-	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), &job))
 
 	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
 	require.NoError(t, err)
@@ -1123,7 +1123,7 @@ func TestRepositoryPackShareOutboxDoesNotResendAfterSMTPWasAccepted(t *testing.T
 		ID: uuid.New(), OwnerID: ownerID, PackID: uuid.New(), StudentID: uuid.New(),
 		Status: ShareTaskQueued, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now,
 	}
-	require.NoError(t, repo.EnqueueShareJob(t.Context(), job))
+	require.NoError(t, repo.EnqueueShareJob(t.Context(), &job))
 
 	claimed, err := repo.ClaimShareJob(t.Context(), time.Minute, 1)
 	require.NoError(t, err)

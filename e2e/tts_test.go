@@ -27,7 +27,7 @@ func TestE2E_TTSFlow(t *testing.T) {
 	userID := e2eUser(t, pool, "tts-user")
 	token := e2eToken(t, userID, "defectologist")
 
-	objectStorage, cleanupStorage := testutil.NewObjectStorage(t, pool)
+	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
 	t.Cleanup(cleanupStorage)
 
 	fakeAudio := []byte("fake-mp3-data-for-e2e")

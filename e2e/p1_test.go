@@ -593,7 +593,7 @@ func e2eServer(
 	crypto, err := cryptox.New(bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32))
 	require.NoError(t, err)
 
-	objectStorage, cleanupStorage := testutil.NewObjectStorage(t, pool)
+	objectStorage, cleanupStorage := testutil.NewMinIO(t, pool)
 	t.Cleanup(cleanupStorage)
 	packRepo := pack.NewRepository(pool)
 	packService := pack.NewService(packRepo, nil, pack.DefaultBatchDeleteLimit)
