@@ -124,8 +124,15 @@ func buildArchiveWithLimit(
 	if err != nil {
 		return nil, err
 	}
-	// Конвертация идёт после prepareArchiveConfig: Linka Looks знает
-	// только пути медиа внутри архива, а их проставляет именно она.
+	// Картинки Банка грузятся здесь, а не при записи архива: у них нет
+	// media_id, и путь внутри архива им проставляет только эта функция.
+	pictures, err := resolveArchivePictures(ctx, archiveConfig, pictureLoader)
+	if err != nil {
+		return nil, err
+	}
+	// Конвертация идёт после обеих подготовок: Linka Looks знает только
+	// пути медиа внутри архива, а проставляют их prepareArchiveConfig
+	// (по media_id) и resolveArchivePictures (по source_picture_id).
 	configPayload, err := exportPayload(archiveConfig, format)
 	if err != nil {
 		return nil, err
@@ -135,7 +142,7 @@ func buildArchiveWithLimit(
 		return nil, fmt.Errorf("create temporary archive: %w", err)
 	}
 	archive, err := writeTemporaryArchive(
-		ctx, temporary, archiveConfig, configPayload, archiveFiles, storageClient, pictureLoader, maxSize,
+		ctx, temporary, configPayload, archiveFiles, storageClient, pictures, maxSize,
 	)
 	if err != nil {
 		cleanupTemporaryArchive(temporary)
@@ -147,11 +154,10 @@ func buildArchiveWithLimit(
 func writeTemporaryArchive(
 	ctx context.Context,
 	temporary *os.File,
-	config *linka.Config,
 	configPayload any,
 	files []*media.File,
 	storageClient archiveStorage,
-	pictureLoader PictureLoader,
+	pictures []loadedPicture,
 	maxSize int64,
 ) (*archiveStream, error) {
 	limited := &archiveLimitWriter{writer: temporary, remaining: maxSize}
@@ -161,8 +167,10 @@ func writeTemporaryArchive(
 			return nil, err
 		}
 	}
-	if err := writeArchivePictures(ctx, writer, config, pictureLoader); err != nil {
-		return nil, err
+	for _, picture := range pictures {
+		if err := writeZipEntry(writer, picture.path, bytes.NewReader(picture.data)); err != nil {
+			return nil, fmt.Errorf("write Pictures Bank image %s: %w", picture.path, err)
+		}
 	}
 	exportedConfig, err := json.Marshal(configPayload)
 	if err != nil {
@@ -265,6 +273,14 @@ type mediaSlot struct {
 	url *string
 }
 
+// loadedPicture — картинка Банка, уже полученная из внешнего сервиса:
+// путь внутри архива и содержимое. Загрузка идёт до конвертации, а
+// запись в zip — после неё, поэтому байты приходится придержать.
+type loadedPicture struct {
+	path string
+	data []byte
+}
+
 func archiveMediaPath(file *media.File) string {
 	return "media/" + file.ID.String() + extensionForMIME(file.MIMEType)
 }
@@ -310,13 +326,17 @@ func writeArchiveMedia(
 	return nil
 }
 
-func writeArchivePictures(
+// resolveArchivePictures загружает картинки Банка и проставляет им пути
+// внутри архива. Вызывается до конвертации формата: у таких картинок нет
+// media_id, и MediaURL им заполняет только эта функция — без неё Linka
+// Looks не увидит пути и откажется собирать набор.
+func resolveArchivePictures(
 	ctx context.Context,
-	writer *zip.Writer,
 	cfg *linka.Config,
 	loader PictureLoader,
-) error {
+) ([]loadedPicture, error) {
 	paths := make(map[uuid.UUID]string)
+	pictures := make([]loadedPicture, 0, len(paths))
 	for blockIndex := range cfg.Blocks {
 		for elementIndex := range cfg.Blocks[blockIndex].Elements {
 			element := &cfg.Blocks[blockIndex].Elements[elementIndex]
@@ -328,25 +348,23 @@ func writeArchivePictures(
 			path, exists := paths[pictureID]
 			if !exists {
 				if loader == nil {
-					return fmt.Errorf("%w: picture %s", ErrMissingMediaReference, pictureID)
+					return nil, fmt.Errorf("%w: picture %s", ErrMissingMediaReference, pictureID)
 				}
 				data, mimeType, err := loader(ctx, pictureID)
 				if err != nil {
-					return fmt.Errorf("load Pictures Bank image %s: %w", pictureID, err)
+					return nil, fmt.Errorf("load Pictures Bank image %s: %w", pictureID, err)
 				}
 				if len(data) == 0 {
-					return fmt.Errorf("%w: picture %s", ErrMissingMediaReference, pictureID)
+					return nil, fmt.Errorf("%w: picture %s", ErrMissingMediaReference, pictureID)
 				}
 				path = "media/picture-" + pictureID.String() + extensionForMIME(mimeType)
-				if err = writeZipEntry(writer, path, bytes.NewReader(data)); err != nil {
-					return fmt.Errorf("write Pictures Bank image %s: %w", path, err)
-				}
 				paths[pictureID] = path
+				pictures = append(pictures, loadedPicture{path: path, data: data})
 			}
 			image.MediaURL = path
 		}
 	}
-	return nil
+	return pictures, nil
 }
 
 func writeZipEntry(writer *zip.Writer, name string, reader io.Reader) error {
