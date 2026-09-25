@@ -30,7 +30,7 @@ func TestContentItemMarshalJSONMetadataByType(t *testing.T) {
 			expected: `{
 				"type":"pack","id":"00000000-0000-0000-0000-000000000001",
 				"name":"Filled","published":true,"age":5,"difficulty":"medium",
-				"cover_source_picture_id":null,
+				"cover_source_picture_id":null,"is_favorite":false,
 				"updated_at":"2026-08-29T01:02:03Z"
 			}`,
 		},
@@ -42,7 +42,7 @@ func TestContentItemMarshalJSONMetadataByType(t *testing.T) {
 			expected: `{
 				"type":"pack","id":"00000000-0000-0000-0000-000000000001",
 				"name":"Empty","age":null,"difficulty":null,
-				"cover_source_picture_id":null,
+				"cover_source_picture_id":null,"is_favorite":false,
 				"updated_at":"2026-08-29T01:02:03Z"
 			}`,
 		},
@@ -55,7 +55,7 @@ func TestContentItemMarshalJSONMetadataByType(t *testing.T) {
 			expected: `{
 				"type":"pack","id":"00000000-0000-0000-0000-000000000001",
 				"name":"Covered","age":null,"difficulty":null,
-				"cover_source_picture_id":"00000000-0000-0000-0000-0000000000ff",
+				"cover_source_picture_id":"00000000-0000-0000-0000-0000000000ff","is_favorite":false,
 				"updated_at":"2026-08-29T01:02:03Z"
 			}`,
 		},
