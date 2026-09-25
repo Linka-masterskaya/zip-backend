@@ -19,10 +19,12 @@ func newMemoryShareJobRepository() *memoryShareJobRepository {
 	return &memoryShareJobRepository{jobs: make(map[uuid.UUID]shareJobRecord)}
 }
 
-func (r *memoryShareJobRepository) EnqueueShareJob(_ context.Context, job shareJobRecord) error {
+func (r *memoryShareJobRepository) EnqueueShareJob(_ context.Context, job *shareJobRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.jobs[job.ID] = job
+	now := time.Now().UTC()
+	job.NextAttemptAt, job.CreatedAt, job.UpdatedAt = now, now, now
+	r.jobs[job.ID] = *job
 	return nil
 }
 

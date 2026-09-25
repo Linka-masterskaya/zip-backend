@@ -58,7 +58,7 @@ func TestShareServiceStudentQueuesExportAndUsesOriginalPackTitle(t *testing.T) {
 	service := NewShareService(packs, content, students, mailSender)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestShareServiceStudentReturnsBeforeExportRuns(t *testing.T) {
 	)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	done := make(chan error, 1)
 	go func() {
 		_, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
@@ -130,7 +130,7 @@ func TestShareServiceRejectsPublishedForeignPackForEmail(t *testing.T) {
 	)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	_, err := service.Share(ctx, uuid.New(), ShareInput{TargetType: ShareTargetStudent, TargetID: uuid.New()})
 	assertAppErrorStatus(t, err, 403)
 }
@@ -142,7 +142,7 @@ func TestShareServiceStudentValidationStopsBeforeExport(t *testing.T) {
 	service := NewShareService(&sharePackFake{}, content, students, &shareMailerFake{})
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	_, err := service.Share(ctx, uuid.New(), ShareInput{TargetType: ShareTargetStudent, TargetID: uuid.New()})
 
 	assert.Error(t, err)
@@ -161,7 +161,7 @@ func TestShareServiceRecoversMailerPanic(t *testing.T) {
 	)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	require.NoError(t, err)
 
@@ -191,7 +191,7 @@ func TestShareServiceShutdownRejectsInFlightEnqueue(t *testing.T) {
 	)
 	service.Start()
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	shareDone := make(chan error, 1)
 	go func() {
 		_, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
@@ -243,7 +243,7 @@ func TestShareServiceRetriesMailer(t *testing.T) {
 	)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	require.NoError(t, err)
 
@@ -271,7 +271,7 @@ func TestShareServiceRequiresExplicitStartForStudentWorker(t *testing.T) {
 		&shareStudentFake{student: &student.Student{ID: studentID, Email: "student@example.com"}},
 		&shareMailerFake{},
 	)
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	_, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	assertAppErrorStatus(t, err, 503)
 
@@ -297,7 +297,7 @@ func TestShareServiceStopsRequeueAfterMaxAttemptsOnSMTPTimeout(t *testing.T) {
 	)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	require.NoError(t, err)
 
@@ -329,7 +329,7 @@ func TestShareServiceStopsRequeueAfterMaxAttemptsOnExportTimeout(t *testing.T) {
 	)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	require.NoError(t, err)
 
@@ -348,6 +348,12 @@ type deadlineShareMailer struct {
 func (m *deadlineShareMailer) Send(context.Context, string, mailer.Template, mailer.EmailData) error {
 	m.calls.Add(1)
 	return context.DeadlineExceeded
+}
+
+// shareCtx повторяет контекст запроса: middleware кладёт и пользователя, и роль.
+func shareCtx(userID uuid.UUID) context.Context {
+	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	return authctx.SetRoleToCtx(ctx, "defectologist")
 }
 
 func shutdownShareService(t *testing.T, service *ShareService) {
@@ -413,8 +419,18 @@ type shareStudentFake struct {
 	err       error
 }
 
-func (f *shareStudentFake) Get(_ context.Context, studentID uuid.UUID) (*student.Student, error) {
+// Get повторяет контракт настоящего student.Service: тот берёт из контекста
+// и пользователя, и роль (internal/student/service.go owner). Без этого фейк
+// пропускал бы контекст, собранный не полностью, — так и был пропущен баг,
+// когда воркер восстанавливал пользователя, но не роль.
+func (f *shareStudentFake) Get(ctx context.Context, studentID uuid.UUID) (*student.Student, error) {
 	f.studentID = studentID
+	if _, err := authctx.UserIDFromCtx(ctx); err != nil {
+		return nil, err
+	}
+	if _, err := authctx.RoleFromCtx(ctx); err != nil {
+		return nil, err
+	}
 	return f.student, f.err
 }
 
@@ -480,9 +496,10 @@ func TestShareServiceProcessesQueuedOutboxJobAfterRestart(t *testing.T) {
 	userID, packID, studentID := uuid.New(), uuid.New(), uuid.New()
 	jobs := newMemoryShareJobRepository()
 	now := time.Now().UTC()
-	require.NoError(t, jobs.EnqueueShareJob(t.Context(), shareJobRecord{
+	require.NoError(t, jobs.EnqueueShareJob(t.Context(), &shareJobRecord{
 		ID:            uuid.New(),
 		OwnerID:       userID,
+		OwnerRole:     "defectologist",
 		PackID:        packID,
 		StudentID:     studentID,
 		Status:        ShareTaskQueued,
@@ -527,7 +544,7 @@ func TestShareServiceShutdownRequeuesInterruptedOutboxJob(t *testing.T) {
 	)
 	service.Start()
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	require.NoError(t, err)
 
@@ -562,11 +579,11 @@ func TestShareServiceTaskIsHiddenFromAnotherOwnerWithOutbox(t *testing.T) {
 	)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), ownerID)
+	ctx := shareCtx(ownerID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	require.NoError(t, err)
 
-	otherCtx := authctx.SetUserIDToCtx(context.Background(), otherID)
+	otherCtx := shareCtx(otherID)
 	_, err = service.GetTask(otherCtx, result.Task.ID)
 	assertAppErrorStatus(t, err, 404)
 }
@@ -597,7 +614,7 @@ func TestShareServiceDailySendQuotaRejectsBeforeOutbox(t *testing.T) {
 	service.quota = &shareQuotaFake{sendAllowed: false, bytesAllowed: true}
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	_, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	assertAppErrorStatus(t, err, 429)
 }
@@ -616,7 +633,7 @@ func TestShareServiceDailyBytesQuotaFailsAcceptedTask(t *testing.T) {
 	service.quota = &shareQuotaFake{sendAllowed: true, bytesAllowed: false}
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	require.NoError(t, err)
 
@@ -640,7 +657,7 @@ func TestShareServiceOversizedArchiveFailsWithoutSending(t *testing.T) {
 	)
 	shutdownShareService(t, service)
 
-	ctx := authctx.SetUserIDToCtx(context.Background(), userID)
+	ctx := shareCtx(userID)
 	result, err := service.Share(ctx, packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 	require.NoError(t, err)
 
@@ -663,4 +680,51 @@ func (f *shareQuotaFake) ReserveSend(context.Context, uuid.UUID) (bool, error) {
 
 func (f *shareQuotaFake) ReserveBytesForJob(context.Context, uuid.UUID, uuid.UUID, int64) (bool, error) {
 	return f.bytesAllowed, f.err
+}
+
+// Записи, поставленные до появления owner_role, роль не несут. Ретраить их
+// бессмысленно: воркеру неоткуда взять права отправителя, поэтому задача
+// должна сразу уходить в failed с понятным текстом и без письма.
+func TestShareServiceWorkerFailsJobWithoutOwnerRole(t *testing.T) {
+	userID, packID, studentID := uuid.New(), uuid.New(), uuid.New()
+	jobs := newMemoryShareJobRepository()
+	jobID := uuid.New()
+	now := time.Now().UTC()
+	require.NoError(t, jobs.EnqueueShareJob(context.Background(), &shareJobRecord{
+		ID:            jobID,
+		OwnerID:       userID,
+		PackID:        packID,
+		StudentID:     studentID,
+		Status:        ShareTaskQueued,
+		NextAttemptAt: now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+	calls := make(chan shareMailCall, 1)
+	service := NewShareServiceWithOutbox(
+		&sharePackFake{pack: &Pack{ID: packID, OwnerID: userID, Title: "Pack"}},
+		&shareContentFake{archive: testArchive("pack.linka", []byte("data"))},
+		&shareStudentFake{student: &student.Student{ID: studentID, Email: "student@example.com", Name: "Анна"}},
+		&shareMailerFake{calls: calls},
+		jobs,
+		nil,
+		ShareConfig{},
+	)
+	shutdownShareService(t, service)
+
+	ctx := shareCtx(userID)
+	require.Eventually(t, func() bool {
+		task, err := service.GetTask(ctx, jobID)
+		return err == nil && task.Status == ShareTaskFailed
+	}, 2*time.Second, 10*time.Millisecond)
+
+	task, err := service.GetTask(ctx, jobID)
+	require.NoError(t, err)
+	assert.Contains(t, task.Message, "sender role is unknown")
+
+	select {
+	case <-calls:
+		t.Fatal("письмо не должно уходить, если роль отправителя неизвестна")
+	default:
+	}
 }
