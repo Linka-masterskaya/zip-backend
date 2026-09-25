@@ -496,6 +496,7 @@ func (r *Repository) Contents(
 		if err = rows.Scan(
 			&item.Type, &item.ID, &item.Name, &item.Kind, &item.StudentID,
 			&item.Published, &item.UpdatedAt, &item.Age, &item.Difficulty, &item.CoverSourcePictureID,
+			&item.IsFavorite,
 		); err != nil {
 			return nil, fmt.Errorf("folder contents scan: %w", err)
 		}
@@ -648,12 +649,15 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 		globalPacks := ""
 		if input.Section == SectionLibrary {
 			args[1] = orgID
+			args = append(args, userID)
 			folderScope = "AND f.org_id = $2"
 			globalPacks = `
 				UNION ALL
 				SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 							true, p.updated_at,
-							p.age, p.difficulty, p.cover_source_picture_id
+							p.age, p.difficulty, p.cover_source_picture_id,
+							EXISTS (SELECT 1 FROM favorite_packs fp
+							        WHERE fp.user_id = $3 AND fp.pack_id = p.id)
 				FROM packs p
 				WHERE p.published_globally = true
 					AND p.published_at IS NOT NULL
@@ -666,7 +670,8 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			       f.student_id, false AS published, f.updated_at,
 			       NULL::int AS age,
 			       NULL::text AS difficulty,
-			       NULL::uuid AS cover_source_picture_id
+			       NULL::uuid AS cover_source_picture_id,
+			       false AS is_favorite
 			FROM folders f
 			WHERE f.parent_id IS NULL
 			  AND f.section = $1
@@ -674,12 +679,12 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			  ` + visibleStudentFolderPredicate + globalPacks + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
-		       age, difficulty, cover_source_picture_id
+		       age, difficulty, cover_source_picture_id, is_favorite
 		FROM items`
 		return appendContentsFilters(query, args, input)
 	}
 
-	args := []any{*input.ParentID, userID, input.Section}
+	args := []any{*input.ParentID, userID, input.Section, userID}
 	folderScope := "AND f.owner_id = $2"
 	packFolderColumn := "p.folder_id"
 	packScope := "AND p.owner_id = $2"
@@ -695,7 +700,9 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 		studentAssignments = `
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
-			       false, p.updated_at, p.age, p.difficulty, p.cover_source_picture_id
+			       false, p.updated_at, p.age, p.difficulty, p.cover_source_picture_id,
+			       EXISTS (SELECT 1 FROM favorite_packs fp
+			               WHERE fp.user_id = $4 AND fp.pack_id = p.id)
 			FROM folders student_folder
 			JOIN students s ON s.id = student_folder.student_id
 			               AND s.deleted_at IS NULL
@@ -712,7 +719,8 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			       f.student_id, false AS published, f.updated_at,
 			       NULL::int AS age,
 			       NULL::text AS difficulty,
-						 NULL::uuid AS cover_source_picture_id
+						 NULL::uuid AS cover_source_picture_id,
+			       false AS is_favorite
 			FROM folders f
 			WHERE f.parent_id = $1
 			  AND f.section = $3
@@ -721,12 +729,14 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 			UNION ALL
 			SELECT 'pack', p.id, p.title, NULL::text, NULL::uuid,
 			       p.published_at IS NOT NULL, p.updated_at,
-			       p.age, p.difficulty, p.cover_source_picture_id
+			       p.age, p.difficulty, p.cover_source_picture_id,
+			       EXISTS (SELECT 1 FROM favorite_packs fp
+			               WHERE fp.user_id = $4 AND fp.pack_id = p.id)
 			FROM packs p
 			WHERE ` + packFolderColumn + ` = $1 ` + packScope + studentAssignments + `
 		)
 		SELECT type, id, name, kind, student_id, published, updated_at,
-		       age, difficulty, cover_source_picture_id
+		       age, difficulty, cover_source_picture_id, is_favorite
 		FROM items`
 	return appendContentsFilters(query, args, input)
 }
@@ -743,15 +753,18 @@ func appendContentsFilters(query string, args []any, input ContentsInput) (strin
 		  AND ($%d::int IS NULL OR age = $%d::int)
 		  AND ($%d::int IS NULL OR age >= $%d::int)
 		  AND ($%d::int IS NULL OR age <= $%d::int)
-		  AND ($%d::text = '' OR difficulty = $%d::text)`,
+		  AND ($%d::text = '' OR difficulty = $%d::text)
+		  AND ($%d::bool IS NULL OR is_favorite = $%d::bool)`,
 		first, first,
 		first+1, first+1,
 		first+2, first+2,
 		first+3, first+3,
 		first+4, first+4,
-		first+5, first+5)
+		first+5, first+5,
+		first+6, first+6)
 
-	args = append(args, input.Query, input.Type, input.Age, input.AgeFrom, input.AgeTo, input.Difficulty)
+	args = append(args, input.Query, input.Type, input.Age, input.AgeFrom, input.AgeTo,
+		input.Difficulty, input.IsFavorite)
 	return query + filters, args
 }
 

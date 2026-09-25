@@ -98,6 +98,10 @@ func (h *Handler) Contents(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	isFavorite, err := httpquery.OptionalBool(r, "is_favorite")
+	if err != nil {
+		return err
+	}
 	result, err := h.service.Contents(r.Context(), ContentsInput{
 		Section:  r.PathValue("section"),
 		ParentID: parentID,
@@ -106,6 +110,7 @@ func (h *Handler) Contents(w http.ResponseWriter, r *http.Request) error {
 		Query: r.URL.Query().Get("query"), Type: r.URL.Query().Get("type"),
 		Age: age, AgeFrom: ageFrom, AgeTo: ageTo,
 		Difficulty: r.URL.Query().Get("difficulty"),
+		IsFavorite: isFavorite,
 	})
 	if err != nil {
 		return err

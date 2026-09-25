@@ -36,6 +36,18 @@ func OptionalInt(r *http.Request, name string) (*int, error) {
 	return &value, nil
 }
 
+func OptionalBool(r *http.Request, name string) (*bool, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, apperr.ErrBadRequest.WithMessage(name + " must be a boolean")
+	}
+	return &value, nil
+}
+
 // OptionalUUID разбирает необязательный идентификатор. Нулевой uuid считаем
 // мусором: он никогда не адресует настоящую запись.
 func OptionalUUID(r *http.Request, name string) (*uuid.UUID, error) {

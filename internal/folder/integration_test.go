@@ -380,6 +380,16 @@ func seedFolderUser(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 	return userID
 }
 
+func seedFolderOrgUser(t *testing.T, pool *pgxpool.Pool, mateID uuid.UUID, name string) uuid.UUID {
+	t.Helper()
+	userID := uuid.New()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO users (id, org_id, display_name)
+		SELECT $1, org_id, $3 FROM users WHERE id = $2`, userID, mateID, name)
+	require.NoError(t, err)
+	return userID
+}
+
 func seedFolderStudent(t *testing.T, pool *pgxpool.Pool, ownerID uuid.UUID) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
@@ -1053,4 +1063,98 @@ func TestContentsLibraryRootShowsGloballyPublishedPacksOfOtherOrganizations(t *t
 		require.NoError(t, otherErr)
 		assert.Empty(t, other.Items, "section %s", section)
 	}
+}
+
+func TestContentsFavoriteFilterAndFlag(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "favorites owner")
+	foreignID := seedFolderUser(t, pool, "favorites foreign")
+	service := NewService(NewRepository(pool), 0)
+	ctx := folderContext(ownerID)
+
+	root, err := service.Create(ctx, CreateInput{
+		Section: SectionMy, Kind: KindFolder, Name: "Мои наборы",
+	})
+	require.NoError(t, err)
+	_, err = service.Create(ctx, CreateInput{
+		ParentID: &root.ID, Section: SectionMy, Kind: KindFolder, Name: "Папка",
+	})
+	require.NoError(t, err)
+
+	var likedID, plainID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config)
+		SELECT org_id, id, $2, 'Любимый', '{}'::jsonb FROM users WHERE id = $1
+		RETURNING id`, ownerID, root.ID).Scan(&likedID))
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO packs (org_id, owner_id, folder_id, title, config)
+		SELECT org_id, id, $2, 'Обычный', '{}'::jsonb FROM users WHERE id = $1
+		RETURNING id`, ownerID, root.ID).Scan(&plainID))
+	_, err = pool.Exec(context.Background(),
+		`INSERT INTO favorite_packs (user_id, pack_id) VALUES ($1, $2)`, ownerID, likedID)
+	require.NoError(t, err)
+
+	all, err := service.Contents(ctx, ContentsInput{Section: SectionMy, ParentID: &root.ID})
+	require.NoError(t, err)
+	require.Len(t, all.Items, 3)
+	flags := map[uuid.UUID]bool{}
+	for _, item := range all.Items {
+		flags[item.ID] = item.IsFavorite
+	}
+	assert.True(t, flags[likedID])
+	assert.False(t, flags[plainID])
+
+	liked := true
+	onlyLiked, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, IsFavorite: &liked,
+	})
+	require.NoError(t, err)
+	require.Len(t, onlyLiked.Items, 1, "фильтр отсекает папки: у них избранного нет")
+	assert.Equal(t, likedID, onlyLiked.Items[0].ID)
+	assert.Equal(t, 1, onlyLiked.Total)
+
+	notLiked := false
+	onlyPlain, err := service.Contents(ctx, ContentsInput{
+		Section: SectionMy, ParentID: &root.ID, IsFavorite: &notLiked,
+	})
+	require.NoError(t, err)
+	require.Len(t, onlyPlain.Items, 2, "неизбранное: набор и папка")
+
+	foreign, err := service.Contents(folderContext(foreignID), ContentsInput{Section: SectionMy})
+	require.NoError(t, err)
+	assert.Empty(t, foreign.Items)
+}
+
+func TestContentsFavoriteFlagIsPerUserInLibrary(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "library author")
+	readerID := seedFolderOrgUser(t, pool, ownerID, "library reader")
+	service := NewService(NewRepository(pool), 0)
+	ctx := folderContext(ownerID)
+
+	shelf, err := service.Create(ctx, CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Полка",
+	})
+	require.NoError(t, err)
+
+	var packID uuid.UUID
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		INSERT INTO packs (org_id, owner_id, folder_id, library_folder_id, published_at, status, title, config)
+		SELECT org_id, id, $2, $2, now(), 'published', 'Общий', '{}'::jsonb FROM users WHERE id = $1
+		RETURNING id`, ownerID, shelf.ID).Scan(&packID))
+	_, err = pool.Exec(context.Background(),
+		`INSERT INTO favorite_packs (user_id, pack_id) VALUES ($1, $2)`, ownerID, packID)
+	require.NoError(t, err)
+
+	mine, err := service.Contents(ctx, ContentsInput{Section: SectionLibrary, ParentID: &shelf.ID})
+	require.NoError(t, err)
+	require.Len(t, mine.Items, 1)
+	assert.True(t, mine.Items[0].IsFavorite)
+
+	theirs, err := service.Contents(folderContext(readerID), ContentsInput{
+		Section: SectionLibrary, ParentID: &shelf.ID,
+	})
+	require.NoError(t, err)
+	require.Len(t, theirs.Items, 1)
+	assert.False(t, theirs.Items[0].IsFavorite, "избранное одного пользователя не видно другому")
 }

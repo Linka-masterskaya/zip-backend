@@ -67,6 +67,7 @@ func (f *fakeFolderRepository) Contents(
 
 type fakeFolderService struct {
 	deleteBatchFn func(context.Context, []uuid.UUID, bool) (*BatchDeleteResult, error)
+	contentsFn    func(context.Context, ContentsInput) (*ContentsPage, error)
 }
 
 func (f *fakeFolderService) Create(context.Context, CreateInput) (*Folder, error) {
@@ -100,7 +101,10 @@ func (f *fakeFolderService) DeleteBatch(
 	return &BatchDeleteResult{Deleted: ids, Skipped: []bulk.Skipped{}, DryRun: dryRun}, nil
 }
 
-func (f *fakeFolderService) Contents(context.Context, ContentsInput) (*ContentsPage, error) {
+func (f *fakeFolderService) Contents(ctx context.Context, in ContentsInput) (*ContentsPage, error) {
+	if f.contentsFn != nil {
+		return f.contentsFn(ctx, in)
+	}
 	return &ContentsPage{}, nil
 }
 

@@ -79,6 +79,7 @@ type ContentsInput struct {
 	AgeFrom    *int
 	AgeTo      *int
 	Difficulty string
+	IsFavorite *bool
 }
 
 // ContentItem is a response-only DTO for folder contents.
@@ -92,6 +93,7 @@ type ContentItem struct {
 	Age                  *int       `json:"age"`
 	Difficulty           *string    `json:"difficulty"`
 	CoverSourcePictureID *uuid.UUID `json:"cover_source_picture_id"`
+	IsFavorite           bool       `json:"is_favorite"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
@@ -115,10 +117,12 @@ func (i ContentItem) MarshalJSON() ([]byte, error) {
 			Age                  *int       `json:"age"`
 			Difficulty           *string    `json:"difficulty"`
 			CoverSourcePictureID *uuid.UUID `json:"cover_source_picture_id"`
+			IsFavorite           bool       `json:"is_favorite"`
 		}{
 			common: base, Published: i.Published,
 			Age: i.Age, Difficulty: i.Difficulty,
 			CoverSourcePictureID: i.CoverSourcePictureID,
+			IsFavorite:           i.IsFavorite,
 		})
 	}
 
