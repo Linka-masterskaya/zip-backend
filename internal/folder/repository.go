@@ -123,11 +123,8 @@ func (r *Repository) List(
 	}
 
 	args := []any{input.Section, input.ParentID, input.Limit, input.Offset}
-	scope := ""
-	if input.Section != SectionLibrary {
-		scope = "AND f.owner_id = $5"
-		args = append(args, userID)
-	}
+	scope := "AND f.owner_id = $5"
+	args = append(args, userID)
 
 	rows, err := tx.Query(ctx, `
 		SELECT `+qualifiedFolderColumns+`

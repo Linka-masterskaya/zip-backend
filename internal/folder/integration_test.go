@@ -714,6 +714,44 @@ func TestContentsOrganizationRestrictionsInTheLibrarySection(t *testing.T) {
 	assert.Equal(t, 0, foreignPage.Total)
 }
 
+func TestListLibraryReturnsOnlyOwnFolders(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "library list owner")
+	sameOrgID := seedFolderUser(t, pool, "library list same org")
+	foreignID := seedFolderUser(t, pool, "library list foreign")
+	service := NewService(NewRepository(pool), 0)
+	ctx := t.Context()
+
+	var ownerOrgID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT org_id FROM users WHERE id = $1`, ownerID).Scan(&ownerOrgID))
+	_, err := pool.Exec(ctx,
+		`UPDATE users SET org_id = $1 WHERE id = $2`, ownerOrgID, sameOrgID)
+	require.NoError(t, err)
+
+	own, err := service.Create(folderContext(ownerID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Своя",
+	})
+	require.NoError(t, err)
+	_, err = service.Create(folderContext(sameOrgID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Коллеги",
+	})
+	require.NoError(t, err)
+	_, err = service.Create(folderContext(foreignID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Общие материалы",
+	})
+	require.NoError(t, err)
+
+	// Список папок питает модалку публикации, а публиковать можно только в свои:
+	// ни папка коллеги по организации, ни папка чужой организации в него не попадают.
+	listed, err := service.List(folderContext(ownerID), ListInput{
+		Section: SectionLibrary, Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.Equal(t, own.ID, listed[0].ID)
+}
+
 func TestContentsLibraryOrgIsolationForNestedPacks(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "library org owner")
