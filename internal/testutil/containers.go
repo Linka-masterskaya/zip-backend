@@ -27,7 +27,12 @@ func NewMinIO(t *testing.T, registries ...*pgxpool.Pool) (*storage.Client, func(
 	const secretKey = "test-secret-key-12345"
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z",
+			// Временная мера: MinIO 24.09.2026 закрыл анонимный доступ к
+			// quay.io/minio/minio, и тесты перестали поднимать контейнер.
+			// Chainguard раздаёт ту же сборку бесплатно, но только тегом
+			// latest — закрепиться на версии нельзя, образ будет уезжать.
+			// Выбор реестра для dev, CI и прода не решён.
+			Image:        "cgr.dev/chainguard/minio:latest",
 			ExposedPorts: []string{"9000/tcp"},
 			Env: map[string]string{
 				"MINIO_ROOT_USER":     accessKey,
