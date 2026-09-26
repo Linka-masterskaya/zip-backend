@@ -15,12 +15,12 @@ import (
 )
 
 type folderRepository interface {
-	Create(context.Context, uuid.UUID, string, CreateInput) (*Folder, error)
+	Create(context.Context, uuid.UUID, CreateInput) (*Folder, error)
 	List(context.Context, uuid.UUID, ListInput) ([]Folder, error)
-	Rename(context.Context, uuid.UUID, string, uuid.UUID, string) (*Folder, error)
-	Move(context.Context, uuid.UUID, string, uuid.UUID, *uuid.UUID) (*Folder, error)
-	Delete(context.Context, uuid.UUID, string, uuid.UUID) error
-	DeleteBatch(context.Context, uuid.UUID, string, []uuid.UUID, bool) (*BatchOutcome, error)
+	Rename(context.Context, uuid.UUID, uuid.UUID, string) (*Folder, error)
+	Move(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (*Folder, error)
+	Delete(context.Context, uuid.UUID, uuid.UUID) error
+	DeleteBatch(context.Context, uuid.UUID, []uuid.UUID, bool) (*BatchOutcome, error)
 	Contents(context.Context, uuid.UUID, ContentsInput) (*ContentsPage, error)
 }
 
@@ -60,7 +60,7 @@ func (s *Service) DeleteBatch(
 	ids []uuid.UUID,
 	dryRun bool,
 ) (*BatchDeleteResult, error) {
-	userID, role, err := actor(ctx)
+	userID, _, err := actor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (s *Service) DeleteBatch(
 		)
 	}
 	unique := uniqueFolderIDs(ids)
-	outcome, err := s.repo.DeleteBatch(ctx, userID, role, unique, dryRun)
+	outcome, err := s.repo.DeleteBatch(ctx, userID, unique, dryRun)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -148,7 +148,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Folder, error
 	if input.Section == SectionLibrary && !canWriteLibrary(role) {
 		return nil, apperr.ErrForbidden
 	}
-	result, err := s.repo.Create(ctx, userID, role, input)
+	result, err := s.repo.Create(ctx, userID, input)
 	return result, mapError(err)
 }
 
@@ -169,7 +169,7 @@ func (s *Service) List(ctx context.Context, input ListInput) ([]Folder, error) {
 }
 
 func (s *Service) Rename(ctx context.Context, folderID uuid.UUID, name string) (*Folder, error) {
-	userID, role, err := actor(ctx)
+	userID, _, err := actor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func (s *Service) Rename(ctx context.Context, folderID uuid.UUID, name string) (
 	if name == "" {
 		return nil, apperr.ErrBadRequest.WithMessage("name is required")
 	}
-	result, err := s.repo.Rename(ctx, userID, role, folderID, name)
+	result, err := s.repo.Rename(ctx, userID, folderID, name)
 	return result, mapError(err)
 }
 
@@ -186,20 +186,20 @@ func (s *Service) Move(
 	folderID uuid.UUID,
 	parentID *uuid.UUID,
 ) (*Folder, error) {
-	userID, role, err := actor(ctx)
+	userID, _, err := actor(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.repo.Move(ctx, userID, role, folderID, parentID)
+	result, err := s.repo.Move(ctx, userID, folderID, parentID)
 	return result, mapError(err)
 }
 
 func (s *Service) Delete(ctx context.Context, folderID uuid.UUID) error {
-	userID, role, err := actor(ctx)
+	userID, _, err := actor(ctx)
 	if err != nil {
 		return err
 	}
-	return mapError(s.repo.Delete(ctx, userID, role, folderID))
+	return mapError(s.repo.Delete(ctx, userID, folderID))
 }
 
 func (s *Service) Contents(ctx context.Context, input ContentsInput) (*ContentsPage, error) {

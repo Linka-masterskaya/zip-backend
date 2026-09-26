@@ -497,8 +497,8 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 		"published pack must not be accessible outside its organization",
 	)
 
-	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
-	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID, false))
+	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID))
+	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID))
 	var status string
 	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT status FROM packs WHERE id = $1`, created.ID).Scan(&status))
@@ -508,7 +508,7 @@ func TestRepositoryPublicationIsLinkedIdempotentAndBlocksDelete(t *testing.T) {
 	require.NoError(t, repo.Delete(context.Background(), ownerID, created.ID))
 }
 
-func TestRepositoryPublicationAdminIsScopedToOrganization(t *testing.T) {
+func TestRepositoryPublicationIsOwnerOnly(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
 	ownerOrgID, ownerID, folderID := seedPackOwner(t, pool, "owner org")
@@ -530,24 +530,33 @@ func TestRepositoryPublicationAdminIsScopedToOrganization(t *testing.T) {
 	)
 	assert.ErrorIs(t, err, ErrFolderNotAllowed)
 
+	// Методист своей организации тоже не распоряжается чужим набором:
+	// публиковать и снимать с публикации может только владелец.
 	sameOrgHeadID := uuid.New()
 	_, err = pool.Exec(context.Background(),
 		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`, sameOrgHeadID, ownerOrgID)
 	require.NoError(t, err)
-	published, err := repo.Publish(
+	_, err = repo.Publish(
 		context.Background(), sameOrgHeadID, created.ID, ownerLibraryID, true,
+	)
+	assert.ErrorIs(t, err, ErrFolderNotAllowed)
+
+	published, err := repo.Publish(
+		context.Background(), ownerID, created.ID, ownerLibraryID, false,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "published", published.Status)
 
-	err = repo.Unpublish(context.Background(), foreignHeadID, created.ID, true)
+	err = repo.Unpublish(context.Background(), foreignHeadID, created.ID)
+	assert.ErrorIs(t, err, ErrPackNotFound)
+	err = repo.Unpublish(context.Background(), sameOrgHeadID, created.ID)
 	assert.ErrorIs(t, err, ErrPackNotFound)
 	fetched, err := repo.Get(context.Background(), ownerID, created.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetched.PublishedAt)
 	assert.Equal(t, "published", fetched.Status)
 
-	require.NoError(t, repo.Unpublish(context.Background(), sameOrgHeadID, created.ID, true))
+	require.NoError(t, repo.Unpublish(context.Background(), ownerID, created.ID))
 	fetched, err = repo.Get(context.Background(), ownerID, created.ID)
 	require.NoError(t, err)
 	assert.Nil(t, fetched.PublishedAt)
@@ -1633,7 +1642,7 @@ func TestUnpublishResetsGlobalFlag(t *testing.T) {
 	_, err = repo.Publish(t.Context(), ownerID, created.ID, libraryFolderID, true)
 	require.NoError(t, err)
 
-	require.NoError(t, repo.Unpublish(t.Context(), ownerID, created.ID, true))
+	require.NoError(t, repo.Unpublish(t.Context(), ownerID, created.ID))
 
 	var global bool
 	require.NoError(t, pool.QueryRow(t.Context(),
