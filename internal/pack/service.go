@@ -21,14 +21,14 @@ type packRepository interface {
 	Create(context.Context, uuid.UUID, CreateInput) (*Pack, error)
 	Duplicate(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
-	GetForPublication(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
+	GetForPublication(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	ListWithTotal(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	DeleteBatch(context.Context, uuid.UUID, []uuid.UUID, bool) (*BatchOutcome, error)
 	Move(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Pack, error)
 	Publish(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, bool) (*Pack, error)
-	Unpublish(context.Context, uuid.UUID, uuid.UUID, bool) error
+	Unpublish(context.Context, uuid.UUID, uuid.UUID) error
 }
 
 // Service contains pack business logic.
@@ -237,8 +237,8 @@ func (s *Service) Publish(ctx context.Context, packID, folderID uuid.UUID) (*Pac
 	if role != "defectologist" && role != "head_defectologist" && role != "admin" {
 		return nil, apperr.ErrForbidden
 	}
-	admin := role == "head_defectologist" || role == "admin"
-	candidate, err := s.repo.GetForPublication(ctx, userID, packID, admin)
+	publishGlobally := role == "head_defectologist" || role == "admin"
+	candidate, err := s.repo.GetForPublication(ctx, userID, packID)
 	if err != nil {
 		return nil, packError(err)
 	}
@@ -246,8 +246,7 @@ func (s *Service) Publish(ctx context.Context, packID, folderID uuid.UUID) (*Pac
 		return nil, err
 	}
 	result, err := s.repo.Publish(
-		ctx, userID, packID, folderID, admin,
-	)
+		ctx, userID, packID, folderID, publishGlobally)
 	return result, packError(err)
 }
 
@@ -256,13 +255,8 @@ func (s *Service) Unpublish(ctx context.Context, packID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	role, err := authctx.RoleFromCtx(ctx)
-	if err != nil {
-		return err
-	}
 	return packError(s.repo.Unpublish(
 		ctx, userID, packID,
-		role == "head_defectologist" || role == "admin",
 	))
 }
 

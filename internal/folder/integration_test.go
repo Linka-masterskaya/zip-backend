@@ -303,7 +303,7 @@ func TestConcurrentChildCreateAndParentDeleteNeverCascadesData(t *testing.T) {
 	}
 }
 
-func TestLibraryAdminIsScopedToOrganization(t *testing.T) {
+func TestLibraryFoldersAreEditableByOwnerOnly(t *testing.T) {
 	pool := folderTestDB(t)
 	ownerID := seedFolderUser(t, pool, "owner")
 	foreignHeadID := seedFolderUser(t, pool, "foreign head")
@@ -336,13 +336,14 @@ func TestLibraryAdminIsScopedToOrganization(t *testing.T) {
 	require.NoError(t, err)
 	sameOrgHeadCtx := folderContextWithRole(sameOrgHeadID, "head_defectologist")
 
-	renamed, err := service.Rename(sameOrgHeadCtx, target.ID, "Same-org rename")
-	require.NoError(t, err)
-	assert.Equal(t, "Same-org rename", renamed.Name)
-	moved, err := service.Move(sameOrgHeadCtx, target.ID, &destination.ID)
-	require.NoError(t, err)
-	require.NotNil(t, moved.ParentID)
-	assert.Equal(t, destination.ID, *moved.ParentID)
+	// Методист своей организации тоже не редактирует чужую папку:
+	// изменять и удалять можно только своё.
+	_, err = service.Rename(sameOrgHeadCtx, target.ID, "Same-org rename")
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+	_, err = service.Move(sameOrgHeadCtx, target.ID, &destination.ID)
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
+	err = service.Delete(sameOrgHeadCtx, target.ID)
+	assertStatus(t, err, apperr.ErrNotFound.HTTPStatus)
 }
 
 func folderTestDB(t *testing.T) *pgxpool.Pool {
@@ -534,7 +535,7 @@ func TestContentsReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
 	writerRepo := NewRepository(pool)
 	ownerID := seedFolderUser(t, pool, "contents snapshot owner")
 
-	_, err := writerRepo.Create(t.Context(), ownerID, "defectologist", CreateInput{
+	_, err := writerRepo.Create(t.Context(), ownerID, CreateInput{
 		Section: SectionMy, Kind: KindFolder, Name: "first",
 	})
 	require.NoError(t, err)
@@ -561,7 +562,7 @@ func TestContentsReadsItemsAndTotalFromOneSnapshot(t *testing.T) {
 	defer gate.Release()
 	gate.Wait(t, 5*time.Second)
 
-	_, err = writerRepo.Create(t.Context(), ownerID, "defectologist", CreateInput{
+	_, err = writerRepo.Create(t.Context(), ownerID, CreateInput{
 		Section: SectionMy, Kind: KindFolder, Name: "second",
 	})
 	require.NoError(t, err)
@@ -712,6 +713,42 @@ func TestContentsOrganizationRestrictionsInTheLibrarySection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, foreignPage.Items)
 	assert.Equal(t, 0, foreignPage.Total)
+}
+
+func TestLibraryForeignFolderIsNotUsableAsParent(t *testing.T) {
+	pool := folderTestDB(t)
+	ownerID := seedFolderUser(t, pool, "library parent owner")
+	sameOrgHeadID := uuid.New()
+	service := NewService(NewRepository(pool), 0)
+	ctx := t.Context()
+
+	var ownerOrgID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT org_id FROM users WHERE id = $1`, ownerID).Scan(&ownerOrgID))
+	_, err := pool.Exec(ctx,
+		`INSERT INTO users (id, org_id, display_name) VALUES ($1, $2, 'Test User')`,
+		sameOrgHeadID, ownerOrgID)
+	require.NoError(t, err)
+	headCtx := folderContextWithRole(sameOrgHeadID, "head_defectologist")
+
+	foreign, err := service.Create(folderContext(ownerID), CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Чужая",
+	})
+	require.NoError(t, err)
+	own, err := service.Create(headCtx, CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Своя",
+	})
+	require.NoError(t, err)
+
+	// Чужая папка своей организации не годится ни как родитель для новой папки,
+	// ни как назначение при перемещении: изменять можно только своё.
+	_, err = service.Create(headCtx, CreateInput{
+		Section: SectionLibrary, Kind: KindFolder, Name: "Вложенная", ParentID: &foreign.ID,
+	})
+	assertStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
+
+	_, err = service.Move(headCtx, own.ID, &foreign.ID)
+	assertStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
 }
 
 func TestListLibraryReturnsOnlyOwnFolders(t *testing.T) {
