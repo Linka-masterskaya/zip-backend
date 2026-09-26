@@ -86,7 +86,7 @@ rollback() {
   fi
 }
 
-compose pull
+compose pull zip-backend
 
 # Keep the public MinIO route available while the backend is replaced. Caddy
 # may briefly return 502 for API traffic until the new backend passes readiness.
