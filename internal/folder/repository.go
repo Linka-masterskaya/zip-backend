@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -37,7 +36,6 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 func (r *Repository) Create(
 	ctx context.Context,
 	userID uuid.UUID,
-	role string,
 	input CreateInput,
 ) (*Folder, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -57,7 +55,7 @@ func (r *Repository) Create(
 			return nil, ErrParentInvalid
 		}
 		if parent.OrgID != orgID || parent.Section != input.Section ||
-			(!isAdmin(role) && parent.OwnerID != userID) {
+			parent.OwnerID != userID {
 			return nil, ErrParentInvalid
 		}
 		depth = parent.Depth + 1
@@ -123,11 +121,8 @@ func (r *Repository) List(
 	}
 
 	args := []any{input.Section, input.ParentID, input.Limit, input.Offset}
-	scope := ""
-	if input.Section != SectionLibrary {
-		scope = "AND f.owner_id = $5"
-		args = append(args, userID)
-	}
+	scope := "AND f.owner_id = $5"
+	args = append(args, userID)
 
 	rows, err := tx.Query(ctx, `
 		SELECT `+qualifiedFolderColumns+`
@@ -163,7 +158,6 @@ func (r *Repository) List(
 func (r *Repository) Rename(
 	ctx context.Context,
 	userID uuid.UUID,
-	role string,
 	folderID uuid.UUID,
 	name string,
 ) (*Folder, error) {
@@ -176,9 +170,9 @@ func (r *Repository) Rename(
 		  AND u.org_id IS NOT NULL
 		  AND u.deleted_at IS NULL
 		  AND f.org_id = u.org_id
-		  AND (f.owner_id = u.id OR ($4 AND f.section = 'library'))
+		  AND f.owner_id = u.id
 		RETURNING `+qualifiedFolderColumns,
-		userID, folderID, name, isAdmin(role))
+		userID, folderID, name)
 	result, err := scanFolder(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -192,7 +186,6 @@ func (r *Repository) Rename(
 func (r *Repository) Move(
 	ctx context.Context,
 	userID uuid.UUID,
-	role string,
 	folderID uuid.UUID,
 	parentID *uuid.UUID,
 ) (*Folder, error) {
@@ -207,13 +200,12 @@ func (r *Repository) Move(
 		return nil, err
 	}
 	current, err := lockFolder(ctx, tx, folderID)
-	if err != nil || current.OrgID != orgID || (current.OwnerID != userID &&
-		(!isAdmin(role) || current.Section != SectionLibrary)) {
+	if err != nil || current.OrgID != orgID || current.OwnerID != userID {
 		return nil, ErrNotFound
 	}
 
 	newDepth, err := moveDestinationDepth(
-		ctx, tx, current, userID, role, folderID, parentID,
+		ctx, tx, current, userID, folderID, parentID,
 	)
 	if err != nil {
 		return nil, err
@@ -258,7 +250,6 @@ func moveDestinationDepth(
 	tx pgx.Tx,
 	current *Folder,
 	userID uuid.UUID,
-	role string,
 	folderID uuid.UUID,
 	parentID *uuid.UUID,
 ) (int, error) {
@@ -269,8 +260,7 @@ func moveDestinationDepth(
 		return 0, ErrCycle
 	}
 	parent, err := lockFolder(ctx, tx, *parentID)
-	if err != nil || parent.OrgID != current.OrgID || parent.Section != current.Section ||
-		(!isAdmin(role) && parent.OwnerID != userID) {
+	if err != nil || parent.OrgID != current.OrgID || parent.Section != current.Section || parent.OwnerID != userID {
 		return 0, ErrParentInvalid
 	}
 	var descendant bool
@@ -317,10 +307,9 @@ func relativeSubtreeDepth(
 func (r *Repository) Delete(
 	ctx context.Context,
 	userID uuid.UUID,
-	role string,
 	folderID uuid.UUID,
 ) error {
-	outcome, err := r.deleteFolders(ctx, userID, role, []uuid.UUID{folderID}, false)
+	outcome, err := r.deleteFolders(ctx, userID, []uuid.UUID{folderID}, false)
 	if err != nil {
 		return err
 	}
@@ -339,17 +328,15 @@ func (r *Repository) Delete(
 func (r *Repository) DeleteBatch(
 	ctx context.Context,
 	userID uuid.UUID,
-	role string,
 	folderIDs []uuid.UUID,
 	dryRun bool,
 ) (*BatchOutcome, error) {
-	return r.deleteFolders(ctx, userID, role, folderIDs, dryRun)
+	return r.deleteFolders(ctx, userID, folderIDs, dryRun)
 }
 
 func (r *Repository) deleteFolders(
 	ctx context.Context,
 	userID uuid.UUID,
-	role string,
 	folderIDs []uuid.UUID,
 	dryRun bool,
 ) (*BatchOutcome, error) {
@@ -359,7 +346,7 @@ func (r *Repository) deleteFolders(
 	}
 	defer rollback(ctx, tx)
 
-	accessible, err := lockFoldersForDelete(ctx, tx, userID, role, folderIDs)
+	accessible, err := lockFoldersForDelete(ctx, tx, userID, folderIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +389,6 @@ func lockFoldersForDelete(
 	ctx context.Context,
 	tx pgx.Tx,
 	userID uuid.UUID,
-	role string,
 	folderIDs []uuid.UUID,
 ) ([]lockedFolder, error) {
 	rows, err := tx.Query(ctx, `
@@ -413,10 +399,10 @@ func lockFoldersForDelete(
 		  AND u.org_id IS NOT NULL
 		  AND u.deleted_at IS NULL
 		  AND f.org_id = u.org_id
-		  AND (f.owner_id = u.id OR ($3 AND f.section = 'library'))
+		  AND f.owner_id = u.id
 		  `+visibleStudentFolderPredicate+`
 		ORDER BY f.id
-		FOR UPDATE OF f, u`, userID, folderIDs, isAdmin(role))
+		FOR UPDATE OF f, u`, userID, folderIDs)
 	if err != nil {
 		return nil, fmt.Errorf("folder delete lock: %w", err)
 	}
@@ -830,10 +816,6 @@ func scanFolder(row interface{ Scan(...any) error }) (*Folder, error) {
 		&result.Depth, &result.CreatedAt, &result.UpdatedAt,
 	)
 	return &result, err
-}
-
-func isAdmin(role string) bool {
-	return strings.EqualFold(role, "admin") || strings.EqualFold(role, "head_defectologist")
 }
 
 func rollback(ctx context.Context, tx pgx.Tx) {

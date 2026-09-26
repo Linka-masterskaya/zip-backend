@@ -143,10 +143,9 @@ func (r *Repository) Get(ctx context.Context, userID, packID uuid.UUID) (*Pack, 
 func (r *Repository) GetForPublication(
 	ctx context.Context,
 	userID, packID uuid.UUID,
-	admin bool,
 ) (*Pack, error) {
 	result, err := scanPack(r.pool.QueryRow(
-		ctx, getPackForPublicationQuery, userID, packID, admin,
+		ctx, getPackForPublicationQuery, userID, packID,
 	))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrPackNotFound
@@ -455,10 +454,10 @@ func (r *Repository) Move(ctx context.Context, userID, packID, folderID uuid.UUI
 func (r *Repository) Publish(
 	ctx context.Context,
 	userID, packID, folderID uuid.UUID,
-	admin bool,
+	publishGlobally bool,
 ) (*Pack, error) {
 	result, err := scanPack(
-		r.pool.QueryRow(ctx, publishPackQuery, userID, packID, folderID, admin),
+		r.pool.QueryRow(ctx, publishPackQuery, userID, packID, folderID, publishGlobally),
 	)
 	if err == nil {
 		return result, nil
@@ -469,7 +468,7 @@ func (r *Repository) Publish(
 
 	var otherFolder bool
 	if stateErr := r.pool.QueryRow(
-		ctx, packPublishedInOtherFolderQuery, userID, packID, admin, folderID,
+		ctx, packPublishedInOtherFolderQuery, userID, packID, folderID,
 	).Scan(&otherFolder); stateErr != nil {
 		return nil, fmt.Errorf("pack repository publish state: %w", stateErr)
 	}
@@ -482,9 +481,8 @@ func (r *Repository) Publish(
 func (r *Repository) Unpublish(
 	ctx context.Context,
 	userID, packID uuid.UUID,
-	admin bool,
 ) error {
-	tag, err := r.pool.Exec(ctx, unpublishPackQuery, userID, packID, admin)
+	tag, err := r.pool.Exec(ctx, unpublishPackQuery, userID, packID)
 	if err != nil {
 		return fmt.Errorf("pack repository unpublish: %w", err)
 	}

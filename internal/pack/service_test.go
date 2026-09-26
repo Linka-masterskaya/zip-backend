@@ -203,11 +203,9 @@ func TestServicePublishValidatesConfigBeforeMutation(t *testing.T) {
 		getForPublicationFn: func(
 			_ context.Context,
 			gotUserID, gotPackID uuid.UUID,
-			admin bool,
 		) (*Pack, error) {
 			assert.Equal(t, userID, gotUserID)
 			assert.Equal(t, packID, gotPackID)
-			assert.False(t, admin)
 			return &Pack{ID: packID, Config: json.RawMessage(`{}`)}, nil
 		},
 		publishFn: func(
@@ -320,7 +318,7 @@ type fakePackRepository struct {
 	createFn            func(context.Context, uuid.UUID, CreateInput) (*Pack, error)
 	duplicateFn         func(context.Context, uuid.UUID, uuid.UUID, DuplicateInput) (*Pack, error)
 	getFn               func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
-	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID, bool) (*Pack, error)
+	getForPublicationFn func(context.Context, uuid.UUID, uuid.UUID) (*Pack, error)
 	listWithTotalFn     func(context.Context, uuid.UUID, ListInput) ([]*ListItem, int, error)
 	updateFn            func(context.Context, uuid.UUID, uuid.UUID, UpdateInput) (*Pack, error)
 	deleteFn            func(context.Context, uuid.UUID, uuid.UUID) error
@@ -343,10 +341,9 @@ func (f *fakePackRepository) Duplicate(
 func (f *fakePackRepository) GetForPublication(
 	ctx context.Context,
 	userID, packID uuid.UUID,
-	admin bool,
 ) (*Pack, error) {
 	if f.getForPublicationFn != nil {
-		return f.getForPublicationFn(ctx, userID, packID, admin)
+		return f.getForPublicationFn(ctx, userID, packID)
 	}
 	return &Pack{}, nil
 }
@@ -422,6 +419,6 @@ func (f *fakePackRepository) Publish(
 	return &Pack{}, nil
 }
 
-func (f *fakePackRepository) Unpublish(context.Context, uuid.UUID, uuid.UUID, bool) error {
+func (f *fakePackRepository) Unpublish(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }

@@ -17,11 +17,11 @@ import (
 )
 
 type fakeFolderRepository struct {
-	deleteBatchFn func(context.Context, uuid.UUID, string, []uuid.UUID, bool) (*BatchOutcome, error)
+	deleteBatchFn func(context.Context, uuid.UUID, []uuid.UUID, bool) (*BatchOutcome, error)
 }
 
 func (f *fakeFolderRepository) Create(
-	context.Context, uuid.UUID, string, CreateInput,
+	context.Context, uuid.UUID, CreateInput,
 ) (*Folder, error) {
 	return &Folder{}, nil
 }
@@ -31,30 +31,29 @@ func (f *fakeFolderRepository) List(context.Context, uuid.UUID, ListInput) ([]Fo
 }
 
 func (f *fakeFolderRepository) Rename(
-	context.Context, uuid.UUID, string, uuid.UUID, string,
+	context.Context, uuid.UUID, uuid.UUID, string,
 ) (*Folder, error) {
 	return &Folder{}, nil
 }
 
 func (f *fakeFolderRepository) Move(
-	context.Context, uuid.UUID, string, uuid.UUID, *uuid.UUID,
+	context.Context, uuid.UUID, uuid.UUID, *uuid.UUID,
 ) (*Folder, error) {
 	return &Folder{}, nil
 }
 
-func (f *fakeFolderRepository) Delete(context.Context, uuid.UUID, string, uuid.UUID) error {
+func (f *fakeFolderRepository) Delete(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
 
 func (f *fakeFolderRepository) DeleteBatch(
 	ctx context.Context,
 	userID uuid.UUID,
-	role string,
 	ids []uuid.UUID,
 	dryRun bool,
 ) (*BatchOutcome, error) {
 	if f.deleteBatchFn != nil {
-		return f.deleteBatchFn(ctx, userID, role, ids, dryRun)
+		return f.deleteBatchFn(ctx, userID, ids, dryRun)
 	}
 	return &BatchOutcome{Deleted: ids, NotEmpty: []uuid.UUID{}}, nil
 }
@@ -125,9 +124,8 @@ func TestServiceDeleteBatchReportsSkipReasons(t *testing.T) {
 	missingID := uuid.New()
 	repo := &fakeFolderRepository{}
 	repo.deleteBatchFn = func(
-		_ context.Context, _ uuid.UUID, role string, ids []uuid.UUID, dryRun bool,
+		_ context.Context, _ uuid.UUID, ids []uuid.UUID, dryRun bool,
 	) (*BatchOutcome, error) {
-		assert.Equal(t, "defectologist", role)
 		assert.True(t, dryRun, "dry_run must reach the repository")
 		assert.Equal(t, []uuid.UUID{deletedID, notEmptyID, missingID}, ids)
 		return &BatchOutcome{

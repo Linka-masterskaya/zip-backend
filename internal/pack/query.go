@@ -77,7 +77,7 @@ const getPackForPublicationQuery = `
 	  AND p.org_id = u.org_id
 	  AND u.org_id IS NOT NULL
 	  AND u.deleted_at IS NULL
-	  AND (p.owner_id = u.id OR $3)`
+	  AND p.owner_id = u.id`
 
 const listPacksBaseQuery = `
 		WITH RECURSIVE active_user AS (
@@ -274,8 +274,8 @@ const publishPackQuery = `
 	  AND f.id = $3
 	  AND f.org_id = u.org_id
 	  AND f.section = 'library'
-	  AND (f.owner_id = u.id OR $4)
-	  AND (p.owner_id = u.id OR $4)
+	  AND f.owner_id = u.id
+	  AND p.owner_id = u.id
 	  AND (p.library_folder_id IS NULL OR p.library_folder_id = f.id)
 	RETURNING ` + qualifiedPackColumns
 
@@ -288,9 +288,9 @@ const packPublishedInOtherFolderQuery = `
 		  AND p.org_id = u.org_id
 		  AND u.org_id IS NOT NULL
 		  AND u.deleted_at IS NULL
-		  AND (p.owner_id = u.id OR $3)
+		  AND p.owner_id = u.id
 		  AND p.library_folder_id IS NOT NULL
-		  AND p.library_folder_id <> $4
+		  AND p.library_folder_id <> $3
 	)`
 
 const unpublishPackQuery = `
@@ -306,7 +306,7 @@ const unpublishPackQuery = `
 	  AND u.org_id IS NOT NULL
 	  AND u.deleted_at IS NULL
 	  AND p.org_id = u.org_id
-	  AND (p.owner_id = u.id OR $3)`
+	  AND p.owner_id = u.id`
 
 const folderAllowedQuery = `
 	SELECT EXISTS (

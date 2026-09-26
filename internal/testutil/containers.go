@@ -31,7 +31,8 @@ func NewMinIO(t *testing.T, registries ...*pgxpool.Pool) (*storage.Client, func(
 			// quay.io/minio/minio, и тесты перестали поднимать контейнер.
 			// Chainguard раздаёт ту же сборку бесплатно, но только тегом
 			// latest — закрепиться на версии нельзя, образ будет уезжать.
-			// Выбор реестра для dev, CI и прода не решён.
+			// Вопрос выбора реестра для dev, CI и прода не решён:
+			// платный Chainguard, бесплатная лицензия AIStor или уход с MinIO.
 			Image:        "cgr.dev/chainguard/minio:latest",
 			ExposedPorts: []string{"9000/tcp"},
 			Env: map[string]string{
