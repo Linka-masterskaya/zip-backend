@@ -127,7 +127,7 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) er
 		// Аккаунт с такой почтой уже заведён паролем. Молча связывать его с
 		// Яндексом нельзя, поэтому отправляем пользователя логиниться обычным
 		// способом.
-		http.Redirect(w, r, h.frontendURL+"/login?email_exists=true", http.StatusSeeOther)
+		http.Redirect(w, r, h.frontendURL+"/auth?email_exists=true", http.StatusSeeOther)
 		return nil
 	}
 	if err != nil {
