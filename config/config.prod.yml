@@ -93,7 +93,7 @@ crypto:
 yandex:
   client_id: ""
   client_secret: ""
-  redirect_url: "https://linka.rassokha.pro/api/auth/yandex/callback"
+  redirect_url: "https://linka.rassokha.pro/api/v1/auth/yandex/callback"
 
 openai:
   api_key: ""

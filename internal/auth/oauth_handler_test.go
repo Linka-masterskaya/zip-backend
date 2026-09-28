@@ -214,7 +214,7 @@ func TestYandexCallback_ExistingLocalAccount(t *testing.T) {
 	require.NoError(t, handler.YandexCallback(rec, callbackRequest(t, "?code=c&state=state-1", "state-1")))
 
 	require.Equal(t, http.StatusSeeOther, rec.Code)
-	require.Equal(t, "https://app.test/login?email_exists=true", rec.Header().Get("Location"))
+	require.Equal(t, "https://app.test/auth?email_exists=true", rec.Header().Get("Location"))
 	require.Nil(t, cookieByName(t, rec, "refresh_token"), "сессия не выдаётся")
 }
 

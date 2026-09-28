@@ -110,7 +110,7 @@ export interface paths {
          *     `Referer`, историю браузера и логи прокси.
          *
          *     Если на почту из Яндекса уже заведён локальный аккаунт с паролем,
-         *     связка не создаётся: пользователь уходит на `/login?email_exists=true`.
+         *     связка не создаётся: пользователь уходит на `/auth?email_exists=true`.
          */
         get: operations["yandexCallback"];
         put?: never;

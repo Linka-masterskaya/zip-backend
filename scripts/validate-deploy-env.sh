@@ -188,6 +188,8 @@ def reject_unsafe(key: str, value: str) -> None:
         "ZGV2LW9ubHktaG1hYy1rZXktbm90LWZvci1wcm9kISE=",
         "dev-only-smtp-password",
         "dev-only-grafana-admin",
+        "dev-only-yandex-client-id",
+        "dev-only-yandex-client-secret",
     }
     trimmed = value.strip()
     if trimmed.casefold() in placeholders or trimmed in dev_values:
@@ -283,6 +285,9 @@ required_keys = (
     "GRAFANA_ADMIN_PASSWORD",
     "CADDY_DOMAIN_NAME",
     "CADDY_LETSENCRYPT_EMAIL",
+    "YANDEX_CLIENT_ID",
+    "YANDEX_CLIENT_SECRET",
+    "YANDEX_REDIRECT_URL",
 )
 for required_key in required_keys:
     reject_unsafe(required_key, require(values, required_key))
@@ -315,6 +320,15 @@ if (
     require_match == "true" or provider_requires_match
 ) and smtp_user_address.casefold() != smtp_from_address.casefold():
     fail("SMTP_FROM_EMAIL must match SMTP_USERNAME for the configured provider")
+
+redirect_url = require(values, "YANDEX_REDIRECT_URL")
+parts = urlsplit(redirect_url)
+if parts.scheme != "https":
+    fail("YANDEX_REDIRECT_URL must use https")
+if parts.hostname != values.get("CADDY_DOMAIN_NAME", "").strip().casefold():
+    fail("YANDEX_REDIRECT_URL host must match CADDY_DOMAIN_NAME")
+if parts.path != "/api/v1/auth/yandex/callback":
+    fail("YANDEX_REDIRECT_URL path must be /api/v1/auth/yandex/callback")
 
 print("deployment environment contract is valid")
 PY

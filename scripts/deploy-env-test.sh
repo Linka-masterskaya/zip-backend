@@ -55,6 +55,9 @@ export CI_SMTP_REQUIRE_FROM_MATCH=true
 export CI_GRAFANA_ADMIN_PASSWORD=test-only-grafana-password-aaaaaaaa
 export CI_CADDY_DOMAIN_NAME=example.com
 export CI_CADDY_LETSENCRYPT_EMAIL=admin@example.com
+export CI_YANDEX_CLIENT_ID=prod_yandex_client_123456
+export CI_YANDEX_CLIENT_SECRET=test-only-yandex-secret-aaaaaaaa
+export CI_YANDEX_REDIRECT_URL=https://example.com/api/v1/auth/yandex/callback
 
 VALID_ENV="$TMP_DIR/valid.env"
 bash "$ROOT_DIR/scripts/render-deploy-env.sh" "$ROOT_DIR/.env.example" "$VALID_ENV" CI_
