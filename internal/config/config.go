@@ -118,6 +118,7 @@ type ConnectionConfig struct {
 	MaxReconnect        int           `mapstructure:"max_reconnect"`
 	PingInterval        time.Duration `mapstructure:"ping_interval"`
 	MaxPingsOutstanding int           `mapstructure:"max_pings_outstanding"`
+	DrainTimeout        time.Duration `mapstructure:"drain_timeout"`
 }
 
 // StreamConfig contains JetStream AI_JOBS stream settings.
@@ -440,6 +441,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nats.connection.max_reconnect", 5)
 	v.SetDefault("nats.connection.ping_interval", "20s")
 	v.SetDefault("nats.connection.max_pings_outstanding", 3)
+	v.SetDefault("nats.connection.drain_timeout", "30s")
 
 	v.SetDefault("nats.stream.name", "AI_JOBS")
 	v.SetDefault("nats.stream.init_timeout", "10s")
@@ -606,6 +608,11 @@ func validateConfig(cfg *Config) error {
 	// Server validation
 	if cfg.Server.WorkersShutdownTimeout <= 0 {
 		return fmt.Errorf("server.workers_shutdown_timeout must be > 0")
+	}
+
+	// NATS validation
+	if cfg.NATS.Connection.DrainTimeout <= 0 {
+		return fmt.Errorf("nats.connection.drain_timeout must be > 0")
 	}
 
 	// MinIO validation

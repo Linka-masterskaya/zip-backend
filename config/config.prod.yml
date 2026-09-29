@@ -58,6 +58,7 @@ nats:
     max_bytes: 104857600 # 100MB
     max_msgs: 100000
     duplicates: "5m"
+    drain_timeout: "30s"
 
   consumers:
     tts:

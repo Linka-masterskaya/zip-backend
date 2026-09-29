@@ -4,6 +4,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -34,12 +35,19 @@ func onReconnect(_ *nats.Conn) {
 	slog.Info("nats reconnected")
 }
 
-func onClosed(_ *nats.Conn) {
-	slog.Info("nats connection closed")
+// Conn is a NATS connection that reports when it has finished closing.
+// The channel is closed from the library's ClosedHandler, which fires once the
+// connection is gone for good: after an explicit Close, after a completed drain,
+// or after reconnect attempts run out.
+type Conn struct {
+	NC     *nats.Conn
+	closed chan struct{}
 }
 
 // New creates a NATS connection with reconnect handling, backoff, and lifecycle logging.
-func New(cfg config.ConnectionConfig) (*nats.Conn, error) {
+func New(cfg config.ConnectionConfig) (*Conn, error) {
+	closed := make(chan struct{})
+
 	nc, err := nats.Connect(cfg.URL,
 		nats.MaxReconnects(cfg.MaxReconnect),
 		nats.PingInterval(cfg.PingInterval),
@@ -47,12 +55,38 @@ func New(cfg config.ConnectionConfig) (*nats.Conn, error) {
 		nats.CustomReconnectDelay(reconnectDelay),
 		nats.DisconnectErrHandler(onDisconnect),
 		nats.ReconnectHandler(onReconnect),
-		nats.ClosedHandler(onClosed),
+		nats.ClosedHandler(func(_ *nats.Conn) {
+			slog.Info("nats connection closed")
+			close(closed)
+		}),
+		nats.DrainTimeout(cfg.DrainTimeout),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("nats.New: %w", err)
 	}
-	return nc, nil
+	return &Conn{NC: nc, closed: closed}, nil
+}
+
+// DrainAndWait drains the connection and blocks until it is actually closed.
+// Drain itself only starts the process: it hands pending publishes and acks to
+// the server in the background, so returning immediately would let the caller
+// close the pool underneath an unfinished flush. If ctx expires first, the
+// connection is torn down and ctx.Err() is returned.
+func (c *Conn) DrainAndWait(ctx context.Context) error {
+	if err := c.NC.Drain(); err != nil {
+		if errors.Is(err, nats.ErrConnectionClosed) {
+			return nil
+		}
+		return err
+	}
+
+	select {
+	case <-c.closed:
+		return nil
+	case <-ctx.Done():
+		c.NC.Close()
+		return ctx.Err()
+	}
 }
 
 // InitStreams creates or updates the AI_JOBS stream config.
@@ -76,3 +110,5 @@ func InitStreams(cfg config.StreamConfig, js jetstream.JetStream) error {
 
 	return nil
 }
+
+func (c *Conn) IsConnected() bool { return c.NC.IsConnected() }

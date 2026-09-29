@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/broker"
@@ -22,7 +21,7 @@ type infra struct {
 	cfg     *config.Config
 	db      *pgxpool.Pool
 	redis   *cache.Client
-	nc      *nats.Conn
+	nc      *broker.Conn
 	js      jetstream.JetStream
 	pub     *broker.Publisher
 	crypto  *cryptox.Cryptox
@@ -49,7 +48,7 @@ func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nats init: %w", err)
 	}
-	closer.Add("nats", func(context.Context) error { return nc.Drain() })
+	closer.Add("nats", nc.DrainAndWait)
 
 	redisClient, err := cache.NewClient(cache.Config{
 		URL:        cfg.Redis.URL,
@@ -84,7 +83,7 @@ func initInfra(cfg *config.Config, closer *Closer) (*infra, error) {
 	}, nil
 }
 
-func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, jetstream.JetStream, error) {
+func initNATS(cfg config.NATSConfig) (*broker.Conn, *broker.Publisher, jetstream.JetStream, error) {
 	nc, err := broker.New(cfg.Connection)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("initNATS: %w", err)
@@ -92,12 +91,12 @@ func initNATS(cfg config.NATSConfig) (*nats.Conn, *broker.Publisher, jetstream.J
 	initialized := false
 	defer func() {
 		if !initialized {
-			nc.Close()
+			nc.NC.Close()
 		}
 	}()
 	slog.Info("nats connected", "url", cfg.Connection.URL)
 
-	js, err := jetstream.New(nc)
+	js, err := jetstream.New(nc.NC)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("initNATS: jetstream: %w", err)
 	}

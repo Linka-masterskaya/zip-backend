@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 
@@ -59,14 +58,16 @@ func testNATSConfig(url string) config.NATSConfig {
 	}
 }
 
-func setupBroker(t *testing.T, natsCfg config.NATSConfig) (*nats.Conn, jetstream.JetStream) {
+func setupBroker(t *testing.T, natsCfg config.NATSConfig) (*broker.Conn, jetstream.JetStream) {
 	nc, err := broker.New(natsCfg.Connection)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = nc.Drain()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = nc.DrainAndWait(ctx)
 	})
 
-	js, err := jetstream.New(nc)
+	js, err := jetstream.New(nc.NC)
 	require.NoError(t, err)
 
 	require.NoError(t, broker.InitStreams(natsCfg.Stream, js))
@@ -339,4 +340,30 @@ func TestStartFailsOnMissingStream(t *testing.T) {
 	require.Error(t, consumer.Start(func(context.Context, broker.TTSJob, bool) error {
 		return nil
 	}))
+}
+
+func TestDrainAndWaitClosesConnection(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	nc, _ := setupBroker(t, natsCfg)
+	require.False(t, nc.NC.IsClosed())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, nc.DrainAndWait(ctx))
+
+	require.True(t, nc.NC.IsClosed(), "DrainAndWait returned before the connection was closed")
+}
+
+func TestDrainAndWaitIsIdempotent(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	nc, _ := setupBroker(t, natsCfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, nc.DrainAndWait(ctx))
+	require.NoError(t, nc.DrainAndWait(ctx))
 }
