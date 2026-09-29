@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -72,14 +73,16 @@ func TestShutdownClosesInfrastructureAfterHTTPDeadline(t *testing.T) {
 	})
 	a := &App{
 		cfg: &config.Config{Server: config.ServerConfig{
-			ShutdownTimeout: 20 * time.Millisecond,
+			ShutdownTimeout:        20 * time.Millisecond,
+			WorkersShutdownTimeout: 20 * time.Millisecond,
 		}},
 		closer:     closer,
 		apiSrv:     apiSrv,
 		metricsSrv: &http.Server{},
 	}
 
-	err = a.shutdown()
+	var backgroundWG sync.WaitGroup
+	err = a.shutdown(func() {}, &backgroundWG)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("shutdown() = %v, want deadline exceeded", err)
 	}

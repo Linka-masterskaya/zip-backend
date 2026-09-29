@@ -48,13 +48,14 @@ type MigrationConfig struct {
 
 // ServerConfig contains HTTP server ports and timeouts.
 type ServerConfig struct {
-	MetricsPort         string        `mapstructure:"metrics_port"`
-	ReadTimeout         time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout        time.Duration `mapstructure:"write_timeout"`
-	IdleTimeout         time.Duration `mapstructure:"idle_timeout"`
-	MetricsReadTimeout  time.Duration `mapstructure:"metrics_read_timeout"`
-	MetricsWriteTimeout time.Duration `mapstructure:"metrics_write_timeout"`
-	ShutdownTimeout     time.Duration `mapstructure:"shutdown_timeout"`
+	MetricsPort            string        `mapstructure:"metrics_port"`
+	ReadTimeout            time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout           time.Duration `mapstructure:"write_timeout"`
+	IdleTimeout            time.Duration `mapstructure:"idle_timeout"`
+	MetricsReadTimeout     time.Duration `mapstructure:"metrics_read_timeout"`
+	MetricsWriteTimeout    time.Duration `mapstructure:"metrics_write_timeout"`
+	ShutdownTimeout        time.Duration `mapstructure:"shutdown_timeout"`
+	WorkersShutdownTimeout time.Duration `mapstructure:"workers_shutdown_timeout"`
 }
 
 // CryptoConfig contains encryption and hashing settings.
@@ -409,6 +410,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.metrics_read_timeout", "5s")
 	v.SetDefault("server.metrics_write_timeout", "5s")
 	v.SetDefault("server.shutdown_timeout", "30s")
+	v.SetDefault("server.workers_shutdown_timeout", "30s")
 
 	// DB defaults
 	v.SetDefault("db.max_open_conns", 25)
@@ -599,6 +601,11 @@ func validateConfig(cfg *Config) error {
 	// Redis validation
 	if cfg.Redis.URL == "" {
 		return fmt.Errorf("redis.url is required")
+	}
+
+	// Server validation
+	if cfg.Server.WorkersShutdownTimeout <= 0 {
+		return fmt.Errorf("server.workers_shutdown_timeout must be > 0")
 	}
 
 	// MinIO validation

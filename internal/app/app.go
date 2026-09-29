@@ -112,7 +112,9 @@ func Bootstrap(cfgPath string) (*App, error) {
 }
 
 // Run serves until a termination signal arrives or a server fails, then shuts
-// everything down in order: HTTP servers first, then infrastructure in LIFO order.
+// everything down in order: the API server first, then background workers,
+// then infrastructure in LIFO order, and the metrics server last so probes
+// stay answerable for the whole shutdown.
 func (a *App) Run(ctx context.Context) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -132,12 +134,13 @@ func (a *App) Run(ctx context.Context) error {
 	g.Go(func() error { return serveHTTP(gctx, a.apiSrv) })
 	g.Go(func() error { return serveHTTP(gctx, a.metricsSrv) })
 
+	workCtx, cancelWork := context.WithCancel(context.Background())
 	var backgroundWG sync.WaitGroup
 	startBackground := func(run func(context.Context) error) {
 		backgroundWG.Add(1)
 		g.Go(func() error {
 			defer backgroundWG.Done()
-			return run(gctx)
+			return run(workCtx)
 		})
 	}
 
@@ -165,11 +168,7 @@ func (a *App) Run(ctx context.Context) error {
 	g.Go(func() error {
 		<-gctx.Done()
 
-		// Background workers share DB/Redis/NATS/MinIO with the HTTP server.
-		// Let them observe cancellation before infrastructure is closed underneath them.
-		backgroundWG.Wait()
-
-		return a.shutdown()
+		return a.shutdown(cancelWork, &backgroundWG)
 	})
 
 	return g.Wait()
@@ -185,26 +184,27 @@ func infrastructureShutdownTimeout(cfg *config.Config) time.Duration {
 	return timeout
 }
 
-func (a *App) shutdown() error {
+func (a *App) shutdown(cancelWork context.CancelFunc, backgroundWG *sync.WaitGroup) error {
 	slog.Info("shutting down...")
 
 	httpCtx, cancelHTTP := context.WithTimeout(
 		context.Background(),
 		a.cfg.Server.ShutdownTimeout,
 	)
+	defer cancelHTTP()
 
 	var firstErr error
-	if err := a.metricsSrv.Shutdown(httpCtx); err != nil {
-		slog.Error("metrics server shutdown", logger.Err(err))
-		firstErr = err
-	}
 	if err := a.apiSrv.Shutdown(httpCtx); err != nil {
 		slog.Error("api server shutdown", logger.Err(err))
 		if firstErr == nil {
 			firstErr = err
 		}
 	}
-	cancelHTTP()
+
+	cancelWork()
+	if !waitWithTimeout(backgroundWG, a.cfg.Server.WorkersShutdownTimeout) {
+		slog.Warn("background workers did not finish in time")
+	}
 
 	// Infrastructure gets its own deadline: a slow HTTP drain must never skip
 	// closing database, Redis and NATS connections.
@@ -214,9 +214,42 @@ func (a *App) shutdown() error {
 	)
 	defer cancelInfra()
 
-	if err := a.closer.Close(infraCtx); err != nil && firstErr == nil {
-		firstErr = err
+	if err := a.closer.Close(infraCtx); err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	metricsCtx, cancelMetrics := context.WithTimeout(
+		context.Background(),
+		a.cfg.Server.ShutdownTimeout,
+	)
+	defer cancelMetrics()
+	if err := a.metricsSrv.Shutdown(metricsCtx); err != nil {
+		slog.Error("metrics server shutdown", logger.Err(err))
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
 
 	return firstErr
+}
+
+// waitWithTimeout waits for wg and reports whether it finished within timeout.
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }

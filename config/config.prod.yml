@@ -17,6 +17,7 @@ server:
   metrics_read_timeout: "5s"
   metrics_write_timeout: "5s"
   shutdown_timeout: "30s"
+  workers_shutdown_timeout: "30s"
 
 db:
   # Required via DB_URL.
