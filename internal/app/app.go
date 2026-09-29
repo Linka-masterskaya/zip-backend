@@ -31,7 +31,6 @@ type App struct {
 	apiSrv          *http.Server
 	metricsSrv      *http.Server
 	backgrounds     []func(context.Context) error
-	ttsRun          func(context.Context) error
 	voiceRefreshRun func(context.Context)
 	ttsCleanupRun   func(context.Context)
 	mediaOrphanRun  func(context.Context)
@@ -96,9 +95,6 @@ func Bootstrap(cfgPath string) (*App, error) {
 		apiSrv:      newAPIServer(cfg, mods, rl, in.redis, in.db),
 		metricsSrv:  newMetricsServer(cfg, mods.checker),
 		backgrounds: mods.backgrounds,
-		ttsRun: func(ctx context.Context) error {
-			return mods.ttsConsumer.ConsumeTTSJobs(ctx, mods.ttsWorker.Handle)
-		},
 		voiceRefreshRun: func(ctx context.Context) {
 			mods.voiceRefresher.Run(ctx, cfg.Cron.VoiceRefresh.Interval)
 		},
@@ -147,8 +143,6 @@ func (a *App) Run(ctx context.Context) error {
 	for _, run := range a.backgrounds {
 		startBackground(run)
 	}
-
-	startBackground(a.ttsRun)
 
 	startBackground(func(ctx context.Context) error {
 		a.voiceRefreshRun(ctx)

@@ -100,47 +100,13 @@ func TestPublishAndConsumeTTS(t *testing.T) {
 	job := broker.TTSJob{JobId: "j1", OrgID: "org1", UserID: "u1", Text: "hello", Voice: "alena"}
 	require.NoError(t, publisher.PublishTTSJob(context.Background(), job))
 
-	ctx, cancel := context.WithCancel(context.Background())
 	received := make(chan broker.TTSJob, 1)
 
-	go func() {
-		_ = consumer.ConsumeTTSJobs(ctx, func(_ context.Context, j broker.TTSJob, _ bool) error {
-			received <- j
-			cancel()
-			return nil
-		})
-	}()
-
-	select {
-	case got := <-received:
-		require.Equal(t, job, got)
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for message")
-	}
-}
-
-func TestPublishAndConsumeClamAV(t *testing.T) {
-	url := startTestNATS(t)
-	natsCfg := testNATSConfig(url)
-
-	_, js := setupBroker(t, natsCfg)
-
-	publisher := broker.NewPublisher(js)
-	consumer := broker.NewConsumer(js, natsCfg.Stream.Name, natsCfg.Consumers)
-
-	job := broker.ClamAVJob{FileID: "f1", FilePath: "/tmp/f1"}
-	require.NoError(t, publisher.PublishClamAVJob(context.Background(), job))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	received := make(chan broker.ClamAVJob, 1)
-
-	go func() {
-		_ = consumer.ConsumeClamAVJobs(ctx, func(_ context.Context, j broker.ClamAVJob, _ bool) error {
-			received <- j
-			cancel()
-			return nil
-		})
-	}()
+	require.NoError(t, consumer.Start(func(_ context.Context, j broker.TTSJob, _ bool) error {
+		received <- j
+		return nil
+	}))
+	t.Cleanup(func() { _ = consumer.Shutdown(context.Background()) })
 
 	select {
 	case got := <-received:
@@ -156,13 +122,12 @@ func ttsCfgWithAckWait(url string, ackWait time.Duration) config.NATSConfig {
 	return cfg
 }
 
-func runTTSConsumer(t *testing.T, cfg config.NATSConfig, js jetstream.JetStream, h broker.TTSJobHandler) context.CancelFunc {
+func runTTSConsumer(t *testing.T, cfg config.NATSConfig, js jetstream.JetStream, h broker.TTSJobHandler) *broker.Consumer {
 	t.Helper()
 	consumer := broker.NewConsumer(js, cfg.Stream.Name, cfg.Consumers)
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = consumer.ConsumeTTSJobs(ctx, h) }()
-	t.Cleanup(cancel)
-	return cancel
+	require.NoError(t, consumer.Start(h))
+	t.Cleanup(func() { _ = consumer.Shutdown(context.Background()) })
+	return consumer
 }
 
 func TestKeepAliveExtendsAckWait(t *testing.T) {
@@ -277,4 +242,101 @@ func TestBadPayloadIsTerminated(t *testing.T) {
 
 	time.Sleep(5 * time.Second) // больше ack_wait, переотдача успела бы произойти
 	require.Zero(t, atomic.LoadInt32(&calls), "handler was called for unparsable message")
+}
+
+func TestShutdownWaitsForInFlightJob(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	_, js := setupBroker(t, natsCfg)
+
+	publisher := broker.NewPublisher(js)
+	job := broker.TTSJob{JobId: "j1", OrgID: "org1", UserID: "u1", Text: "hello", Voice: "alena"}
+	require.NoError(t, publisher.PublishTTSJob(context.Background(), job))
+
+	started := make(chan struct{})
+	var finished atomic.Bool
+
+	consumer := runTTSConsumer(t, natsCfg, js, func(_ context.Context, _ broker.TTSJob, _ bool) error {
+		close(started)
+		time.Sleep(2 * time.Second)
+		finished.Store(true)
+		return nil
+	})
+
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, consumer.Shutdown(ctx))
+	require.True(t, finished.Load(), "shutdown returned before the in-flight job finished")
+}
+
+func TestShutdownCancelsJobWhenBudgetExpires(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	_, js := setupBroker(t, natsCfg)
+
+	publisher := broker.NewPublisher(js)
+	job := broker.TTSJob{JobId: "j1", OrgID: "org1", UserID: "u1", Text: "hello", Voice: "alena"}
+	require.NoError(t, publisher.PublishTTSJob(context.Background(), job))
+
+	started := make(chan struct{})
+	jobCancelled := make(chan struct{})
+
+	consumer := runTTSConsumer(t, natsCfg, js, func(ctx context.Context, _ broker.TTSJob, _ bool) error {
+		close(started)
+		<-ctx.Done()
+		close(jobCancelled)
+		return ctx.Err()
+	})
+
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, consumer.Shutdown(ctx), context.DeadlineExceeded)
+
+	select {
+	case <-jobCancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("job context was not cancelled after the budget expired")
+	}
+}
+
+func TestShutdownIsIdempotent(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	_, js := setupBroker(t, natsCfg)
+
+	consumer := runTTSConsumer(t, natsCfg, js, func(context.Context, broker.TTSJob, bool) error {
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, consumer.Shutdown(ctx))
+	require.NoError(t, consumer.Shutdown(ctx))
+}
+
+func TestStartFailsOnMissingStream(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	_, js := setupBroker(t, natsCfg)
+
+	consumer := broker.NewConsumer(js, "NO_SUCH_STREAM", natsCfg.Consumers)
+	require.Error(t, consumer.Start(func(context.Context, broker.TTSJob, bool) error {
+		return nil
+	}))
 }
