@@ -56,6 +56,7 @@ type ServerConfig struct {
 	MetricsWriteTimeout    time.Duration `mapstructure:"metrics_write_timeout"`
 	ShutdownTimeout        time.Duration `mapstructure:"shutdown_timeout"`
 	WorkersShutdownTimeout time.Duration `mapstructure:"workers_shutdown_timeout"`
+	InfraShutdownTimeout   time.Duration `mapstructure:"infra_shutdown_timeout"`
 }
 
 // CryptoConfig contains encryption and hashing settings.
@@ -143,6 +144,9 @@ type ConsumerSettings struct {
 	AckWait      time.Duration `mapstructure:"ack_wait"`
 	MaxDeliver   int           `mapstructure:"max_deliver"`
 	FetchMaxWait time.Duration `mapstructure:"fetch_max_wait"`
+	// MaxBackoff caps the retry delay after a failed fetch. It governs runtime
+	// reconnect behaviour, not shutdown: the stop signal interrupts the wait.
+	MaxBackoff time.Duration `mapstructure:"max_backoff"`
 }
 
 // MinIOConfig contains MinIO object storage settings.
@@ -410,8 +414,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.idle_timeout", "60s")
 	v.SetDefault("server.metrics_read_timeout", "5s")
 	v.SetDefault("server.metrics_write_timeout", "5s")
-	v.SetDefault("server.shutdown_timeout", "30s")
-	v.SetDefault("server.workers_shutdown_timeout", "30s")
+	v.SetDefault("server.shutdown_timeout", "10s")
+	v.SetDefault("server.workers_shutdown_timeout", "10s")
+	v.SetDefault("server.infra_shutdown_timeout", "25s")
 
 	// DB defaults
 	v.SetDefault("db.max_open_conns", 25)
@@ -441,7 +446,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nats.connection.max_reconnect", 5)
 	v.SetDefault("nats.connection.ping_interval", "20s")
 	v.SetDefault("nats.connection.max_pings_outstanding", 3)
-	v.SetDefault("nats.connection.drain_timeout", "30s")
+	v.SetDefault("nats.connection.drain_timeout", "5s")
 
 	v.SetDefault("nats.stream.name", "AI_JOBS")
 	v.SetDefault("nats.stream.init_timeout", "10s")
@@ -453,10 +458,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("nats.consumers.tts.ack_wait", "30s")
 	v.SetDefault("nats.consumers.tts.max_deliver", 3)
 	v.SetDefault("nats.consumers.tts.fetch_max_wait", "5s")
+	v.SetDefault("nats.consumers.tts.max_backoff", "30s")
 
 	v.SetDefault("nats.consumers.clamav.ack_wait", "10s")
 	v.SetDefault("nats.consumers.clamav.max_deliver", 3)
 	v.SetDefault("nats.consumers.clamav.fetch_max_wait", "5s")
+	v.SetDefault("nats.consumers.clamav.max_backoff", "30s")
 
 	// MinIO defaults
 	v.SetDefault("minio.endpoint", "localhost:9000")
@@ -496,7 +503,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pack_share.send_retries", 3)
 	v.SetDefault("pack_share.send_timeout", "30s")
 	v.SetDefault("pack_share.retry_backoff", "2s")
-	v.SetDefault("pack_share.shutdown_timeout", "3m")
+	v.SetDefault("pack_share.shutdown_timeout", "5s")
 
 	// External Pictures Bank remains the default; local mode is file-owned.
 	v.SetDefault("feature_flags.local_bank", false)
@@ -606,13 +613,14 @@ func validateConfig(cfg *Config) error {
 	}
 
 	// Server validation
-	if cfg.Server.WorkersShutdownTimeout <= 0 {
-		return fmt.Errorf("server.workers_shutdown_timeout must be > 0")
+	if err := validateServerConfig(&cfg.Server); err != nil {
+		return err
 	}
 
-	// NATS validation
-	if cfg.NATS.Connection.DrainTimeout <= 0 {
-		return fmt.Errorf("nats.connection.drain_timeout must be > 0")
+	// NATS validation. A zero drain budget closes the connection abruptly; a zero
+	// fetch wait spins the loop, a zero backoff turns an outage into a retry storm.
+	if err := validateNATSConfig(&cfg.NATS); err != nil {
+		return err
 	}
 
 	// MinIO validation
@@ -833,6 +841,37 @@ func validateTTSConfig(cfg *TTSConfig) error {
 	// every request, hammering the repo and the upstream
 	if cfg.VoiceTTL < 5*time.Minute {
 		return fmt.Errorf("ttsapi.voice_ttl must be >= 5m")
+	}
+	return nil
+}
+
+func validateNATSConfig(cfg *NATSConfig) error {
+	if cfg.Connection.DrainTimeout <= 0 {
+		return fmt.Errorf("nats.connection.drain_timeout must be > 0")
+	}
+	return validateNATSConsumersConfig(&cfg.Consumers)
+}
+
+func validateNATSConsumersConfig(cfg *ConsumersConfig) error {
+	switch {
+	case cfg.TTS.FetchMaxWait <= 0:
+		return fmt.Errorf("nats.consumers.tts.fetch_max_wait must be > 0")
+	case cfg.TTS.MaxBackoff <= 0:
+		return fmt.Errorf("nats.consumers.tts.max_backoff must be > 0")
+	case cfg.ClamAV.FetchMaxWait <= 0:
+		return fmt.Errorf("nats.consumers.clamav.fetch_max_wait must be > 0")
+	case cfg.ClamAV.MaxBackoff <= 0:
+		return fmt.Errorf("nats.consumers.clamav.max_backoff must be > 0")
+	}
+	return nil
+}
+
+func validateServerConfig(cfg *ServerConfig) error {
+	switch {
+	case cfg.WorkersShutdownTimeout <= 0:
+		return fmt.Errorf("server.workers_shutdown_timeout must be > 0")
+	case cfg.InfraShutdownTimeout <= 0:
+		return fmt.Errorf("server.infra_shutdown_timeout must be > 0")
 	}
 	return nil
 }

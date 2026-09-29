@@ -342,6 +342,40 @@ func TestStartFailsOnMissingStream(t *testing.T) {
 	}))
 }
 
+func TestStartTwiceIsRejected(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	_, js := setupBroker(t, natsCfg)
+
+	noop := func(context.Context, broker.TTSJob, bool) error { return nil }
+
+	consumer := broker.NewConsumer(js, natsCfg.Stream.Name, natsCfg.Consumers)
+	require.NoError(t, consumer.Start(noop))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = consumer.Shutdown(ctx)
+	})
+
+	require.Error(t, consumer.Start(noop), "second Start must not spawn another fetch loop")
+}
+
+func TestStartAfterFailureIsAllowed(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	_, js := setupBroker(t, natsCfg)
+
+	noop := func(context.Context, broker.TTSJob, bool) error { return nil }
+
+	// The first attempt fails before anything is running, so the consumer must
+	// not consider itself started.
+	consumer := broker.NewConsumer(js, "NO_SUCH_STREAM", natsCfg.Consumers)
+	require.Error(t, consumer.Start(noop))
+	require.ErrorContains(t, consumer.Start(noop), "create consumer")
+}
+
 func TestDrainAndWaitClosesConnection(t *testing.T) {
 	url := startTestNATS(t)
 	natsCfg := testNATSConfig(url)

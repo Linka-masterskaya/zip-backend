@@ -1,5 +1,4 @@
-// Package broker provides NATS JetStream messaging for asynchronous job
-// processing TTS generation.
+// Package broker provides NATS JetStream messaging for asynchronous TTS job processing.
 package broker
 
 import (
@@ -10,22 +9,31 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Consumer reads asynchronous jobs TTS from the AI_JOBS stream.
+// Consumer reads asynchronous TTS jobs from the AI_JOBS stream.
 type Consumer struct {
 	js         jetstream.JetStream
 	streamName string
 	cfg        config.ConsumersConfig
-	ctx        context.Context
-	cancel     context.CancelFunc
-	stop       chan struct{}
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
+
+	// ctx is the consumer's own lifetime, not a request scope, and is
+	// deliberately stored on the struct. Handlers run on it so that stopping the
+	// consumer does not tear down the job already in flight: the fetch loop exits
+	// on stop, while ctx stays alive until the job is done. cancel is the last
+	// resort, used by Shutdown once its budget runs out.
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	stop     chan struct{}
+	stopOnce sync.Once
+	started  atomic.Bool
+	wg       sync.WaitGroup
 }
 
 // NewConsumer creates a Consumer for the given stream using the provided consumer settings.
@@ -45,8 +53,12 @@ func NewConsumer(js jetstream.JetStream, streamName string, cfg config.Consumers
 // background. Creation errors surface synchronously, so a misconfigured
 // consumer fails at bootstrap instead of silently never delivering jobs.
 func (c *Consumer) Start(handler TTSJobHandler) error {
+	if !c.started.CompareAndSwap(false, true) {
+		return errors.New("Start: consumer already started")
+	}
 	cons, err := createConsumer(c.ctx, c.js, c.streamName, SubjectTTSJobs, c.cfg.TTS)
 	if err != nil {
+		c.started.Store(false)
 		return err
 	}
 
@@ -87,7 +99,7 @@ func runLoop[T any](
 	handler func(context.Context, T, bool) error,
 ) {
 	backoff := time.Second
-	maxBackoff := 30 * time.Second
+	maxBackoff := cfg.MaxBackoff
 
 	for {
 		select {
@@ -104,6 +116,8 @@ func runLoop[T any](
 			slog.ErrorContext(c.ctx, "runLoop: fetch failed, retrying", "consumer", cfg.Durable, "err", err)
 			select {
 			case <-c.ctx.Done():
+				return
+			case <-c.stop:
 				return
 			case <-time.After(backoff):
 			}
@@ -130,7 +144,7 @@ func processBatch[T any](
 	}
 
 	if err := msgs.Error(); err != nil {
-		slog.Error("consumeJobs: fetch batch error", "consumer", cfg.Durable, "err", err)
+		slog.Error("processBatch: fetch batch error", "consumer", cfg.Durable, "err", err)
 	}
 }
 
@@ -143,18 +157,18 @@ func handleMsg[T any](
 	delay := 2 * time.Second
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("consumeJobs: panic", "stack", string(debug.Stack()), "consumer", cfg.Durable, "panic", r)
+			slog.Error("processBatch: panic", "stack", string(debug.Stack()), "consumer", cfg.Durable, "panic", r)
 			if err := msg.NakWithDelay(delay); err != nil {
-				slog.Error("consumeJobs: nak failed", "err", err)
+				slog.Error("processBatch: nak failed", "err", err)
 			}
 		}
 	}()
 
 	var job T
 	if err := json.Unmarshal(msg.Data(), &job); err != nil {
-		slog.Error("consumeJobs: unmarshal, terminating message", "consumer", cfg.Durable, "err", err)
+		slog.Error("processBatch: unmarshal, terminating message", "consumer", cfg.Durable, "err", err)
 		if termErr := msg.Term(); termErr != nil {
-			slog.Error("consumeJobs: term failed", "consumer", cfg.Durable, "err", termErr)
+			slog.Error("processBatch: term failed", "consumer", cfg.Durable, "err", termErr)
 		}
 		return
 	}
@@ -174,15 +188,15 @@ func handleMsg[T any](
 
 	err := handler(ctx, job, isLastAttempt)
 	if err != nil {
-		slog.Error("consumeJobs: handler", "consumer", cfg.Durable, "err", err)
+		slog.Error("processBatch: handler", "consumer", cfg.Durable, "err", err)
 		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
-			slog.Error("consumeJobs: nak failed", "consumer", cfg.Durable, "err", nakErr)
+			slog.Error("processBatch: nak failed", "consumer", cfg.Durable, "err", nakErr)
 		}
 		return
 	}
 
 	if ackErr := msg.Ack(); ackErr != nil {
-		slog.Error("consumeJobs: ack failed", "consumer", cfg.Durable, "err", ackErr)
+		slog.Error("processBatch: ack failed", "consumer", cfg.Durable, "err", ackErr)
 	}
 }
 
@@ -201,7 +215,7 @@ func keepAlive(msg jetstream.Msg, every time.Duration) func() {
 				return
 			case <-t.C:
 				if err := msg.InProgress(); err != nil {
-					slog.Warn("consumeJobs: in progress failed", "err", err)
+					slog.Warn("keepAlive: in progress failed", "err", err)
 				}
 			}
 		}
@@ -209,6 +223,12 @@ func keepAlive(msg jetstream.Msg, every time.Duration) func() {
 	return func() { close(done) }
 }
 
+// Shutdown stops the consumer in two phases. First it closes the stop channel,
+// which makes the fetch loop exit once the message it already holds is acked —
+// the job keeps running on the consumer's own context, so nothing is torn down
+// mid-flight. Then it waits for the loop to return within the caller's budget.
+// Only if that budget expires does it cancel the context, aborting the job so
+// the message is redelivered after ack_wait. Safe to call more than once.
 func (c *Consumer) Shutdown(ctx context.Context) error {
 	c.stopOnce.Do(func() { close(c.stop) })
 

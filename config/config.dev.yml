@@ -16,8 +16,9 @@ server:
   idle_timeout: "60s"
   metrics_read_timeout: "5s"
   metrics_write_timeout: "5s"
-  shutdown_timeout: "30s"
-  workers_shutdown_timeout: "30s"
+  shutdown_timeout: "10s"
+  workers_shutdown_timeout: "10s"
+  infra_shutdown_timeout: "25s"
 
 db:
   url: "postgres://linka:linka@localhost:5432/linka?sslmode=disable"
@@ -48,7 +49,7 @@ nats:
     max_reconnect: 5
     ping_interval: "20s"
     max_pings_outstanding: 3
-    drain_timeout: "30s"
+    drain_timeout: "5s"
 
   stream:
     name: "AI_JOBS"
@@ -64,11 +65,13 @@ nats:
       ack_wait: "30s"
       max_deliver: 3
       fetch_max_wait: "5s"
+      max_backoff: "30s"
     clamav:
       durable: "linka-clamav"
       ack_wait: "10s"
       max_deliver: 3
       fetch_max_wait: "5s"
+      max_backoff: "30s"
 
 minio:
   endpoint: "localhost:9000"
@@ -140,7 +143,7 @@ pack_share:
   send_timeout: 30s
   retry_backoff: 2s
   # Graceful drain budget. If it expires, the leased DB job is requeued.
-  shutdown_timeout: 3m
+  shutdown_timeout: 5s
 
 auth:
   access_token_ttl: 15m

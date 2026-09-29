@@ -51,7 +51,7 @@ func Bootstrap(cfgPath string) (*App, error) {
 
 	// Any failure past this point must release what the closer already holds.
 	abort := func(err error) (*App, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), infrastructureShutdownTimeout(cfg))
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.InfraShutdownTimeout)
 		defer cancel()
 		if closeErr := closer.Close(ctx); closeErr != nil {
 			slog.Error("cleanup after failed bootstrap", logger.Err(closeErr))
@@ -132,29 +132,35 @@ func (a *App) Run(ctx context.Context) error {
 
 	workCtx, cancelWork := context.WithCancel(context.Background())
 	var backgroundWG sync.WaitGroup
-	startBackground := func(run func(context.Context) error) {
+	// The worker name is only for logs: a WaitGroup cannot report who is still
+	// running, so the stop records are the only way to tell which worker held up
+	// a shutdown that timed out.
+	startBackground := func(name string, run func(context.Context) error) {
 		backgroundWG.Add(1)
 		g.Go(func() error {
-			defer backgroundWG.Done()
+			defer func() {
+				slog.Debug("background worker stopped", "worker", name)
+				backgroundWG.Done()
+			}()
 			return run(workCtx)
 		})
 	}
 
-	for _, run := range a.backgrounds {
-		startBackground(run)
+	for i, run := range a.backgrounds {
+		startBackground(fmt.Sprintf("background[%d]", i), run)
 	}
 
-	startBackground(func(ctx context.Context) error {
+	startBackground("voice refresh", func(ctx context.Context) error {
 		a.voiceRefreshRun(ctx)
 		return nil
 	})
 
-	startBackground(func(ctx context.Context) error {
+	startBackground("tts cleanup", func(ctx context.Context) error {
 		a.ttsCleanupRun(ctx)
 		return nil
 	})
 
-	startBackground(func(ctx context.Context) error {
+	startBackground("media orphan scanner", func(ctx context.Context) error {
 		a.mediaOrphanRun(ctx)
 		return nil
 	})
@@ -166,16 +172,6 @@ func (a *App) Run(ctx context.Context) error {
 	})
 
 	return g.Wait()
-}
-
-func infrastructureShutdownTimeout(cfg *config.Config) time.Duration {
-	timeout := cfg.Server.ShutdownTimeout
-	if cfg.PackShare.ShutdownTimeout > 0 {
-		// Pack-share closes before Redis/Postgres (LIFO closer). Give it its own
-		// drain budget and preserve the normal infrastructure budget afterwards.
-		timeout += cfg.PackShare.ShutdownTimeout
-	}
-	return timeout
 }
 
 func (a *App) shutdown(cancelWork context.CancelFunc, backgroundWG *sync.WaitGroup) error {
@@ -204,7 +200,7 @@ func (a *App) shutdown(cancelWork context.CancelFunc, backgroundWG *sync.WaitGro
 	// closing database, Redis and NATS connections.
 	infraCtx, cancelInfra := context.WithTimeout(
 		context.Background(),
-		infrastructureShutdownTimeout(a.cfg),
+		a.cfg.Server.InfraShutdownTimeout,
 	)
 	defer cancelInfra()
 
@@ -230,6 +226,11 @@ func (a *App) shutdown(cancelWork context.CancelFunc, backgroundWG *sync.WaitGro
 }
 
 // waitWithTimeout waits for wg and reports whether it finished within timeout.
+// On timeout the inner goroutine stays parked on wg.Wait() — Wait takes no
+// context and cannot be interrupted — so it lives until the process exits.
+// That is acceptable here: the only caller is shutdown, and the process is
+// already on its way out. The Debug record each worker writes on exit tells
+// which one failed to finish.
 func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
