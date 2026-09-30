@@ -51,6 +51,7 @@ nats:
     max_reconnect: 5
     ping_interval: "20s"
     max_pings_outstanding: 3
+    drain_timeout: "5s"
 
   stream:
     name: "AI_JOBS"
@@ -59,7 +60,6 @@ nats:
     max_bytes: 104857600 # 100MB
     max_msgs: 100000
     duplicates: "5m"
-    drain_timeout: "5s"
 
   consumers:
     tts:

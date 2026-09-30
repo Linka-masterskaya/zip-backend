@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -26,11 +27,15 @@ var (
 
 // App owns the assembled servers and everything they must release on shutdown.
 type App struct {
-	cfg             *config.Config
-	closer          *Closer
-	apiSrv          *http.Server
-	metricsSrv      *http.Server
-	backgrounds     []func(context.Context) error
+	cfg         *config.Config
+	closer      *Closer
+	apiSrv      *http.Server
+	metricsSrv  *http.Server
+	backgrounds []func(context.Context) error
+	// stopConsumers keeps message consumers from starting new fetches; the
+	// message a fetch already returned is still handled. Waiting and budgets
+	// stay with the closer. Wired in Bootstrap; currently the TTS consumer.
+	stopConsumers   func()
 	voiceRefreshRun func(context.Context)
 	ttsCleanupRun   func(context.Context)
 	mediaOrphanRun  func(context.Context)
@@ -90,11 +95,12 @@ func Bootstrap(cfgPath string) (*App, error) {
 	})
 
 	return &App{
-		cfg:         cfg,
-		closer:      closer,
-		apiSrv:      newAPIServer(cfg, mods, rl, in.redis, in.db),
-		metricsSrv:  newMetricsServer(cfg, mods.checker),
-		backgrounds: mods.backgrounds,
+		cfg:           cfg,
+		closer:        closer,
+		apiSrv:        newAPIServer(cfg, mods, rl, in.redis, in.db),
+		metricsSrv:    newMetricsServer(cfg, mods.checker),
+		backgrounds:   mods.backgrounds,
+		stopConsumers: func() { mods.ttsConsumer.Stop() },
 		voiceRefreshRun: func(ctx context.Context) {
 			mods.voiceRefresher.Run(ctx, cfg.Cron.VoiceRefresh.Interval)
 		},
@@ -114,6 +120,19 @@ func Bootstrap(cfgPath string) (*App, error) {
 func (a *App) Run(ctx context.Context) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	defer shutdownCancel()
+
+	go func() {
+		<-ctx.Done()
+
+		force := make(chan os.Signal, 1)
+		signal.Notify(force, syscall.SIGINT, syscall.SIGTERM)
+		<-force
+		shutdownCancel()
+
+		slog.Warn("second signal received, aborting remaining shutdown waits")
+	}()
 
 	slog.Info("starting server",
 		"addr", a.apiSrv.Addr,
@@ -168,17 +187,17 @@ func (a *App) Run(ctx context.Context) error {
 	g.Go(func() error {
 		<-gctx.Done()
 
-		return a.shutdown(cancelWork, &backgroundWG)
+		return a.shutdown(shutdownCtx, cancelWork, &backgroundWG)
 	})
 
 	return g.Wait()
 }
 
-func (a *App) shutdown(cancelWork context.CancelFunc, backgroundWG *sync.WaitGroup) error {
+func (a *App) shutdown(shutdownCtx context.Context, cancelWork context.CancelFunc, backgroundWG *sync.WaitGroup) error {
 	slog.Info("shutting down...")
 
 	httpCtx, cancelHTTP := context.WithTimeout(
-		context.Background(),
+		shutdownCtx,
 		a.cfg.Server.ShutdownTimeout,
 	)
 	defer cancelHTTP()
@@ -192,14 +211,15 @@ func (a *App) shutdown(cancelWork context.CancelFunc, backgroundWG *sync.WaitGro
 	}
 
 	cancelWork()
-	if !waitWithTimeout(backgroundWG, a.cfg.Server.WorkersShutdownTimeout) {
+	a.stopConsumers()
+	if !waitWithTimeout(shutdownCtx, backgroundWG, a.cfg.Server.WorkersShutdownTimeout) {
 		slog.Warn("background workers did not finish in time")
 	}
 
 	// Infrastructure gets its own deadline: a slow HTTP drain must never skip
 	// closing database, Redis and NATS connections.
 	infraCtx, cancelInfra := context.WithTimeout(
-		context.Background(),
+		shutdownCtx,
 		a.cfg.Server.InfraShutdownTimeout,
 	)
 	defer cancelInfra()
@@ -211,7 +231,7 @@ func (a *App) shutdown(cancelWork context.CancelFunc, backgroundWG *sync.WaitGro
 	}
 
 	metricsCtx, cancelMetrics := context.WithTimeout(
-		context.Background(),
+		shutdownCtx,
 		a.cfg.Server.ShutdownTimeout,
 	)
 	defer cancelMetrics()
@@ -225,13 +245,12 @@ func (a *App) shutdown(cancelWork context.CancelFunc, backgroundWG *sync.WaitGro
 	return firstErr
 }
 
-// waitWithTimeout waits for wg and reports whether it finished within timeout.
-// On timeout the inner goroutine stays parked on wg.Wait() — Wait takes no
-// context and cannot be interrupted — so it lives until the process exits.
-// That is acceptable here: the only caller is shutdown, and the process is
-// already on its way out. The Debug record each worker writes on exit tells
-// which one failed to finish.
-func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+// waitWithTimeout reports whether waiting ended for an expected reason: wg
+// finished in time, or shutdownCtx was cancelled by a second termination signal.
+// Only a timeout returns false, and it leaves the inner goroutine parked on
+// wg.Wait() for good — Wait cannot be interrupted. Acceptable here: the only
+// caller is shutdown, and each worker logs its own exit at Debug.
+func waitWithTimeout(shutdownCtx context.Context, wg *sync.WaitGroup, timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -245,6 +264,8 @@ func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	case <-done:
 		return true
 	case <-t.C:
+		return false
+	case <-shutdownCtx.Done():
 		return false
 	}
 }

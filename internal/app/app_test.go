@@ -66,13 +66,14 @@ func TestShutdownClosesInfrastructureAfterHTTPDeadline(t *testing.T) {
 			WorkersShutdownTimeout: 20 * time.Millisecond,
 			InfraShutdownTimeout:   time.Second,
 		}},
-		closer:     closer,
-		apiSrv:     apiSrv,
-		metricsSrv: &http.Server{},
+		closer:        closer,
+		apiSrv:        apiSrv,
+		stopConsumers: func() {},
+		metricsSrv:    &http.Server{},
 	}
 
 	var backgroundWG sync.WaitGroup
-	err = a.shutdown(func() {}, &backgroundWG)
+	err = a.shutdown(context.Background(), func() {}, &backgroundWG)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("shutdown() = %v, want deadline exceeded", err)
 	}

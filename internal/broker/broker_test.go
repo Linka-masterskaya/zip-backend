@@ -330,6 +330,51 @@ func TestShutdownIsIdempotent(t *testing.T) {
 	require.NoError(t, consumer.Shutdown(ctx))
 }
 
+// Stop only prevents the next fetch: a message already returned by the fetch in
+// flight is still handled, because that call cannot be interrupted. The loop is
+// therefore drained first, and only then is the second job published.
+func TestStopPreventsNewFetches(t *testing.T) {
+	url := startTestNATS(t)
+	natsCfg := testNATSConfig(url)
+
+	_, js := setupBroker(t, natsCfg)
+
+	publisher := broker.NewPublisher(js)
+	first := broker.TTSJob{JobId: "j1", OrgID: "org1", UserID: "u1", Text: "hello", Voice: "alena"}
+	require.NoError(t, publisher.PublishTTSJob(context.Background(), first))
+
+	handled := make(chan string, 4)
+	consumer := runTTSConsumer(t, natsCfg, js, func(_ context.Context, j broker.TTSJob, _ bool) error {
+		handled <- j.JobId
+		return nil
+	})
+
+	// Wait for the loop to prove it is actually fetching before stopping it.
+	select {
+	case got := <-handled:
+		require.Equal(t, first.JobId, got)
+	case <-time.After(10 * time.Second):
+		t.Fatal("first job was not handled")
+	}
+
+	consumer.Stop()
+
+	// Shutdown returns once the loop has left, so nothing is fetching any more.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, consumer.Shutdown(ctx))
+
+	second := broker.TTSJob{JobId: "j2", OrgID: "org1", UserID: "u1", Text: "world", Voice: "alena"}
+	require.NoError(t, publisher.PublishTTSJob(context.Background(), second))
+
+	// Well past FetchMaxWait: a running loop would have picked it up by now.
+	select {
+	case got := <-handled:
+		t.Fatalf("handler received %q after the loop stopped", got)
+	case <-time.After(3 * natsCfg.Consumers.TTS.FetchMaxWait):
+	}
+}
+
 func TestStartFailsOnMissingStream(t *testing.T) {
 	url := startTestNATS(t)
 	natsCfg := testNATSConfig(url)

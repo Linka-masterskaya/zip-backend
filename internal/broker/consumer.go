@@ -230,7 +230,7 @@ func keepAlive(msg jetstream.Msg, every time.Duration) func() {
 // Only if that budget expires does it cancel the context, aborting the job so
 // the message is redelivered after ack_wait. Safe to call more than once.
 func (c *Consumer) Shutdown(ctx context.Context) error {
-	c.stopOnce.Do(func() { close(c.stop) })
+	c.Stop()
 
 	done := make(chan struct{})
 	go func() {
@@ -246,4 +246,13 @@ func (c *Consumer) Shutdown(ctx context.Context) error {
 		c.cancel()
 		return ctx.Err()
 	}
+}
+
+// Stop keeps the fetch loop from starting another fetch and returns immediately.
+// It does not cut the loop short: a fetch already in progress cannot be
+// interrupted, so the message it returns is still handled, and the loop leaves
+// up to FetchMaxWait later. The job in flight keeps running on the consumer's
+// context; waiting for it and owning the budget is Shutdown's job.
+func (c *Consumer) Stop() {
+	c.stopOnce.Do(func() { close(c.stop) })
 }
