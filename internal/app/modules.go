@@ -226,6 +226,15 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 		cfg.NATS.Stream.Name,
 		cfg.NATS.Consumers,
 	)
+	err = ttsConsumer.Start(ttsWorker.Handle)
+	if err != nil {
+		return nil, fmt.Errorf("tts consumer start: %w", err)
+	}
+	closer.Add("tts consumer", func(ctx context.Context) error {
+		shutdownCtx, cancel := context.WithTimeout(ctx, cfg.Server.WorkersShutdownTimeout)
+		defer cancel()
+		return ttsConsumer.Shutdown(shutdownCtx)
+	})
 
 	voiceRefresher := cron.NewVoiceRefresher(
 		ttsClient,

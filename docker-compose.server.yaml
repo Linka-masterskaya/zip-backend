@@ -20,6 +20,7 @@ services:
         condition: service_healthy
     networks:
       - linka-net
+    stop_grace_period: 1m
 
   postgres:
     image: postgres:17-alpine # стабильная версия

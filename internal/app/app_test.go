@@ -5,22 +5,12 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/config"
 )
-
-func TestInfrastructureShutdownTimeoutIncludesPackShareDrainBudget(t *testing.T) {
-	cfg := &config.Config{
-		Server:    config.ServerConfig{ShutdownTimeout: 30 * time.Second},
-		PackShare: config.PackShareConfig{ShutdownTimeout: 3 * time.Minute},
-	}
-
-	if got, want := infrastructureShutdownTimeout(cfg), 3*time.Minute+30*time.Second; got != want {
-		t.Fatalf("infrastructureShutdownTimeout() = %s, want %s", got, want)
-	}
-}
 
 func TestShutdownClosesInfrastructureAfterHTTPDeadline(t *testing.T) {
 	requestStarted := make(chan struct{})
@@ -72,14 +62,18 @@ func TestShutdownClosesInfrastructureAfterHTTPDeadline(t *testing.T) {
 	})
 	a := &App{
 		cfg: &config.Config{Server: config.ServerConfig{
-			ShutdownTimeout: 20 * time.Millisecond,
+			ShutdownTimeout:        20 * time.Millisecond,
+			WorkersShutdownTimeout: 20 * time.Millisecond,
+			InfraShutdownTimeout:   time.Second,
 		}},
-		closer:     closer,
-		apiSrv:     apiSrv,
-		metricsSrv: &http.Server{},
+		closer:        closer,
+		apiSrv:        apiSrv,
+		stopConsumers: func() {},
+		metricsSrv:    &http.Server{},
 	}
 
-	err = a.shutdown()
+	var backgroundWG sync.WaitGroup
+	err = a.shutdown(context.Background(), func() {}, &backgroundWG)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("shutdown() = %v, want deadline exceeded", err)
 	}

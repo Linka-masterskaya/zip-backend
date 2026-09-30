@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -26,12 +27,15 @@ var (
 
 // App owns the assembled servers and everything they must release on shutdown.
 type App struct {
-	cfg             *config.Config
-	closer          *Closer
-	apiSrv          *http.Server
-	metricsSrv      *http.Server
-	backgrounds     []func(context.Context) error
-	ttsRun          func(context.Context) error
+	cfg         *config.Config
+	closer      *Closer
+	apiSrv      *http.Server
+	metricsSrv  *http.Server
+	backgrounds []func(context.Context) error
+	// stopConsumers keeps message consumers from starting new fetches; the
+	// message a fetch already returned is still handled. Waiting and budgets
+	// stay with the closer. Wired in Bootstrap; currently the TTS consumer.
+	stopConsumers   func()
 	voiceRefreshRun func(context.Context)
 	ttsCleanupRun   func(context.Context)
 	mediaOrphanRun  func(context.Context)
@@ -52,7 +56,7 @@ func Bootstrap(cfgPath string) (*App, error) {
 
 	// Any failure past this point must release what the closer already holds.
 	abort := func(err error) (*App, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), infrastructureShutdownTimeout(cfg))
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.InfraShutdownTimeout)
 		defer cancel()
 		if closeErr := closer.Close(ctx); closeErr != nil {
 			slog.Error("cleanup after failed bootstrap", logger.Err(closeErr))
@@ -91,14 +95,12 @@ func Bootstrap(cfgPath string) (*App, error) {
 	})
 
 	return &App{
-		cfg:         cfg,
-		closer:      closer,
-		apiSrv:      newAPIServer(cfg, mods, rl, in.redis, in.db),
-		metricsSrv:  newMetricsServer(cfg, mods.checker),
-		backgrounds: mods.backgrounds,
-		ttsRun: func(ctx context.Context) error {
-			return mods.ttsConsumer.ConsumeTTSJobs(ctx, mods.ttsWorker.Handle)
-		},
+		cfg:           cfg,
+		closer:        closer,
+		apiSrv:        newAPIServer(cfg, mods, rl, in.redis, in.db),
+		metricsSrv:    newMetricsServer(cfg, mods.checker),
+		backgrounds:   mods.backgrounds,
+		stopConsumers: func() { mods.ttsConsumer.Stop() },
 		voiceRefreshRun: func(ctx context.Context) {
 			mods.voiceRefresher.Run(ctx, cfg.Cron.VoiceRefresh.Interval)
 		},
@@ -112,10 +114,25 @@ func Bootstrap(cfgPath string) (*App, error) {
 }
 
 // Run serves until a termination signal arrives or a server fails, then shuts
-// everything down in order: HTTP servers first, then infrastructure in LIFO order.
+// everything down in order: the API server first, then background workers,
+// then infrastructure in LIFO order, and the metrics server last so probes
+// stay answerable for the whole shutdown.
 func (a *App) Run(ctx context.Context) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	defer shutdownCancel()
+
+	go func() {
+		<-ctx.Done()
+
+		force := make(chan os.Signal, 1)
+		signal.Notify(force, syscall.SIGINT, syscall.SIGTERM)
+		<-force
+		shutdownCancel()
+
+		slog.Warn("second signal received, aborting remaining shutdown waits")
+	}()
 
 	slog.Info("starting server",
 		"addr", a.apiSrv.Addr,
@@ -132,32 +149,37 @@ func (a *App) Run(ctx context.Context) error {
 	g.Go(func() error { return serveHTTP(gctx, a.apiSrv) })
 	g.Go(func() error { return serveHTTP(gctx, a.metricsSrv) })
 
+	workCtx, cancelWork := context.WithCancel(context.Background())
 	var backgroundWG sync.WaitGroup
-	startBackground := func(run func(context.Context) error) {
+	// The worker name is only for logs: a WaitGroup cannot report who is still
+	// running, so the stop records are the only way to tell which worker held up
+	// a shutdown that timed out.
+	startBackground := func(name string, run func(context.Context) error) {
 		backgroundWG.Add(1)
 		g.Go(func() error {
-			defer backgroundWG.Done()
-			return run(gctx)
+			defer func() {
+				slog.Debug("background worker stopped", "worker", name)
+				backgroundWG.Done()
+			}()
+			return run(workCtx)
 		})
 	}
 
-	for _, run := range a.backgrounds {
-		startBackground(run)
+	for i, run := range a.backgrounds {
+		startBackground(fmt.Sprintf("background[%d]", i), run)
 	}
 
-	startBackground(a.ttsRun)
-
-	startBackground(func(ctx context.Context) error {
+	startBackground("voice refresh", func(ctx context.Context) error {
 		a.voiceRefreshRun(ctx)
 		return nil
 	})
 
-	startBackground(func(ctx context.Context) error {
+	startBackground("tts cleanup", func(ctx context.Context) error {
 		a.ttsCleanupRun(ctx)
 		return nil
 	})
 
-	startBackground(func(ctx context.Context) error {
+	startBackground("media orphan scanner", func(ctx context.Context) error {
 		a.mediaOrphanRun(ctx)
 		return nil
 	})
@@ -165,58 +187,85 @@ func (a *App) Run(ctx context.Context) error {
 	g.Go(func() error {
 		<-gctx.Done()
 
-		// Background workers share DB/Redis/NATS/MinIO with the HTTP server.
-		// Let them observe cancellation before infrastructure is closed underneath them.
-		backgroundWG.Wait()
-
-		return a.shutdown()
+		return a.shutdown(shutdownCtx, cancelWork, &backgroundWG)
 	})
 
 	return g.Wait()
 }
 
-func infrastructureShutdownTimeout(cfg *config.Config) time.Duration {
-	timeout := cfg.Server.ShutdownTimeout
-	if cfg.PackShare.ShutdownTimeout > 0 {
-		// Pack-share closes before Redis/Postgres (LIFO closer). Give it its own
-		// drain budget and preserve the normal infrastructure budget afterwards.
-		timeout += cfg.PackShare.ShutdownTimeout
-	}
-	return timeout
-}
-
-func (a *App) shutdown() error {
+func (a *App) shutdown(shutdownCtx context.Context, cancelWork context.CancelFunc, backgroundWG *sync.WaitGroup) error {
 	slog.Info("shutting down...")
 
 	httpCtx, cancelHTTP := context.WithTimeout(
-		context.Background(),
+		shutdownCtx,
 		a.cfg.Server.ShutdownTimeout,
 	)
+	defer cancelHTTP()
 
 	var firstErr error
-	if err := a.metricsSrv.Shutdown(httpCtx); err != nil {
-		slog.Error("metrics server shutdown", logger.Err(err))
-		firstErr = err
-	}
 	if err := a.apiSrv.Shutdown(httpCtx); err != nil {
 		slog.Error("api server shutdown", logger.Err(err))
 		if firstErr == nil {
 			firstErr = err
 		}
 	}
-	cancelHTTP()
+
+	cancelWork()
+	a.stopConsumers()
+	if !waitWithTimeout(shutdownCtx, backgroundWG, a.cfg.Server.WorkersShutdownTimeout) {
+		slog.Warn("background workers did not finish in time")
+	}
 
 	// Infrastructure gets its own deadline: a slow HTTP drain must never skip
 	// closing database, Redis and NATS connections.
 	infraCtx, cancelInfra := context.WithTimeout(
-		context.Background(),
-		infrastructureShutdownTimeout(a.cfg),
+		shutdownCtx,
+		a.cfg.Server.InfraShutdownTimeout,
 	)
 	defer cancelInfra()
 
-	if err := a.closer.Close(infraCtx); err != nil && firstErr == nil {
-		firstErr = err
+	if err := a.closer.Close(infraCtx); err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	metricsCtx, cancelMetrics := context.WithTimeout(
+		shutdownCtx,
+		a.cfg.Server.ShutdownTimeout,
+	)
+	defer cancelMetrics()
+	if err := a.metricsSrv.Shutdown(metricsCtx); err != nil {
+		slog.Error("metrics server shutdown", logger.Err(err))
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
 
 	return firstErr
+}
+
+// waitWithTimeout reports whether waiting ended for an expected reason: wg
+// finished in time, or shutdownCtx was cancelled by a second termination signal.
+// Only a timeout returns false, and it leaves the inner goroutine parked on
+// wg.Wait() for good — Wait cannot be interrupted. Acceptable here: the only
+// caller is shutdown, and each worker logs its own exit at Debug.
+func waitWithTimeout(shutdownCtx context.Context, wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	case <-shutdownCtx.Done():
+		return false
+	}
 }

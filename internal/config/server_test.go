@@ -21,7 +21,8 @@ func TestServerDefaults(t *testing.T) {
 		{"idle", cfg.Server.IdleTimeout, 60 * time.Second},
 		{"metrics read", cfg.Server.MetricsReadTimeout, 5 * time.Second},
 		{"metrics write", cfg.Server.MetricsWriteTimeout, 5 * time.Second},
-		{"shutdown", cfg.Server.ShutdownTimeout, 30 * time.Second},
+		{"shutdown", cfg.Server.ShutdownTimeout, 10 * time.Second},
+		{"workers shutdown", cfg.Server.WorkersShutdownTimeout, 10 * time.Second},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
