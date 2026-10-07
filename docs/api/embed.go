@@ -4,9 +4,8 @@ package api
 import (
 	_ "embed"
 	"net/http"
-	"strings"
 
-	swaggerFiles "github.com/swaggo/files"
+	swaggerFiles "github.com/swaggo/files/v2"
 )
 
 const (
@@ -64,6 +63,8 @@ func serveUI(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+var assetHandler = http.FileServerFS(swaggerFiles.FS)
+
 func serveAsset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
 	if name != "swagger-ui.css" && name != "swagger-ui-bundle.js" {
@@ -72,6 +73,6 @@ func serveAsset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clone := r.Clone(r.Context())
-	clone.URL.Path = "/" + strings.TrimPrefix(name, "/")
-	swaggerFiles.Handler.ServeHTTP(w, clone)
+	clone.URL.Path = "/" + name
+	assetHandler.ServeHTTP(w, clone)
 }
