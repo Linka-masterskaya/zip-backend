@@ -97,11 +97,11 @@ type CreateInput struct {
 }
 
 type UpdateInput struct {
-	Email        *string    `json:"email"`
-	Name         *string    `json:"name"`
-	Age          *int       `json:"age"`
-	Status       *string    `json:"status"`
-	LastLessonAt *Date      `json:"last_lesson_at"`
+	Email        *string `json:"email"`
+	Name         *string `json:"name"`
+	Age          *int    `json:"age"`
+	Status       *string `json:"status"`
+	LastLessonAt *Date   `json:"last_lesson_at"`
 	// CardsShift: отсутствие поля не трогает раскладку, null возвращает
 	// её к значению по умолчанию.
 	CardsShift nullableField[string] `json:"cards_shift"`
