@@ -1,7 +1,7 @@
 openapi: 3.1.1
 info:
   title: Linka Backend API
-  version: 0.4.0
+  version: 0.4.1
   description: |
     Auth + Profile для Linka Editor. Сверено с дизайном.
     Без username. Вход по email. Refresh — httpOnly cookie (SameSite=Strict). Access — Bearer JWT (HS256, 15m).
@@ -39,11 +39,10 @@ components:
 
     TokenResponse:
       type: object
-      required: [access_token, expires_in, token_type]
+      required: [access_token]
+      description: Срок жизни токена — в его claim `exp`.
       properties:
         access_token: { type: string }
-        token_type: { type: string, enum: [Bearer], default: Bearer }
-        expires_in: { type: integer, example: 900 }
 
     RegisterRequest:
       type: object
@@ -65,7 +64,12 @@ components:
     VerifyEmailRequest:
       type: object
       required: [token]
-      properties: { token: { type: string } }
+      properties:
+        token:
+          type: string
+          minLength: 43
+          maxLength: 43
+          description: Токен из письма — ровно 43 символа.
 
     ForgotPasswordRequest:
       type: object
@@ -101,10 +105,13 @@ components:
 
     UpdateProfileRequest:
       type: object
+      required: [display_name]
+      additionalProperties: false
       description: 'p3 — единственное редактируемое здесь поле: display_name (только буквы и пробел, p12). Email и пароль — отдельными флоу.'
       properties:
         display_name:
           type: string
+          minLength: 1
           maxLength: 100
           pattern: '^[A-Za-zА-Яа-яЁё ]+$'
           description: "только буквы и пробел, без цифр и знаков (p12). В коде валидировать по Unicode-буквам (\\p{L})."
@@ -118,7 +125,7 @@ components:
         display_name: { type: [string, "null"] }
         avatar_url:
           { type: [string, "null"], description: presigned MinIO URL }
-        role: { type: string, enum: [defectologist, parent, viewer, admin] }
+        role: { type: string, enum: [defectologist, head_defectologist] }
         email_verified: { type: boolean }
         org_id: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
@@ -255,6 +262,7 @@ components:
 
     CreatePackRequest:
       type: object
+      additionalProperties: false
       required: [title, folder_id]
       properties:
         title: { type: string }
@@ -262,6 +270,7 @@ components:
 
     DuplicatePackRequest:
       type: object
+      additionalProperties: false
       properties:
         folder_id: { type: [string, "null"], format: uuid }
 
@@ -289,6 +298,7 @@ components:
 
     UpdatePackRequest:
       type: object
+      additionalProperties: false
       properties:
         title: { type: string }
         folder_id: { type: string, format: uuid }
@@ -300,6 +310,7 @@ components:
 
     MovePackRequest:
       type: object
+      additionalProperties: false
       required: [folder_id]
       properties:
         folder_id: { type: string, format: uuid }
@@ -400,6 +411,7 @@ components:
 
     MediaBatchDeleteRequest:
       type: object
+      additionalProperties: false
       required: [ids]
       properties:
         ids:
@@ -443,6 +455,7 @@ components:
 
     PackBatchDeleteRequest:
       type: object
+      additionalProperties: false
       required: [ids]
       properties:
         ids:
@@ -481,6 +494,7 @@ components:
 
     FolderBatchDeleteRequest:
       type: object
+      additionalProperties: false
       required: [ids]
       properties:
         ids:
@@ -657,6 +671,9 @@ components:
           type: [string, "null"]
           format: uuid
           description: Обложка набора; возвращается только для `type = pack`, может быть `null`
+        is_favorite:
+          type: boolean
+          description: Набор в избранном у текущего пользователя; у папок всегда `false`
         updated_at: { type: string, format: date-time }
 
     CurrentFolder:
@@ -837,6 +854,7 @@ paths:
       responses:
         '204': { description: 'Подтверждён, токен сожжён' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/verify-email/resend:
     post:
@@ -879,6 +897,7 @@ paths:
               schema: { type: string }
               description: HttpOnly-cookie `oauth_state`, живёт 5 минут.
         '404': { description: 'Провайдер не настроен, эндпоинт не поднят' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/yandex/callback:
     get:
@@ -908,6 +927,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { description: 'state не совпал, протух или уже использован' }
         '404': { description: 'Провайдер не настроен, эндпоинт не поднят' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /auth/login:
     post:
@@ -942,7 +962,7 @@ paths:
       tags: [auth]
       operationId: refresh
       summary: Обновить access (ротация + reuse-detection)
-      description: 'Refresh передаётся только в HttpOnly cookie с SameSite=Lax. Повторное использование старого refresh отзывает всю семью токенов.'
+      description: 'Refresh передаётся только в HttpOnly cookie с SameSite=Strict. Повторное использование старого refresh отзывает всю семью токенов.'
       security: [{ refreshCookie: [] }]
       responses:
         '200':
@@ -955,6 +975,7 @@ paths:
             }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/TooMany' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /auth/logout:
     post:
@@ -964,6 +985,7 @@ paths:
       security: [{ refreshCookie: [] }]
       responses:
         '204': { description: 'Refresh-семья удалена, cookie очищен' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /auth/password/forgot:
     post:
@@ -983,6 +1005,7 @@ paths:
       responses:
         '202': { description: Если email есть — письмо (p14) }
         '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /auth/password/reset:
     post:
@@ -1000,6 +1023,7 @@ paths:
       responses:
         '204': { description: 'Пароль обновлён, токен сожжён, сессии отозваны' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /profile/me:
     get:
@@ -1065,7 +1089,11 @@ paths:
             schema:
               type: object
               required: [file]
-              properties: { file: { type: string, format: binary } }
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: png, jpeg или webp до 2 МБ; другой тип — 400, превышение размера — 413.
       responses:
         '200':
           {
@@ -1107,6 +1135,7 @@ paths:
         '204': { description: 'Изменён, прочие сессии отозваны' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Пользователь не найден }
 
   /profile/me/email:
     post:
@@ -1126,6 +1155,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /profile/me/email/confirm:
     post:
@@ -1144,6 +1174,8 @@ paths:
       responses:
         '204': { description: Email обновлён; verify отправлен на новый адрес }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /folders:
     post:
@@ -1156,6 +1188,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [section, kind, name]
               properties:
                 parent_id: { type: [string, "null"], format: uuid }
@@ -1176,6 +1209,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooMany' }
     get:
       tags: [folders]
       summary: Список папок раздела или родителя
@@ -1218,6 +1252,8 @@ paths:
                 { type: array, items: { $ref: '#/components/schemas/Folder' } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { description: Родитель не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /folders/batch-delete:
     post:
@@ -1244,6 +1280,7 @@ paths:
               schema: { $ref: '#/components/schemas/FolderBatchDeleteResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /folders/{id}:
     patch:
@@ -1263,6 +1300,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [name]
               properties: { name: { type: string } }
       responses:
@@ -1276,6 +1314,9 @@ paths:
               },
           }
         '404': { description: Не найдена }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     delete:
       tags: [folders]
       summary: Удалить пустую папку
@@ -1291,6 +1332,9 @@ paths:
         '204': { description: Удалена }
         '404': { description: Не найдена }
         '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /folders/{id}/move:
     post:
@@ -1310,6 +1354,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [parent_id]
               properties:
                 { parent_id: { type: [string, "null"], format: uuid } }
@@ -1325,6 +1370,8 @@ paths:
           }
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /sections/{section}/contents:
     get:
@@ -1353,6 +1400,7 @@ paths:
         - { name: age_from, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Нижняя граница фильтра по полю age включительно: age >= age_from. Можно указывать без age_to. Нельзя сочетать с age" }
         - { name: age_to, in: query, schema: { type: integer, minimum: 3, maximum: 18 }, description: "Верхняя граница фильтра по полю age включительно: age <= age_to. Можно указывать без age_from. Нельзя сочетать с age" }
         - { name: difficulty, in: query, schema: { type: string, enum: [easy, medium, hard] }, description: "Свойство набора: папки отсеиваются" }
+        - { name: is_favorite, in: query, schema: { type: boolean }, description: "Оставить только избранные наборы; папки отсеиваются" }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
@@ -1384,6 +1432,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Папка не найдена или недоступна }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /media:
     get:
@@ -1437,6 +1486,7 @@ paths:
           }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
     post:
       tags: [media]
       summary: Загрузить изображение или аудио в приватное объектное хранилище
@@ -1463,6 +1513,8 @@ paths:
           }
         '400': { $ref: '#/components/responses/BadRequest' }
         '413': { description: Файл или квота превышены }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /media/batch-delete:
     post:
@@ -1483,6 +1535,7 @@ paths:
               schema: { $ref: '#/components/schemas/MediaBatchDeleteResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /media/{id}:
     get:
@@ -1507,6 +1560,9 @@ paths:
               },
           }
         '404': { description: Media не найдено или недоступно }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     delete:
       tags: [media]
       summary: Удалить своё media, если оно больше не используется
@@ -1524,6 +1580,9 @@ paths:
         '404':
           { description: Media не найдено или принадлежит другому пользователю }
         '409': { description: Media ещё используется набором или адаптацией }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /pictures/categories:
     get:
@@ -1541,6 +1600,7 @@ paths:
                 items: { $ref: '#/components/schemas/PictureCategory' }
         '429': { $ref: '#/components/responses/TooMany' }
         '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /pictures/search:
     get:
@@ -1566,6 +1626,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
         '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /pictures/{id}/content:
     get:
@@ -1588,9 +1649,13 @@ paths:
             image/jpeg: { schema: { type: string, format: binary } }
             image/webp: { schema: { type: string, format: binary } }
             image/gif: { schema: { type: string, format: binary } }
+            image/svg+xml:
+              schema: { type: string, format: binary }
+              # Только заглушки: удалённый оригинал и временная недоступность.
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
         '503': { description: 'Pictures Bank недоступен либо источник вернул некорректный/слишком большой объект' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /pictures/{id}/import:
     post:
@@ -1613,6 +1678,7 @@ paths:
               schema: { $ref: '#/components/schemas/PictureReference' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /pictures/category/{categoryId}/list:
     get:
@@ -1648,6 +1714,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooMany' }
         '503': { description: Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs:
     post:
@@ -1671,6 +1738,7 @@ paths:
           }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
     get:
       tags: [packs]
       summary: Найти наборы во всех доступных папках
@@ -1750,6 +1818,7 @@ paths:
                 $ref: '#/components/schemas/PackListPage'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /packs/batch-delete:
     post:
@@ -1776,6 +1845,7 @@ paths:
               schema: { $ref: '#/components/schemas/PackBatchDeleteResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /packs/{id}:
     get:
@@ -1802,6 +1872,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Набор не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
     patch:
       tags: [packs]
       summary: Обновить набор
@@ -1831,6 +1902,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Набор не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
     delete:
       tags: [packs]
       summary: Удалить набор
@@ -1847,6 +1919,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Набор не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /packs/{id}/duplicate:
     post:
@@ -1882,6 +1955,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Исходный набор не найден или недоступен }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /packs/{id}/share:
     post:
@@ -1939,6 +2013,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Задача не найдена или принадлежит другому пользователю }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /packs/{id}/move:
     post:
@@ -1970,6 +2045,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Набор не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /packs/{id}/config:
     put:
@@ -2032,6 +2108,9 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Набор не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '413': { description: Размер config превышает допустимый лимит }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs/{id}/export:
     get:
@@ -2076,6 +2155,8 @@ paths:
         '404': { description: Набор не найден }
         '409': { description: В config есть ссылка на отсутствующий media-файл либо набор не выражается в запрошенном формате }
         '413': { description: Архив превышает 50 MiB }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs/{id}/adaptations:
     get:
@@ -2101,6 +2182,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Набор не найден или недоступен пользователю }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /adaptations/{id}:
     get:
@@ -2124,6 +2206,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Адаптация не найдена или недоступна пользователю }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /adaptations/{id}/config:
     put:
@@ -2154,6 +2237,7 @@ paths:
         '403': { description: Config ссылается на недоступный media-файл }
         '404': { description: Адаптация не найдена или недоступна пользователю }
         '413': { description: Размер config превышает допустимый лимит }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /adaptations/{id}/export:
     get:
@@ -2201,6 +2285,8 @@ paths:
             description: В config адаптации есть ссылка на отсутствующий media-файл,
           }
         '413': { description: Архив превышает 50 MiB }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs/{id}/students:
     post:
@@ -2220,6 +2306,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [student_ids]
               properties:
                 student_ids:
@@ -2240,6 +2327,8 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { description: Один из учеников недоступен }
         '404': { description: Набор не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs/{id}/students/{student_id}:
     delete:
@@ -2262,6 +2351,9 @@ paths:
       responses:
         '204': { description: Назначение снято }
         '404': { description: Назначение не найдено }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs/import:
     post:
@@ -2294,6 +2386,8 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '413':
           { description: 'Архив, распакованные данные или квота превышены' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs/{id}/publication:
     post:
@@ -2313,6 +2407,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [library_folder_id]
               properties: { library_folder_id: { type: string, format: uuid } }
       responses:
@@ -2327,6 +2422,9 @@ paths:
           }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     delete:
       tags: [packs]
       summary: Снять публикацию, не удаляя исходный набор
@@ -2341,6 +2439,9 @@ paths:
       responses:
         '204': { description: Публикация снята или уже отсутствовала }
         '404': { description: Набор не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /packs/{id}/favorite:
     put:
@@ -2354,6 +2455,8 @@ paths:
         '204': { description: Набор в избранном }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Набор не найден или недоступен }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
     delete:
       tags: [packs]
       summary: Убрать набор из избранного
@@ -2364,6 +2467,8 @@ paths:
       responses:
         '204': { description: Набор не в избранном }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /favorites/packs:
     get:
@@ -2385,6 +2490,7 @@ paths:
                 $ref: '#/components/schemas/PackListPage'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /students:
     post:
@@ -2400,6 +2506,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [email, name]
               properties:
                 email:  { type: string, format: email }
@@ -2431,6 +2538,8 @@ paths:
               },
           }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     get:
       tags: [students]
       summary: Ученики текущего дефектолога (с пагинацией и сортировкой)
@@ -2445,9 +2554,10 @@ paths:
           description: Пагинированный список учеников
           content:
             application/json:
-              schema: { items: { $ref: '#/components/schemas/StudentListResponse' } }
+              schema: { $ref: '#/components/schemas/StudentListResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /students/{id}/avatar:
     put:
@@ -2485,6 +2595,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: Ученик не найден }
         '413': { description: Файл слишком большой }
+        '429': { $ref: '#/components/responses/TooMany' }
 
   /students/{id}:
     patch:
@@ -2504,6 +2615,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 email:  { type: string, format: email }
                 name:   { type: string }
@@ -2536,6 +2648,8 @@ paths:
           }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { description: Ученик не найден }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     delete:
       tags: [students]
       summary: Архивировать ученика; с force=true — удалить насовсем
@@ -2566,6 +2680,8 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { description: Ученик не найден }
         '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
 
   /settings:
@@ -2659,10 +2775,18 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [text, voice]
               properties:
-                text:  { type: string, maxLength: 5000 }
-                voice: { type: string }
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 5000
+                  description: Предел задаётся настройкой ttsapi.max_text_len, по умолчанию 5000 символов.
+                voice:
+                  type: string
+                  minLength: 1
+                  description: Идентификатор из `GET /tts/voices`.
       responses:
         '200':
           description: Задача создана
@@ -2673,6 +2797,9 @@ paths:
                 properties:
                   job_id: { type: string, format: uuid }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '413': { description: Тело запроса превышает допустимый лимит }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /tts/{id}:
     get:
@@ -2693,6 +2820,8 @@ paths:
                   media_id: { type: string, format: uuid }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { description: Задача не найдена }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /tts/voices:
     get:
@@ -2714,3 +2843,5 @@ paths:
                       properties:
                         id:   { type: string }
                         name: { type: string }
+        '429': { $ref: '#/components/responses/TooMany' }
+        '401': { $ref: '#/components/responses/Unauthorized' }

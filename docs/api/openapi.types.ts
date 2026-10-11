@@ -152,7 +152,7 @@ export interface paths {
         put?: never;
         /**
          * Обновить access (ротация + reuse-detection)
-         * @description Refresh передаётся только в HttpOnly cookie с SameSite=Lax. Повторное использование старого refresh отзывает всю семью токенов.
+         * @description Refresh передаётся только в HttpOnly cookie с SameSite=Strict. Повторное использование старого refresh отзывает всю семью токенов.
          */
         post: operations["refresh"];
         delete?: never;
@@ -341,6 +341,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Родитель не найден */
                 404: {
                     headers: {
@@ -348,6 +349,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -387,6 +389,7 @@ export interface paths {
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
                 403: components["responses"]["Forbidden"];
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -432,6 +435,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -469,6 +473,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Не найдена */
                 404: {
                     headers: {
@@ -477,6 +483,7 @@ export interface paths {
                     content?: never;
                 };
                 409: components["responses"]["Conflict"];
+                429: components["responses"]["TooMany"];
             };
         };
         options?: never;
@@ -508,6 +515,8 @@ export interface paths {
                         "application/json": components["schemas"]["Folder"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Не найдена */
                 404: {
                     headers: {
@@ -515,6 +524,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         trace?: never;
@@ -557,7 +567,9 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 409: components["responses"]["Conflict"];
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -597,6 +609,8 @@ export interface paths {
                     age_to?: number;
                     /** @description Свойство набора: папки отсеиваются */
                     difficulty?: "easy" | "medium" | "hard";
+                    /** @description Оставить только избранные наборы; папки отсеиваются */
+                    is_favorite?: boolean;
                     limit?: number;
                     offset?: number;
                 };
@@ -633,6 +647,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -681,6 +696,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -714,6 +730,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Файл или квота превышены */
                 413: {
                     headers: {
@@ -721,6 +738,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -766,6 +784,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -802,6 +821,8 @@ export interface paths {
                         "application/json": components["schemas"]["Media"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Media не найдено или недоступно */
                 404: {
                     headers: {
@@ -809,6 +830,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -832,6 +854,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Media не найдено или принадлежит другому пользователю */
                 404: {
                     headers: {
@@ -846,6 +870,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         options?: never;
@@ -882,6 +907,7 @@ export interface paths {
                         "application/json": components["schemas"]["PictureCategory"][];
                     };
                 };
+                401: components["responses"]["Unauthorized"];
                 429: components["responses"]["TooMany"];
                 /** @description Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов */
                 503: {
@@ -932,6 +958,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 429: components["responses"]["TooMany"];
                 /** @description Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов */
                 503: {
@@ -982,9 +1009,11 @@ export interface paths {
                         "image/jpeg": string;
                         "image/webp": string;
                         "image/gif": string;
+                        "image/svg+xml": string;
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 429: components["responses"]["TooMany"];
                 /** @description Pictures Bank недоступен либо источник вернул некорректный/слишком большой объект */
                 503: {
@@ -1037,6 +1066,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 429: components["responses"]["TooMany"];
             };
         };
@@ -1088,6 +1118,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 429: components["responses"]["TooMany"];
                 /** @description Pictures Bank временно недоступен или исчерпан допустимый бюджет запросов */
                 503: {
@@ -1155,6 +1186,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -1183,6 +1215,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -1228,6 +1261,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -1273,6 +1307,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -1305,6 +1340,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         options?: never;
@@ -1343,6 +1379,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         trace?: never;
@@ -1394,6 +1431,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -1517,6 +1555,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -1570,6 +1609,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -1646,6 +1686,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 403: components["responses"]["Forbidden"];
                 /** @description Набор не найден */
                 404: {
@@ -1654,6 +1695,14 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description Размер config превышает допустимый лимит */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                429: components["responses"]["TooMany"];
             };
         };
         post?: never;
@@ -1715,6 +1764,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                401: components["responses"]["Unauthorized"];
                 /** @description Набор не найден */
                 404: {
                     headers: {
@@ -1736,6 +1786,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -1786,6 +1837,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -1836,6 +1888,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -1907,6 +1960,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         post?: never;
@@ -1965,6 +2019,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                401: components["responses"]["Unauthorized"];
                 /** @description Адаптация не найдена или недоступна пользователю */
                 404: {
                     headers: {
@@ -1986,6 +2041,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -2033,6 +2089,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Один из учеников недоступен */
                 403: {
                     headers: {
@@ -2047,6 +2104,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -2085,6 +2143,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Назначение не найдено */
                 404: {
                     headers: {
@@ -2092,6 +2152,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         options?: never;
@@ -2141,6 +2202,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 403: components["responses"]["Forbidden"];
                 /** @description Архив, распакованные данные или квота превышены */
                 413: {
@@ -2149,6 +2211,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -2194,8 +2257,11 @@ export interface paths {
                         "application/json": components["schemas"]["Pack"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 403: components["responses"]["Forbidden"];
                 409: components["responses"]["Conflict"];
+                429: components["responses"]["TooMany"];
             };
         };
         /** Снять публикацию, не удаляя исходный набор */
@@ -2217,6 +2283,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Набор не найден */
                 404: {
                     headers: {
@@ -2224,6 +2292,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         options?: never;
@@ -2261,6 +2330,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
                 /** @description Набор не найден или недоступен */
                 404: {
@@ -2269,6 +2339,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         post?: never;
@@ -2294,7 +2365,9 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         options?: never;
@@ -2336,6 +2409,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -2378,11 +2452,12 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": unknown;
+                        "application/json": components["schemas"]["StudentListResponse"];
                     };
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -2438,6 +2513,8 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -2510,6 +2587,7 @@ export interface paths {
                     content?: never;
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Ученик не найден */
                 404: {
                     headers: {
@@ -2518,6 +2596,7 @@ export interface paths {
                     content?: never;
                 };
                 409: components["responses"]["Conflict"];
+                429: components["responses"]["TooMany"];
             };
         };
         options?: never;
@@ -2574,6 +2653,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Ученик не найден */
                 404: {
                     headers: {
@@ -2581,6 +2661,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         trace?: never;
@@ -2797,7 +2878,9 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description Предел задаётся настройкой ttsapi.max_text_len, по умолчанию 5000 символов. */
                         text: string;
+                        /** @description Идентификатор из `GET /tts/voices`. */
                         voice: string;
                     };
                 };
@@ -2816,6 +2899,15 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                /** @description Тело запроса превышает допустимый лимит */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                429: components["responses"]["TooMany"];
             };
         };
         delete?: never;
@@ -2858,6 +2950,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
                 /** @description Задача не найдена */
                 404: {
                     headers: {
@@ -2865,6 +2958,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -2906,6 +3000,8 @@ export interface paths {
                         };
                     };
                 };
+                401: components["responses"]["Unauthorized"];
+                429: components["responses"]["TooMany"];
             };
         };
         put?: never;
@@ -2931,15 +3027,9 @@ export interface components {
                 };
             };
         };
+        /** @description Срок жизни токена — в его claim `exp`. */
         TokenResponse: {
             access_token: string;
-            /**
-             * @default Bearer
-             * @enum {string}
-             */
-            token_type: "Bearer";
-            /** @example 900 */
-            expires_in: number;
         };
         /** @description p18 — имя, email и пароль. Повтор пароля проверяет фронт. */
         RegisterRequest: {
@@ -2957,6 +3047,7 @@ export interface components {
             password: string;
         };
         VerifyEmailRequest: {
+            /** @description Токен из письма — ровно 43 символа. */
             token: string;
         };
         ForgotPasswordRequest: {
@@ -2985,7 +3076,7 @@ export interface components {
         /** @description p3 — единственное редактируемое здесь поле: display_name (только буквы и пробел, p12). Email и пароль — отдельными флоу. */
         UpdateProfileRequest: {
             /** @description только буквы и пробел, без цифр и знаков (p12). В коде валидировать по Unicode-буквам (\p{L}). */
-            display_name?: string;
+            display_name: string;
         };
         Profile: {
             /** Format: uuid */
@@ -2996,7 +3087,7 @@ export interface components {
             /** @description presigned MinIO URL */
             avatar_url?: string | null;
             /** @enum {string} */
-            role: "defectologist" | "parent" | "viewer" | "admin";
+            role: "defectologist" | "head_defectologist";
             email_verified: boolean;
             /** Format: uuid */
             org_id?: string | null;
@@ -3419,6 +3510,8 @@ export interface components {
              * @description Обложка набора; возвращается только для `type = pack`, может быть `null`
              */
             cover_source_picture_id?: string | null;
+            /** @description Набор в избранном у текущего пользователя; у папок всегда `false` */
+            is_favorite?: boolean;
             /** Format: date-time */
             updated_at: string;
         };
@@ -3581,6 +3674,7 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
+            429: components["responses"]["TooMany"];
         };
     };
     resendVerifyEmail: {
@@ -3636,6 +3730,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["TooMany"];
         };
     };
     yandexCallback: {
@@ -3675,6 +3770,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["TooMany"];
         };
     };
     login: {
@@ -3726,6 +3822,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             429: components["responses"]["TooMany"];
         };
     };
@@ -3745,6 +3842,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            403: components["responses"]["Forbidden"];
         };
     };
     forgotPassword: {
@@ -3767,6 +3865,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["BadRequest"];
             429: components["responses"]["TooMany"];
         };
     };
@@ -3791,6 +3890,7 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
+            429: components["responses"]["TooMany"];
         };
     };
     getProfile: {
@@ -3869,7 +3969,10 @@ export interface operations {
         requestBody: {
             content: {
                 "multipart/form-data": {
-                    /** Format: binary */
+                    /**
+                     * Format: binary
+                     * @description png, jpeg или webp до 2 МБ; другой тип — 400, превышение размера — 413.
+                     */
                     file: string;
                 };
             };
@@ -3936,6 +4039,13 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            /** @description Пользователь не найден */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     requestEmailChange: {
@@ -3961,6 +4071,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["Conflict"];
+            429: components["responses"]["TooMany"];
         };
     };
     confirmEmailChange: {
@@ -3984,6 +4095,8 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooMany"];
         };
     };
     replaceStudentAvatar: {
@@ -4029,6 +4142,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["TooMany"];
         };
     };
 }

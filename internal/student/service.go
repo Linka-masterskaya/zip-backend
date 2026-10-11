@@ -180,7 +180,7 @@ func (s *Service) Update(
 
 func (s *Service) prepareUpdate(input UpdateInput) (storedUpdate, error) {
 	result := storedUpdate{
-		Name: input.Name, Age: input.Age, Status: input.Status, LastLessonAt: input.LastLessonAt,
+		Name: input.Name, Age: input.Age, Status: input.Status, LastLessonAt: timeOf(input.LastLessonAt),
 		AvatarMediaID: input.AvatarMediaID.Value, AvatarMediaIDSet: input.AvatarMediaID.Set,
 	}
 	trimUpdate(&input, &result)
@@ -346,7 +346,7 @@ func (s *Service) decode(ctx context.Context, stored *storedStudent) (*Student, 
 	return &Student{
 		ID: stored.ID, Email: string(email), EmailVerified: stored.EmailVerified,
 		Name: stored.Name, Age: stored.Age, Status: stored.Status,
-		CardsShift: &cardsShift, LastLessonAt: stored.LastLessonAt,
+		CardsShift: &cardsShift, LastLessonAt: dateOf(stored.LastLessonAt),
 		AvatarMediaID: stored.AvatarMediaID, AvatarURL: s.avatarURL(ctx, stored),
 		CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt,
 	}, nil
