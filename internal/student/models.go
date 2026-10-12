@@ -4,10 +4,52 @@ package student
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// dateLayout — формат даты занятия в JSON. Колонка last_lesson_at имеет тип
+// DATE, времени в ней нет, поэтому и наружу поле ходит без времени.
+const dateLayout = time.DateOnly
+
+// Date — календарная дата. Обычный time.Time сериализуется как RFC3339 и
+// добавлял бы к каждой дате занятия бессмысленные 00:00:00Z.
+type Date struct {
+	time.Time
+}
+
+func (d Date) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.Format(dateLayout))
+}
+
+func (d *Date) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	parsed, err := time.Parse(dateLayout, raw)
+	if err != nil {
+		return errors.New("date must be in YYYY-MM-DD format")
+	}
+	d.Time = parsed
+	return nil
+}
+
+func dateOf(value *time.Time) *Date {
+	if value == nil {
+		return nil
+	}
+	return &Date{Time: *value}
+}
+
+func timeOf(value *Date) *time.Time {
+	if value == nil {
+		return nil
+	}
+	return &value.Time
+}
 
 type Student struct {
 	ID            uuid.UUID  `json:"id"`
@@ -17,7 +59,7 @@ type Student struct {
 	Age           *int       `json:"age"`
 	Status        string     `json:"status"`
 	CardsShift    *string    `json:"cards_shift"`
-	LastLessonAt  *time.Time `json:"last_lesson_at"`
+	LastLessonAt  *Date      `json:"last_lesson_at"`
 	AvatarMediaID *uuid.UUID `json:"avatar_media_id"`
 	// AvatarURL — presigned-ссылка, выданная на это чтение. Хранить её
 	// нельзя: она живёт 15 минут, поэтому в базе лежит avatar_media_id.
@@ -55,11 +97,11 @@ type CreateInput struct {
 }
 
 type UpdateInput struct {
-	Email        *string    `json:"email"`
-	Name         *string    `json:"name"`
-	Age          *int       `json:"age"`
-	Status       *string    `json:"status"`
-	LastLessonAt *time.Time `json:"last_lesson_at"`
+	Email        *string `json:"email"`
+	Name         *string `json:"name"`
+	Age          *int    `json:"age"`
+	Status       *string `json:"status"`
+	LastLessonAt *Date   `json:"last_lesson_at"`
 	// CardsShift: отсутствие поля не трогает раскладку, null возвращает
 	// её к значению по умолчанию.
 	CardsShift nullableField[string] `json:"cards_shift"`
