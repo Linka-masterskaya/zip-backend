@@ -732,10 +732,10 @@ func (s *ShareService) sendShareJobEmail(
 		hasCover := false
 
 		if accessiblePack.CoverSourcePictureID != nil && s.pictures != nil {
-			coverData, coverMIME, err := s.pictures(ctx, *accessiblePack.CoverSourcePictureID)
-			if err == nil && len(coverData) > 0 {
-				coverImage = coverData
-				coverMIME = coverMIME
+			imgData, imgMIME, err := s.pictures(ctx, *accessiblePack.CoverSourcePictureID)
+			if err == nil && len(imgData) > 0 {
+				coverImage = imgData
+				coverMIME = imgMIME
 				hasCover = true
 			}
 		}

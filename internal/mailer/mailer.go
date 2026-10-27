@@ -210,14 +210,10 @@ func (s *SMTPSender) Send(
 	msg.Subject(s.getSubject(tmpl))
 	msg.SetBodyString(gomail.TypeTextHTML, html.String())
 
-	if len(s.logoBytes) > 0 {
-		msg.EmbedReader("logo.png", bytes.NewReader(s.logoBytes), gomail.WithFileContentID("logo"))
-	}
+	s.embedLogo(msg)
 
-	if data.HasCover && len(data.CoverImage) > 0 {
-		msg.EmbedReader("pack_cover", bytes.NewReader(data.CoverImage),
-			gomail.WithFileContentType(gomail.ContentType(data.CoverImageMIME)),
-			gomail.WithFileContentID("pack_cover"))
+	if data.HasCover {
+		s.embedCover(msg, data.CoverImage, data.CoverImageMIME)
 	}
 
 	if err := attachFiles(msg, data.Attachments); err != nil {
@@ -248,6 +244,30 @@ func (s *SMTPSender) Send(
 	}
 
 	return nil
+}
+
+// embedLogo safely embeds a logo into the email using a Content-ID.
+func (s *SMTPSender) embedLogo(msg *gomail.Msg) {
+	if len(s.logoBytes) == 0 {
+		return
+	}
+	if err := msg.EmbedReader("logo.png", bytes.NewReader(s.logoBytes), gomail.WithFileContentID("logo")); err != nil {
+		slog.Warn("failed to embed logo", "error", err)
+	}
+}
+
+// embedCover safely embeds a cover into the email using a Content-ID.
+func (s *SMTPSender) embedCover(msg *gomail.Msg, data []byte, mimeType string) {
+	if len(data) == 0 {
+		return
+	}
+	opts := []gomail.FileOption{gomail.WithFileContentID("pack_cover")}
+	if mimeType != "" {
+		opts = append(opts, gomail.WithFileContentType(gomail.ContentType(mimeType)))
+	}
+	if err := msg.EmbedReader("cover.png", bytes.NewReader(data), opts...); err != nil {
+		slog.Warn("failed to embed pack cover", "error", err)
+	}
 }
 
 func attachFiles(msg *gomail.Msg, attachments []Attachment) error {

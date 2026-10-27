@@ -102,8 +102,8 @@ func GetMailpitConfig() config.SMTPConfig {
 		Host:       "localhost",
 		Port:       1025,
 		From:       "noreply@linka.local",
-		Username:   "admin",
-		Password:   "smtppass",
+		Username:   "",
+		Password:   "",
 		Timeout:    10 * time.Second,
 		TLS:        false,
 		DailyLimit: 300,
@@ -329,7 +329,6 @@ func TestMailpit_ConcurrentSends(t *testing.T) {
 					Email:    "test@example.com",
 				},
 			)
-
 			if err != nil {
 				errors <- err
 			}
