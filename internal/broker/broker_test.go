@@ -30,7 +30,10 @@ func startTestNATS(t *testing.T) string {
 		t.Fatal("nats server not ready")
 	}
 
-	t.Cleanup(s.Shutdown)
+	t.Cleanup(func() {
+		s.Shutdown()
+		s.WaitForShutdown()
+	})
 	return s.ClientURL()
 }
 
