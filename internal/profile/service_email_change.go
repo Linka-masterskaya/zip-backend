@@ -192,9 +192,15 @@ func (s *Service) SendEmailChangeConfirmation(ctx context.Context, userID uuid.U
 		return fmt.Errorf("parse payload: %w", err)
 	}
 
+	userName := ""
+	if user.DisplayName != nil {
+		userName = *user.DisplayName
+	}
+
 	emailData := mailer.EmailData{
 		Token:    token.Token,
 		Username: user.Username,
+		Name:     userName,
 		Email:    user.Email,
 		NewEmail: payload.NewEmail,
 	}
@@ -352,9 +358,15 @@ func (s *Service) sendVerificationEmail(ctx context.Context, userID uuid.UUID, n
 	}
 	user.Email = email
 
+	userName := ""
+	if user.DisplayName != nil {
+		userName = *user.DisplayName
+	}
+
 	verifyData := mailer.EmailData{
 		Token:    verifyToken.Token,
 		Username: user.Username,
+		Name:     userName,
 		Email:    newEmail,
 	}
 

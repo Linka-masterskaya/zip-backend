@@ -1,6 +1,7 @@
 package mailer
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"fmt"
@@ -27,7 +28,7 @@ var subjects = map[Template]string{
 	PackShare:     "Набор Linka для вас",
 }
 
-//go:embed templates/*.html
+//go:embed templates/*.html templates/assets/*
 var templatesFS embed.FS
 
 // SMTPSender — implementing email sending via SMTP.
@@ -37,17 +38,26 @@ type SMTPSender struct {
 	frontendURL string
 	templates   map[Template]*template.Template
 	cache       *cache.Client
+	logoBytes   []byte
 }
 
 func newClient(cfg config.SMTPConfig) (*gomail.Client, error) {
 	var opts []gomail.Option
+	// Базовые настройки для всех
 	opts = append(opts,
 		gomail.WithPort(cfg.Port),
-		gomail.WithSMTPAuth(gomail.SMTPAuthPlain),
-		gomail.WithUsername(cfg.Username),
-		gomail.WithPassword(cfg.Password),
 		gomail.WithTimeout(cfg.Timeout),
 	)
+
+	// Добавляем авторизацию ТОЛЬКО если указан логин (для продакшена)
+	// Для локального Mailpit (где Username = "") эти опции не добавятся
+	if cfg.Username != "" {
+		opts = append(opts,
+			gomail.WithSMTPAuth(gomail.SMTPAuthPlain),
+			gomail.WithUsername(cfg.Username),
+			gomail.WithPassword(cfg.Password),
+		)
+	}
 
 	if cfg.TLS {
 		switch cfg.Port {
@@ -101,6 +111,13 @@ func NewSMTPSender(cfg config.SMTPConfig, frontendURL string, cacheClient *cache
 
 	if err := s.loadTemplates(); err != nil {
 		return nil, fmt.Errorf("load templates: %w", err)
+	}
+
+	logoBytes, err := templatesFS.ReadFile("templates/assets/logo.png")
+	if err != nil {
+		slog.Warn("Failed to load logo.png, it will not be embedded in emails", "error", err)
+	} else {
+		s.logoBytes = logoBytes
 	}
 
 	if cacheClient != nil {
@@ -162,12 +179,18 @@ func (s *SMTPSender) Send(
 	}
 
 	templateData := map[string]any{
-		"Token":       data.Token,
-		"Username":    data.Username,
-		"Email":       data.Email,
-		"NewEmail":    data.NewEmail,
-		"PackTitle":   data.PackTitle,
-		"FrontendURL": s.frontendURL,
+		"Token":          data.Token,
+		"Username":       data.Username,
+		"Name":           data.Name,
+		"Email":          data.Email,
+		"NewEmail":       data.NewEmail,
+		"SenderName":     data.SenderName,
+		"StudentName":    data.StudentName,
+		"PackTitle":      data.PackTitle,
+		"PackAgeRange":   data.PackAgeRange,
+		"PackDifficulty": data.PackDifficulty,
+		"HasCover":       data.HasCover,
+		"FrontendURL":    s.frontendURL,
 	}
 
 	var html strings.Builder
@@ -186,6 +209,16 @@ func (s *SMTPSender) Send(
 
 	msg.Subject(s.getSubject(tmpl))
 	msg.SetBodyString(gomail.TypeTextHTML, html.String())
+
+	if len(s.logoBytes) > 0 {
+		msg.EmbedReader("logo.png", bytes.NewReader(s.logoBytes), gomail.WithFileContentID("logo"))
+	}
+
+	if data.HasCover && len(data.CoverImage) > 0 {
+		msg.EmbedReader("pack_cover", bytes.NewReader(data.CoverImage),
+			gomail.WithFileContentType(gomail.ContentType(data.CoverImageMIME)),
+			gomail.WithFileContentID("pack_cover"))
+	}
 
 	if err := attachFiles(msg, data.Attachments); err != nil {
 		metrics.ObserveEmailSend(string(tmpl), "error", time.Since(start).Seconds())

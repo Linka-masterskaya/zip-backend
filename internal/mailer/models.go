@@ -32,10 +32,18 @@ type Attachment struct {
 
 // EmailData - email data.
 type EmailData struct {
-	Token       string
-	Username    string
-	Email       string
-	NewEmail    string
-	PackTitle   string
-	Attachments []Attachment
+	Token          string
+	Username       string
+	Name           string
+	SenderName     string
+	StudentName    string
+	PackAgeRange   string
+	PackDifficulty int
+	HasCover       bool
+	CoverImage     []byte
+	CoverImageMIME string
+	Email          string
+	NewEmail       string
+	PackTitle      string
+	Attachments    []Attachment
 }
