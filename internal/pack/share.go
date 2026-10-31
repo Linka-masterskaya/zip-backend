@@ -112,6 +112,33 @@ type redisShareQuota struct {
 	now        func() time.Time
 }
 
+func formatAgeRange(age *int) string {
+	if age == nil {
+		return ""
+	}
+	endAge := *age + 2
+	if endAge > 18 {
+		endAge = 18
+	}
+	return fmt.Sprintf("%d-%d лет", *age, endAge)
+}
+
+func difficultyToStars(difficulty *string) int {
+	if difficulty == nil {
+		return 0
+	}
+	switch *difficulty {
+	case "easy":
+		return 1
+	case "medium":
+		return 2
+	case "hard":
+		return 3
+	default:
+		return 0
+	}
+}
+
 func newRedisShareQuota(c *cache.Client, sendLimit, bytesLimit int64) shareQuota {
 	if c == nil {
 		return nil
@@ -172,6 +199,7 @@ type ShareService struct {
 	mailer   shareMailer
 	quota    shareQuota
 	jobs     shareJobRepository
+	pictures PictureLoader
 	cfg      ShareConfig
 
 	workersWG sync.WaitGroup
@@ -191,8 +219,9 @@ func NewShareService(
 	content shareContentService,
 	students shareStudentService,
 	mailerSender shareMailer,
+	pictures ...PictureLoader,
 ) *ShareService {
-	return NewShareServiceWithConfig(packs, content, students, mailerSender, nil, ShareConfig{})
+	return NewShareServiceWithConfig(packs, content, students, mailerSender, nil, ShareConfig{}, pictures...)
 }
 
 // NewShareServiceWithConfig keeps unit-level callers simple by using the same
@@ -205,6 +234,7 @@ func NewShareServiceWithConfig(
 	mailerSender shareMailer,
 	cacheClient *cache.Client,
 	cfg ShareConfig,
+	pictures ...PictureLoader,
 ) *ShareService {
 	return NewShareServiceWithOutbox(
 		packs,
@@ -214,6 +244,7 @@ func NewShareServiceWithConfig(
 		newMemoryShareJobRepository(),
 		cacheClient,
 		cfg,
+		pictures...,
 	)
 }
 
@@ -227,6 +258,7 @@ func NewShareServiceWithOutbox(
 	jobs shareJobRepository,
 	cacheClient *cache.Client,
 	cfg ShareConfig,
+	pictures ...PictureLoader,
 ) *ShareService {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 2
@@ -257,6 +289,12 @@ func NewShareServiceWithOutbox(
 	}
 
 	workerCtx, cancel := context.WithCancel(context.Background())
+
+	var picLoader PictureLoader
+	if len(pictures) > 0 {
+		picLoader = pictures[0]
+	}
+
 	s := &ShareService{
 		packs:     packs,
 		content:   content,
@@ -264,6 +302,7 @@ func NewShareServiceWithOutbox(
 		mailer:    mailerSender,
 		quota:     newRedisShareQuota(cacheClient, cfg.DailySendsPerUser, cfg.DailyBytesPerUser),
 		jobs:      jobs,
+		pictures:  picLoader,
 		cfg:       cfg,
 		workerCtx: workerCtx,
 		cancel:    cancel,
@@ -685,11 +724,33 @@ func (s *ShareService) sendShareJobEmail(
 		if _, sendErr = seeker.Seek(0, io.SeekStart); sendErr != nil {
 			return sendErr
 		}
+		packAgeRange := formatAgeRange(accessiblePack.Age)
+		packDifficultyStars := difficultyToStars(accessiblePack.Difficulty)
 
+		var coverImage []byte
+		var coverMIME string
+		hasCover := false
+
+		if accessiblePack.CoverSourcePictureID != nil && s.pictures != nil {
+			imgData, imgMIME, err := s.pictures(ctx, *accessiblePack.CoverSourcePictureID)
+			if err == nil && len(imgData) > 0 {
+				coverImage = imgData
+				coverMIME = imgMIME
+				hasCover = true
+			}
+		}
 		mailCtx, mailCancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
 		sendErr = s.mailer.Send(mailCtx, target.Email, mailer.PackShare, mailer.EmailData{
-			Username:  target.Name,
-			PackTitle: accessiblePack.Title,
+			Username:       target.Name,
+			Name:           target.Name,
+			SenderName:     "Команда Linka",
+			StudentName:    target.Name,
+			PackTitle:      accessiblePack.Title,
+			PackAgeRange:   packAgeRange,
+			PackDifficulty: packDifficultyStars,
+			HasCover:       hasCover,
+			CoverImage:     coverImage,
+			CoverImageMIME: coverMIME,
 			Attachments: []mailer.Attachment{{
 				Filename:    archive.Filename,
 				ContentType: "application/vnd.linka+zip",

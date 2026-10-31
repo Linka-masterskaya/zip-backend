@@ -88,21 +88,22 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 	}
 	picturesService := picturebank.NewService(picturesSource)
 
+	pictureLoader := func(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
+		image, loadErr := picturesService.Image(ctx, id.String())
+		if errors.Is(loadErr, picturebank.ErrPictureNotFound) {
+			return nil, "", pack.ErrMissingMediaReference
+		}
+		if loadErr != nil {
+			return nil, "", loadErr
+		}
+		return image.Data, image.ContentType, nil
+	}
 	contentService := pack.NewContentService(
 		packRepo,
 		in.storage,
 		mediaService,
 		packService,
-		func(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
-			image, loadErr := picturesService.Image(ctx, id.String())
-			if errors.Is(loadErr, picturebank.ErrPictureNotFound) {
-				return nil, "", pack.ErrMissingMediaReference
-			}
-			if loadErr != nil {
-				return nil, "", loadErr
-			}
-			return image.Data, image.ContentType, nil
-		},
+		pictureLoader,
 	)
 	shareService := pack.NewShareServiceWithOutbox(
 		packService,
@@ -123,6 +124,7 @@ func buildModules(in *infra, closer *Closer) (*modules, error) {
 			SendTimeout:        cfg.PackShare.SendTimeout,
 			RetryBackoff:       cfg.PackShare.RetryBackoff,
 		},
+		pictureLoader,
 	)
 	authCfg := auth.Config{
 		JWTSecret:                cfg.JWT.Secret,
