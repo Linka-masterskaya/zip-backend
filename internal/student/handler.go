@@ -3,10 +3,12 @@ package student
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -128,7 +130,7 @@ func forceFlag(r *http.Request) (bool, error) {
 func pathID(r *http.Request) (uuid.UUID, error) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil || id == uuid.Nil {
-		return uuid.Nil, apperr.ErrBadRequest
+		return uuid.Nil, apperr.ErrBadRequest.WithMessage("student id must be a valid UUID")
 	}
 	return id, nil
 }
@@ -145,10 +147,19 @@ func decode(r *http.Request, target any) error {
 }
 
 func decodeError(err error) error {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		// Field пуст, если ошибку вернул собственный UnmarshalJSON поля.
+		field := typeErr.Field
+		if field == "" {
+			field = "value"
+		}
+		return apperr.ErrBadRequest.WithMessage(field + " must be " + jsonKind(typeErr.Type))
+	}
 	const unknownFieldPrefix = "json: unknown field "
 	message := err.Error()
 	if !strings.HasPrefix(message, unknownFieldPrefix) {
-		return apperr.ErrBadRequest
+		return apperr.ErrBadRequest.WithMessage("request body must be valid JSON")
 	}
 	field := strings.Trim(strings.TrimPrefix(message, unknownFieldPrefix), `"`)
 	// avatar_url приходит чаще прочих: ссылка presigned и только читается,
@@ -159,6 +170,25 @@ func decodeError(err error) error {
 				"or set avatar_media_id")
 	}
 	return apperr.ErrBadRequest.WithMessage("unknown field " + field)
+}
+
+func jsonKind(t reflect.Type) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	//nolint:exhaustive // прочие виды описывает default
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.Bool:
+		return "a boolean"
+	case reflect.String:
+		return "a string"
+	default:
+		return "of type " + t.String()
+	}
 }
 
 func respond(w http.ResponseWriter, status int, payload any) error {
