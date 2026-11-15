@@ -650,13 +650,21 @@ func TestRepositoryAssignmentsAreSnapshotsAndLeaveOrphansForScanner(t *testing.T
 			"elements":[{"id":"image","kind":"image","media_id":"` + mediaID.String() + `"}]
 		}]
 	}`)
+	storedConfig := `{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":2},
+		"blocks":[{
+			"id":"block","type":"grid",
+			"elements":[{"id":"image","kind":"normal","image":{"media_id":"` + mediaID.String() + `"}}]
+		}]
+	}`
 	service := NewContentService(repo, nil, nil, nil)
 	updated, err := service.UpdateAdaptationConfig(
 		packContext(ownerID), assigned[0].ID, updatedConfig,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, assigned[0].ID, updated.ID)
-	assert.JSONEq(t, string(updatedConfig), string(updated.Config))
+	assert.JSONEq(t, storedConfig, string(updated.Config))
 
 	var adaptationUsageCount int
 	require.NoError(t, pool.QueryRow(t.Context(), `
@@ -669,7 +677,7 @@ func TestRepositoryAssignmentsAreSnapshotsAndLeaveOrphansForScanner(t *testing.T
 	assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
 	unchanged, err := repo.GetAdaptation(t.Context(), ownerID, assigned[0].ID)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(updatedConfig), string(unchanged.Config))
+	assert.JSONEq(t, storedConfig, string(unchanged.Config))
 
 	_, foreignID, _ := seedPackOwner(t, pool, "foreign assignment org")
 	_, err = repo.GetAdaptation(t.Context(), foreignID, assigned[0].ID)
