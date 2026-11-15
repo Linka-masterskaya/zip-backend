@@ -87,6 +87,10 @@ func (s *ContentService) SaveConfig(
 	if err != nil {
 		return nil, err
 	}
+	config, err = linka.NormalizeConfig(config)
+	if err != nil {
+		return nil, apperr.ErrBadRequest.WithMessage("invalid Linka 2.0 config")
+	}
 	result, err := s.repo.SaveConfig(ctx, userID, packID, config, mediaIDs)
 	return result, contentError(err)
 }
@@ -157,6 +161,10 @@ func (s *ContentService) UpdateAdaptationConfig(
 	mediaIDs, err := validateAndMediaIDs(ctx, config, false)
 	if err != nil {
 		return nil, err
+	}
+	config, err = linka.NormalizeConfig(config)
+	if err != nil {
+		return nil, apperr.ErrBadRequest.WithMessage("invalid Linka 2.0 config")
 	}
 	result, err := s.repo.UpdateAdaptationConfig(ctx, userID, adaptationID, config, mediaIDs)
 	return result, contentError(err)

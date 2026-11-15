@@ -3,19 +3,14 @@ package profile
 import (
 	"context"
 	"log/slog"
-	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
+	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 )
-
-const maxDisplayNameRunes = 100
-
-var displayNamePattern = regexp.MustCompile(`^[\p{L} ]+$`)
 
 // GetProfile retrieves the full user profile.
 func (s *Service) GetProfile(ctx context.Context, userID uuid.UUID) (*Response, error) {
@@ -75,18 +70,9 @@ func (s *Service) UpdateDisplayName(ctx context.Context, userID uuid.UUID, displ
 }
 
 func normalizeDisplayName(displayName string) string {
-	return strings.Trim(displayName, " ")
+	return strings.TrimSpace(displayName)
 }
 
 func validateDisplayName(displayName string) error {
-	if displayName == "" {
-		return apperr.ErrBadRequest.WithMessage("display_name must not be empty")
-	}
-	if utf8.RuneCountInString(displayName) > maxDisplayNameRunes {
-		return apperr.ErrBadRequest.WithMessage("display_name must not exceed 100 characters")
-	}
-	if !displayNamePattern.MatchString(displayName) {
-		return apperr.ErrBadRequest.WithMessage("display_name must contain only letters and spaces")
-	}
-	return nil
+	return auth.ValidateName("display_name", displayName)
 }

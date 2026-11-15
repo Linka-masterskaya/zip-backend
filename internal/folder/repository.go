@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -734,7 +735,7 @@ func contentsBaseQuery(userID, orgID uuid.UUID, input ContentsInput) (string, []
 func appendContentsFilters(query string, args []any, input ContentsInput) (string, []any) {
 	first := len(args) + 1
 	filters := fmt.Sprintf(`
-		WHERE ($%d::text = '' OR name ILIKE '%%' || $%d::text || '%%')
+		WHERE ($%d::text = '' OR name ILIKE '%%' || $%d::text || '%%' ESCAPE E'\\')
 		  AND ($%d::text = '' OR type = $%d::text)
 		  AND ($%d::int IS NULL OR age = $%d::int)
 		  AND ($%d::int IS NULL OR age >= $%d::int)
@@ -749,7 +750,7 @@ func appendContentsFilters(query string, args []any, input ContentsInput) (strin
 		first+5, first+5,
 		first+6, first+6)
 
-	args = append(args, input.Query, input.Type, input.Age, input.AgeFrom, input.AgeTo,
+	args = append(args, db.EscapeLike(input.Query), input.Type, input.Age, input.AgeFrom, input.AgeTo,
 		input.Difficulty, input.IsFavorite)
 	return query + filters, args
 }

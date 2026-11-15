@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -204,7 +205,7 @@ func (r *Repository) list(
 		ctx,
 		listPacksQuery(input.SortBy, input.Order),
 		userID,
-		input.Query,
+		db.EscapeLike(input.Query),
 		input.Age,
 		input.AgeFrom,
 		input.AgeTo,
@@ -247,7 +248,7 @@ func (r *Repository) count(
 		ctx,
 		countPacksQuery,
 		userID,
-		input.Query,
+		db.EscapeLike(input.Query),
 		input.Age,
 		input.AgeFrom,
 		input.AgeTo,

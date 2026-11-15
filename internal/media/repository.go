@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -156,7 +157,7 @@ func listMedia(ctx context.Context, tx pgx.Tx, q ListQuery) ([]ListItem, error) 
 		cursorID = q.Cursor.ID
 	}
 	rows, err := tx.Query(ctx, listMediaQuery,
-		q.OrgID, q.Query, q.MediaType, cursorCreatedAt, cursorID, q.Unused, q.Limit)
+		q.OrgID, db.EscapeLike(q.Query), q.MediaType, cursorCreatedAt, cursorID, q.Unused, q.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("media repository list: %w", err)
 	}
@@ -182,7 +183,7 @@ func listMedia(ctx context.Context, tx pgx.Tx, q ListQuery) ([]ListItem, error) 
 
 func countMedia(ctx context.Context, tx pgx.Tx, q ListQuery) (int, error) {
 	var total int
-	err := tx.QueryRow(ctx, countMediaQuery, q.OrgID, q.Query, q.MediaType, q.Unused).Scan(&total)
+	err := tx.QueryRow(ctx, countMediaQuery, q.OrgID, db.EscapeLike(q.Query), q.MediaType, q.Unused).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("media repository count: %w", err)
 	}

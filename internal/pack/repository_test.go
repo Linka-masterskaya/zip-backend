@@ -312,6 +312,40 @@ func TestRepositoryListSearchesAndFiltersAccessiblePacks(t *testing.T) {
 	assert.Equal(t, studentPack.ID, students[0].ID)
 }
 
+func TestRepositoryListTreatsLikeWildcardsLiterally(t *testing.T) {
+	pool := newPackTestDB(t)
+	repo := NewRepository(pool)
+	_, userID, folderID := seedPackOwner(t, pool, "wildcard org")
+	config := []byte(`{"metadata":{"version":"2.0"},"settings":{"columns":1,"rows":1},"blocks":[]}`)
+
+	percent := createFilteredPack(t, repo, userID, folderID, "100% успех", 5, "easy", config)
+	underscore := createFilteredPack(t, repo, userID, folderID, "_Сказка_", 5, "easy", config)
+	createFilteredPack(t, repo, userID, folderID, "Обычный набор", 5, "easy", config)
+
+	cases := []struct {
+		query string
+		want  []uuid.UUID
+	}{
+		{query: "%", want: []uuid.UUID{percent.ID}},
+		{query: "_", want: []uuid.UUID{underscore.ID}},
+		{query: "100% успех", want: []uuid.UUID{percent.ID}},
+		{query: "100_______", want: nil},
+		{query: `\`, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.query, func(t *testing.T) {
+			listed, total, err := repo.ListWithTotal(t.Context(), userID, ListInput{Query: tc.query, Limit: 50})
+			require.NoError(t, err)
+			ids := make([]uuid.UUID, 0, len(listed))
+			for _, item := range listed {
+				ids = append(ids, item.ID)
+			}
+			assert.ElementsMatch(t, tc.want, ids)
+			assert.Equal(t, len(tc.want), total)
+		})
+	}
+}
+
 func TestRepositoryListReturnsEveryAccessiblePlacement(t *testing.T) {
 	pool := newPackTestDB(t)
 	repo := NewRepository(pool)
@@ -616,13 +650,21 @@ func TestRepositoryAssignmentsAreSnapshotsAndLeaveOrphansForScanner(t *testing.T
 			"elements":[{"id":"image","kind":"image","media_id":"` + mediaID.String() + `"}]
 		}]
 	}`)
+	storedConfig := `{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":2},
+		"blocks":[{
+			"id":"block","type":"grid",
+			"elements":[{"id":"image","kind":"normal","image":{"media_id":"` + mediaID.String() + `"}}]
+		}]
+	}`
 	service := NewContentService(repo, nil, nil, nil)
 	updated, err := service.UpdateAdaptationConfig(
 		packContext(ownerID), assigned[0].ID, updatedConfig,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, assigned[0].ID, updated.ID)
-	assert.JSONEq(t, string(updatedConfig), string(updated.Config))
+	assert.JSONEq(t, storedConfig, string(updated.Config))
 
 	var adaptationUsageCount int
 	require.NoError(t, pool.QueryRow(t.Context(), `
@@ -635,7 +677,7 @@ func TestRepositoryAssignmentsAreSnapshotsAndLeaveOrphansForScanner(t *testing.T
 	assertAppErrorStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
 	unchanged, err := repo.GetAdaptation(t.Context(), ownerID, assigned[0].ID)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(updatedConfig), string(unchanged.Config))
+	assert.JSONEq(t, storedConfig, string(unchanged.Config))
 
 	_, foreignID, _ := seedPackOwner(t, pool, "foreign assignment org")
 	_, err = repo.GetAdaptation(t.Context(), foreignID, assigned[0].ID)

@@ -9,13 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/mail"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/auth"
 	"github.com/Linka-masterskaya/zip-backend/internal/logger"
 	"github.com/Linka-masterskaya/zip-backend/internal/mailer"
 )
@@ -433,8 +433,7 @@ func ValidateEmail(email string) error {
 		return fmt.Errorf("%w: email is empty", ErrEmailInvalid)
 	}
 
-	_, err := mail.ParseAddress(email)
-	if err != nil {
+	if err := auth.ValidateNewEmail(email); err != nil {
 		return fmt.Errorf("%w: %s", ErrEmailInvalid, err.Error())
 	}
 

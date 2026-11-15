@@ -258,3 +258,30 @@ func TestUpdateExplainsReadOnlyAvatarURL(t *testing.T) {
 	assert.Contains(t, appErr.Message, "PUT /students/{id}/avatar")
 	assert.Contains(t, appErr.Message, "avatar_media_id")
 }
+
+func TestUpdateNamesFieldWithWrongType(t *testing.T) {
+	tests := []struct {
+		body    string
+		message string
+	}{
+		{body: `{"age":"     "}`, message: `^age must be a number$`},
+		// Go 1.26 заполняет Field для кастомного UnmarshalJSON, 1.27 — нет.
+		{body: `{"cards_shift":1}`, message: `^(cards_shift|value) must be a string$`},
+		{body: `{"age":`, message: `^request body must be valid JSON$`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.body, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(
+				context.Background(), http.MethodPatch, "/api/v1/students/x", strings.NewReader(tt.body),
+			)
+			req.SetPathValue("id", uuid.New().String())
+
+			err := NewHandler(&captureService{}).Update(httptest.NewRecorder(), req)
+
+			var appErr *apperr.AppError
+			require.True(t, errors.As(err, &appErr))
+			assert.Equal(t, http.StatusBadRequest, appErr.HTTPStatus)
+			assert.Regexp(t, tt.message, appErr.Message)
+		})
+	}
+}

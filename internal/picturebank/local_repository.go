@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/Linka-masterskaya/zip-backend/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,7 +58,7 @@ func (r *localRepository) Categories(ctx context.Context) ([]string, error) {
 }
 
 func (r *localRepository) Search(ctx context.Context, query string) ([]localPictureMetadata, error) {
-	pattern := escapeLikePattern(query)
+	pattern := db.EscapeLike(query)
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, category, title, mime_type, size_bytes, minio_key, created_at
 		FROM picture_bank_images
@@ -165,13 +165,4 @@ func scanLocalPicture(row localRowScanner, picture *localPictureMetadata) error 
 		&picture.MinIOKey,
 		&picture.CreatedAt,
 	)
-}
-
-// escapeLikePattern preserves Source.Search literal substring semantics while
-// still allowing PostgreSQL to use the trigram index for ILIKE.
-func escapeLikePattern(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `%`, `\%`)
-	value = strings.ReplaceAll(value, `_`, `\_`)
-	return value
 }

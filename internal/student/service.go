@@ -397,11 +397,17 @@ func normalizeCreate(input *CreateInput) {
 }
 
 func validate(email, name string, age *int, status, cardsShift string) error {
-	if !validEmail(email) || name == "" || !validStatus(status) {
-		return apperr.ErrBadRequest
+	if !validEmail(email) {
+		return apperr.ErrBadRequest.WithMessage("email must be a valid email address")
+	}
+	if name == "" {
+		return apperr.ErrBadRequest.WithMessage("name must not be empty")
+	}
+	if !validStatus(status) {
+		return apperr.ErrBadRequest.WithMessage("status must be one of: active, paused, archived, one_time")
 	}
 	if age != nil && (*age < 0 || *age > 100) {
-		return apperr.ErrBadRequest
+		return apperr.ErrBadRequest.WithMessage("age must be between 0 and 100")
 	}
 	if !validCardsShift(cardsShift) {
 		return apperr.ErrBadRequest.WithMessage(cardsShiftMessage)

@@ -375,3 +375,30 @@ func (looks3Converter) Convert(cfg *Config) (any, error) {
 }
 
 func init() { Register(looks3Converter{}) }
+
+// CheckLooks сообщает, выражается ли набор в Linka Looks 3.0, без
+// сборки архива. Пути медиа проставляются только при экспорте, поэтому
+// здесь их заменяют заглушки: проверяется структура заданий.
+func CheckLooks(cfg Config) error {
+	blocks := make([]Block, len(cfg.Blocks))
+	for i, block := range cfg.Blocks {
+		block.Elements = append([]Element(nil), block.Elements...)
+		for j := range block.Elements {
+			element := &block.Elements[j]
+			if element.Image != nil {
+				image := *element.Image
+				image.MediaURL = "media"
+				element.Image = &image
+			}
+			if element.Audio != nil {
+				audio := *element.Audio
+				audio.MediaURL = "media"
+				element.Audio = &audio
+			}
+		}
+		blocks[i] = block
+	}
+	cfg.Blocks = blocks
+	_, err := ToLooks(&cfg)
+	return err
+}

@@ -3,6 +3,7 @@ package pack
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -727,4 +728,35 @@ func TestShareServiceWorkerFailsJobWithoutOwnerRole(t *testing.T) {
 		t.Fatal("письмо не должно уходить, если роль отправителя неизвестна")
 	default:
 	}
+}
+
+func TestShareServiceRejectsLooksIncompatiblePackBeforeOutbox(t *testing.T) {
+	userID, packID, studentID := uuid.New(), uuid.New(), uuid.New()
+	jobs := newMemoryShareJobRepository()
+	quota := &shareQuotaFake{sendAllowed: true, bytesAllowed: true}
+	service := NewShareServiceWithOutbox(
+		&sharePackFake{pack: &Pack{
+			ID: packID, OwnerID: userID, Title: "Pack",
+			Config: json.RawMessage(`{
+				"metadata":{"version":"2.0"},
+				"settings":{"columns":1,"rows":1},
+				"blocks":[{"id":"multi","type":"multi_choice","elements":[{"id":"e1","kind":"text","text":"a"}],
+					"answers":[{"element_id":"e1","is_correct":true}]}]
+			}`),
+		}},
+		&shareContentFake{archive: testArchive("Pack.linka", []byte("archive"))},
+		&shareStudentFake{student: &student.Student{ID: studentID, Email: "student@example.com"}},
+		&shareMailerFake{},
+		jobs,
+		nil,
+		ShareConfig{Workers: 1, PollInterval: time.Second, JobTimeout: time.Minute, SendRetries: 1, SendTimeout: time.Second, RetryBackoff: time.Millisecond},
+	)
+	service.quota = quota
+	shutdownShareService(t, service)
+
+	_, err := service.Share(shareCtx(userID), packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
+
+	assertAppErrorStatus(t, err, 409)
+	assert.Contains(t, err.Error(), "multi_choice")
+	assert.Empty(t, jobs.jobs)
 }

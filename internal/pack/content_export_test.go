@@ -14,6 +14,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestContentServiceSaveConfigStoresCompositeCard(t *testing.T) {
+	repo := &exportContentRepository{}
+	service := NewContentService(repo, nil, nil, nil)
+	config := json.RawMessage(`{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{"id":"c1d2e3a4-1111-4a2b-9c3d-000000000001","type":"grid","elements":[
+			{"id":"a988de06-eacd-4a49-b32e-e4883528fcc7","kind":"image",
+			 "source_picture_id":"ab79954b-4f2c-4451-b334-536c4118b39d"}
+		]}]
+	}`)
+
+	_, err := service.SaveConfig(packContext(uuid.New()), uuid.New(), config)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"metadata":{"version":"2.0"},
+		"settings":{"columns":1,"rows":1},
+		"blocks":[{"id":"c1d2e3a4-1111-4a2b-9c3d-000000000001","type":"grid","elements":[
+			{"id":"a988de06-eacd-4a49-b32e-e4883528fcc7","kind":"normal",
+			 "image":{"source_picture_id":"ab79954b-4f2c-4451-b334-536c4118b39d"}}
+		]}]
+	}`, string(repo.savedConfig))
+}
+
 func TestContentServiceExportValidatesConfigBeforeArchive(t *testing.T) {
 	repo := &exportContentRepository{
 		pack: &Pack{
@@ -172,11 +197,13 @@ type exportContentRepository struct {
 	adaptation      *adaptationArchiveData
 	adaptationFiles []*media.File
 	err             error
+	savedConfig     json.RawMessage
 }
 
 func (r *exportContentRepository) SaveConfig(
-	context.Context, uuid.UUID, uuid.UUID, json.RawMessage, []uuid.UUID,
+	_ context.Context, _ uuid.UUID, _ uuid.UUID, config json.RawMessage, _ []uuid.UUID,
 ) (*Pack, error) {
+	r.savedConfig = config
 	return nil, nil
 }
 

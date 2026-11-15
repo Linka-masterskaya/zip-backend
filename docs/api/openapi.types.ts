@@ -1496,6 +1496,13 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description Набор нельзя отправить на почту: в нём есть задания, которых нет в формате Linka Looks 3.0 (multi_choice, categories, sequence) или непредставимые пары. В message — блок и тип. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
                 /** @description Исчерпан суточный лимит email-отправок */
                 429: {
                     headers: {
@@ -3033,10 +3040,17 @@ export interface components {
         };
         /** @description p18 — имя, email и пароль. Повтор пароля проверяет фронт. */
         RegisterRequest: {
+            /** @description Пробелы по краям обрезаются. Латиница и кириллица, между словами один пробел или дефис. Правило общее с display_name. */
             name: string;
-            /** Format: email */
+            /**
+             * Format: email
+             * @description Пробелы по краям обрезаются. До @ не больше 64 символов, кириллица запрещена.
+             */
             email: string;
-            /** Format: password */
+            /**
+             * Format: password
+             * @description Не может состоять только из пробелов.
+             */
             password: string;
         };
         /** @description p17 — вход по email */
@@ -3067,15 +3081,18 @@ export interface components {
             new_password: string;
         };
         ChangeEmailRequest: {
-            /** Format: email */
+            /**
+             * Format: email
+             * @description Правило общее с RegisterRequest.email.
+             */
             new_email: string;
         };
         ConfirmEmailRequest: {
             token: string;
         };
-        /** @description p3 — единственное редактируемое здесь поле: display_name (только буквы и пробел, p12). Email и пароль — отдельными флоу. */
+        /** @description p3 — единственное редактируемое здесь поле: display_name. Email и пароль — отдельными флоу. */
         UpdateProfileRequest: {
-            /** @description только буквы и пробел, без цифр и знаков (p12). В коде валидировать по Unicode-буквам (\p{L}). */
+            /** @description Пробелы по краям обрезаются. Правило общее с RegisterRequest.name. */
             display_name: string;
         };
         Profile: {
