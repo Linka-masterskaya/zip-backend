@@ -143,7 +143,7 @@ const listPacksBaseQuery = `
 		), filtered AS (
 			SELECT placements.*
 			FROM placements
-			WHERE ($2::text = '' OR title ILIKE '%' || $2::text || '%')
+			WHERE ($2::text = '' OR title ILIKE '%' || $2::text || '%' ESCAPE E'\\')
 				AND ($3::int IS NULL OR age = $3::int)
 				AND ($4::int IS NULL OR age >= $4::int)
 				AND ($5::int IS NULL OR age <= $5::int)

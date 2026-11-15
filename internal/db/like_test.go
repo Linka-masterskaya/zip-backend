@@ -1,4 +1,4 @@
-package picturebank
+package db
 
 import (
 	"testing"
@@ -6,13 +6,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestEscapeLikePatternTreatsUserQueryLiterally(t *testing.T) {
+func TestEscapeLikeTreatsUserQueryLiterally(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
 		expected string
 	}{
 		{name: "ordinary", input: "кот", expected: "кот"},
+		{name: "empty", input: "", expected: ""},
 		{name: "percent", input: "100%", expected: `100\%`},
 		{name: "underscore", input: "a_b", expected: `a\_b`},
 		{name: "backslash", input: `a\b`, expected: `a\\b`},
@@ -20,7 +21,7 @@ func TestEscapeLikePatternTreatsUserQueryLiterally(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assert.Equal(t, test.expected, escapeLikePattern(test.input))
+			assert.Equal(t, test.expected, EscapeLike(test.input))
 		})
 	}
 }

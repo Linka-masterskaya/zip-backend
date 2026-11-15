@@ -66,7 +66,7 @@ const listMediaQuery = `
 				 (` + mediaUnreferencedPredicate + `) AS can_delete
 	FROM media_files
 	WHERE org_id = $1
-	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%')
+	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%' ESCAPE E'\\')
 	  AND ($3::text = '' OR media_type = $3::text)
 	  AND ($4::timestamptz IS NULL OR (created_at, id) < ($4::timestamptz, $5::uuid))
 	  AND (
@@ -80,7 +80,7 @@ const countMediaQuery = `
 	SELECT count(*)
 	FROM media_files
 	WHERE org_id = $1
-	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%')
+	  AND ($2::text = '' OR name ILIKE '%' || $2::text || '%' ESCAPE E'\\')
 	  AND ($3::text = '' OR media_type = $3::text)
 	  AND (
 	    NOT $4::boolean
