@@ -2,6 +2,7 @@ package pack
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -405,6 +406,9 @@ func (s *ShareService) shareWithStudent(
 	if accessiblePack.OwnerID != userID {
 		return nil, apperr.ErrForbidden.WithMessage("only the pack owner may share it by email")
 	}
+	if err := checkLooksShareable(accessiblePack.Config); err != nil {
+		return nil, err
+	}
 
 	if err := s.reserveShareSend(ctx, userID); err != nil {
 		return nil, err
@@ -439,6 +443,19 @@ func (s *ShareService) shareWithStudent(
 
 	task := shareTaskFromJob(&job)
 	return &ShareResult{Task: &task}, nil
+}
+
+// Письмо уходит архивом Linka Looks 3.0. Проверка до постановки в очередь
+// даёт клиенту 409 сразу, а не «отправлено» и упавшую задачу в воркере.
+func checkLooksShareable(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var cfg linka.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return apperr.ErrBadRequest.WithMessage("invalid Linka 2.0 config")
+	}
+	return contentError(linka.CheckLooks(cfg))
 }
 
 func (s *ShareService) reserveShareSend(ctx context.Context, userID uuid.UUID) error {

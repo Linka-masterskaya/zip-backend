@@ -2017,6 +2017,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Набор или ученик не найден/недоступен }
+        '409': { description: "Набор нельзя отправить на почту: в нём есть задания, которых нет в формате Linka Looks 3.0 (multi_choice, categories, sequence) или непредставимые пары. В message — блок и тип." }
         '429': { description: Исчерпан суточный лимит email-отправок }
         '503': { description: Durable outbox недоступен или сервис останавливается }
 

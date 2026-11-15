@@ -1496,6 +1496,13 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description Набор нельзя отправить на почту: в нём есть задания, которых нет в формате Linka Looks 3.0 (multi_choice, categories, sequence) или непредставимые пары. В message — блок и тип. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
                 /** @description Исчерпан суточный лимит email-отправок */
                 429: {
                     headers: {
