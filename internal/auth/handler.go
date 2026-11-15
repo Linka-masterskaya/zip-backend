@@ -291,10 +291,10 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) error {
 		return apperr.ErrBadRequest.WithError(err)
 	}
 
-	if err := ValidateName(req.Name); err != nil {
+	if err := ValidateName("name", req.Name); err != nil {
 		return err
 	}
-	if err := ValidateEmail(req.Email); err != nil {
+	if err := ValidateNewEmail(req.Email); err != nil {
 		return err
 	}
 	if err := ValidatePassword(req.Password); err != nil {

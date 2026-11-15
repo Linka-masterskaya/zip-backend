@@ -57,7 +57,7 @@ func TestService_UpdateDisplayName_Success(t *testing.T) {
 	userID := uuid.New()
 	createdAt := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
 	encryptedEmail := []byte("encrypted-email")
-	normalizedDisplayName := "Анна  Мария"
+	normalizedDisplayName := "Анна-Мария"
 	callOrder := make([]string, 0, 2)
 
 	repo := &updateDisplayNameRepoMock{
@@ -91,7 +91,7 @@ func TestService_UpdateDisplayName_Success(t *testing.T) {
 	}
 	service := NewService(repo, nil, nil, crypto, nil, EmailConfig{})
 
-	response, err := service.UpdateDisplayName(context.Background(), userID, "  Анна  Мария  ")
+	response, err := service.UpdateDisplayName(context.Background(), userID, "  Анна-Мария  ")
 
 	require.NoError(t, err)
 	require.NotNil(t, response)
@@ -124,11 +124,31 @@ func TestService_UpdateDisplayName_Validation(t *testing.T) {
 		},
 		{
 			name:        "contains punctuation",
-			displayName: "Анна-Мария",
+			displayName: "Анна!?%№;",
+		},
+		{
+			name:        "trailing dot",
+			displayName: "Анна.",
+		},
+		{
+			name:        "leading hyphen",
+			displayName: "-Анна",
+		},
+		{
+			name:        "double space between words",
+			displayName: "Анна  Мария",
+		},
+		{
+			name:        "other alphabet",
+			displayName: "李明",
+		},
+		{
+			name:        "shorter than 2 characters",
+			displayName: "А",
 		},
 		{
 			name:        "longer than 100 characters",
-			displayName: strings.Repeat("А", maxDisplayNameRunes+1),
+			displayName: strings.Repeat("А", 101),
 		},
 	}
 
@@ -153,7 +173,7 @@ func TestService_UpdateDisplayName_Validation(t *testing.T) {
 }
 
 func TestService_UpdateDisplayName_AllowsMaximumLength(t *testing.T) {
-	displayName := strings.Repeat("А", maxDisplayNameRunes)
+	displayName := strings.Repeat("А", 100)
 	userID := uuid.New()
 	repo := &updateDisplayNameRepoMock{
 		updateDisplayNameFn: func(_ context.Context, gotUserID uuid.UUID, gotDisplayName string) error {
