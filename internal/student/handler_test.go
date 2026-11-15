@@ -264,9 +264,10 @@ func TestUpdateNamesFieldWithWrongType(t *testing.T) {
 		body    string
 		message string
 	}{
-		{body: `{"age":"     "}`, message: "age must be a number"},
-		{body: `{"cards_shift":1}`, message: "value must be a string"},
-		{body: `{"age":`, message: "request body must be valid JSON"},
+		{body: `{"age":"     "}`, message: `^age must be a number$`},
+		// Go 1.26 заполняет Field для кастомного UnmarshalJSON, 1.27 — нет.
+		{body: `{"cards_shift":1}`, message: `^(cards_shift|value) must be a string$`},
+		{body: `{"age":`, message: `^request body must be valid JSON$`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.body, func(t *testing.T) {
@@ -280,7 +281,7 @@ func TestUpdateNamesFieldWithWrongType(t *testing.T) {
 			var appErr *apperr.AppError
 			require.True(t, errors.As(err, &appErr))
 			assert.Equal(t, http.StatusBadRequest, appErr.HTTPStatus)
-			assert.Equal(t, tt.message, appErr.Message)
+			assert.Regexp(t, tt.message, appErr.Message)
 		})
 	}
 }
