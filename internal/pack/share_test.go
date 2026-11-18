@@ -740,8 +740,9 @@ func TestShareServiceRejectsLooksIncompatiblePackBeforeOutbox(t *testing.T) {
 			Config: json.RawMessage(`{
 				"metadata":{"version":"2.0"},
 				"settings":{"columns":1,"rows":1},
-				"blocks":[{"id":"multi","type":"multi_choice","elements":[{"id":"e1","kind":"text","text":"a"}],
-					"answers":[{"element_id":"e1","is_correct":true}]}]
+				"blocks":[{"id":"cat","type":"categories",
+					"elements":[{"id":"e1","kind":"text","text":"a"},{"id":"e2","kind":"text","text":"b"}],
+					"categories":[{"id":"c1","name":"c1","items":["e1"]}]}]
 			}`),
 		}},
 		&shareContentFake{archive: testArchive("Pack.linka", []byte("archive"))},
@@ -757,6 +758,6 @@ func TestShareServiceRejectsLooksIncompatiblePackBeforeOutbox(t *testing.T) {
 	_, err := service.Share(shareCtx(userID), packID, ShareInput{TargetType: ShareTargetStudent, TargetID: studentID})
 
 	assertAppErrorStatus(t, err, 409)
-	assert.Contains(t, err.Error(), "multi_choice")
+	assert.Contains(t, err.Error(), "not in any category")
 	assert.Empty(t, jobs.jobs)
 }

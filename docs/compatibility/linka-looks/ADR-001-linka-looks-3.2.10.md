@@ -116,10 +116,13 @@ PNG и WAV плюс `matching` из двух пар. Архив собран ч�
 пустой список. Теперь оба читают и `blocks[].elements[]`, и `pages[].cards[]`.
 
 **Что этим не доказано.** Проверен парсер и модель клиента, а не отрисовка:
-логика `setGameLogic.ts` и поведение на экране остаются за рамками. Продуктовые
-решения по `multi_choice`, `categories`, `sequence` и пересекающимся графам пар
-по-прежнему нужны — сейчас экспорт таких наборов отвечает `409` с указанием
-блока вместо частичного результата.
+логика `setGameLogic.ts` и поведение на экране остаются за рамками.
+
+**Решение заказчика (2026-11-18), проверено по исходникам Looks 4.2.1.** Формат
+набора в 4.2.1 не изменился (`CURRENT_SET_VERSION = "3.0"`, те же три режима),
+поэтому `multi_choice`, `categories` и `sequence` переводятся с согласованными
+потерями (см. матрицу ниже). `409` остаётся для пересекающихся графов пар и
+распределений, которые не раскладываются на match-группы.
 
 ## Compatibility / conversion matrix
 
@@ -133,10 +136,10 @@ PNG и WAV плюс `matching` из двух пар. Архив собран ч�
 | `block.name` | no equivalent | Not converted; Looks 3.2.10 `normalizePage` builds pages from an explicit field list and drops unknown properties. |
 | `grid` | `mode: "standard"` | Direct structural mapping. |
 | `single_choice` | `mode: "quiz"` | `answers[].is_correct=true` → card `answer: true`; Looks question has no backend source and remains empty unless a rule is added. |
-| `multi_choice` | no lossless equivalent | Looks quiz advances after any card with `answer: true`; it does not require selecting the full set. Must reject or define explicit degradation. |
+| `multi_choice` | `mode: "quiz"` | **Accepted loss.** Every correct answer gets `answer: true`; Looks counts the task done after the first correct card, the full set is not required. |
 | `matching` + `pairs[]` | `mode: "match"`, `matchId`, lanes | Possible only when pair graph can be represented by Looks match groups. Arbitrary overlapping pairs may require duplicated cards and are potentially lossy. |
-| `categories` | no page mode | Unsupported/lossy; product decision required. |
-| `sequence` | no page mode | Card order can be preserved visually, but sequence-task semantics are lost; product decision required. |
+| `categories` | `mode: "match"` groups | **Accepted loss.** Top lane: one card per category (`element_id` card, or a text card from legacy `name`), `matchId = category.id`. Bottom lane: all items with their category's `matchId`. Looks treats cards sharing a `matchId` as a group and requires linking the header with every item, so headers are not duplicated. The child links "category → item" instead of dragging into columns. Rejected with `409`: an item in several categories, a content element outside every category, a category without items. Empty/space cards are dropped. |
+| `sequence` | `mode: "standard"` | **Accepted loss, permanent.** Cards are laid out in the correct `order`, elements outside `sequence` follow in source order. The child sees the order but the task is not checked. |
 | element `id` | card `id` | Preserve where one element maps to one card. |
 | `kind: text`, `value` | `cardType: 0`, `title` | Map to an active card with `title=value`. |
 | `kind: image`, `media_url` | `cardType: 0`, `imagePath` | Map exported relative ZIP path to `imagePath`. |

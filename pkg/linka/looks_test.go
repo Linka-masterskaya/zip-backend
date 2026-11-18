@@ -150,28 +150,185 @@ func TestToLooksFitsGridSoNoCardIsDropped(t *testing.T) {
 	}
 }
 
-func TestToLooksRejectsUnsupportedBlocks(t *testing.T) {
-	for _, blockType := range []string{
-		linka.BlockTypeMultiChoice,
-		linka.BlockTypeCategories,
-		linka.BlockTypeSequence,
-	} {
-		t.Run(blockType, func(t *testing.T) {
-			cfg := &linka.Config{
-				Settings: linka.Settings{Columns: 2, Rows: 2},
-				Blocks: []linka.Block{{
-					ID:       "b1",
-					Type:     blockType,
-					Elements: []linka.Element{{ID: "a", Kind: linka.ElementKindText, Text: "x"}},
-				}},
-			}
+func TestToLooksRejectsUnknownBlockType(t *testing.T) {
+	cfg := &linka.Config{
+		Settings: linka.Settings{Columns: 2, Rows: 2},
+		Blocks: []linka.Block{{
+			ID:       "b1",
+			Type:     "puzzle",
+			Elements: []linka.Element{{ID: "a", Kind: linka.ElementKindText, Text: "x"}},
+		}},
+	}
+	_, err := linka.ToLooks(cfg)
+	if !errors.Is(err, linka.ErrLooksUnsupportedBlock) {
+		t.Fatalf("err = %v, want ErrLooksUnsupportedBlock", err)
+	}
+	var unsupported *linka.UnsupportedBlockError
+	if !errors.As(err, &unsupported) || unsupported.BlockType != "puzzle" {
+		t.Errorf("error must name the offending block, got %v", err)
+	}
+}
+
+// TestToLooksMultiChoiceBecomesQuiz: в Looks нет множественного выбора.
+// Все верные помечаются answer, засчитывается первый верный клик.
+func TestToLooksMultiChoiceBecomesQuiz(t *testing.T) {
+	cfg := &linka.Config{
+		Settings: linka.Settings{Columns: 2, Rows: 2},
+		Blocks: []linka.Block{{
+			ID: "multi", Type: linka.BlockTypeMultiChoice,
+			Elements: []linka.Element{
+				{ID: "a", Kind: linka.ElementKindText, Text: "a"},
+				{ID: "b", Kind: linka.ElementKindText, Text: "b"},
+				{ID: "c", Kind: linka.ElementKindText, Text: "c"},
+			},
+			Answers: []linka.Answer{
+				{ElementID: "a", IsCorrect: true},
+				{ElementID: "b", IsCorrect: false},
+				{ElementID: "c", IsCorrect: true},
+			},
+		}},
+	}
+	got, err := linka.ToLooks(cfg)
+	if err != nil {
+		t.Fatalf("ToLooks: %v", err)
+	}
+	page := got.Pages[0]
+	if page.Mode != linka.LooksModeQuiz {
+		t.Fatalf("mode = %q, want quiz", page.Mode)
+	}
+	answers := map[string]bool{}
+	for _, card := range page.Cards {
+		if card.Answer != nil && *card.Answer {
+			answers[card.ID] = true
+		}
+	}
+	if len(answers) != 2 || !answers["a"] || !answers["c"] {
+		t.Fatalf("answers = %v, want a and c", answers)
+	}
+}
+
+// TestToLooksSequenceBecomesOrderedStandard: режима «порядок» в Looks
+// нет. Карточки стоят в правильном порядке, задание не проверяется.
+func TestToLooksSequenceBecomesOrderedStandard(t *testing.T) {
+	cfg := &linka.Config{
+		Settings: linka.Settings{Columns: 2, Rows: 2},
+		Blocks: []linka.Block{{
+			ID: "seq", Type: linka.BlockTypeSequence,
+			Elements: []linka.Element{
+				{ID: "third", Kind: linka.ElementKindText, Text: "3"},
+				{ID: "extra", Kind: linka.ElementKindText, Text: "x"},
+				{ID: "first", Kind: linka.ElementKindText, Text: "1"},
+				{ID: "second", Kind: linka.ElementKindText, Text: "2"},
+			},
+			Sequence: []linka.SeqItem{
+				{ElementID: "second", Order: 2},
+				{ElementID: "first", Order: 1},
+				{ElementID: "third", Order: 3},
+			},
+		}},
+	}
+	got, err := linka.ToLooks(cfg)
+	if err != nil {
+		t.Fatalf("ToLooks: %v", err)
+	}
+	page := got.Pages[0]
+	if page.Mode != linka.LooksModeStandard {
+		t.Fatalf("mode = %q, want standard", page.Mode)
+	}
+	want := []string{"first", "second", "third", "extra"}
+	for i, id := range want {
+		if page.Cards[i].ID != id {
+			t.Fatalf("card %d = %q, want %q (order %v)", i, page.Cards[i].ID, id, want)
+		}
+		if page.Cards[i].Answer != nil {
+			t.Fatalf("card %s must not be an answer", id)
+		}
+	}
+}
+
+func categoriesConfig(categories []linka.Category, elements []linka.Element) *linka.Config {
+	return &linka.Config{
+		Settings: linka.Settings{Columns: 3, Rows: 3},
+		Blocks: []linka.Block{{
+			ID: "cat", Type: linka.BlockTypeCategories,
+			Elements: elements, Category: categories,
+		}},
+	}
+}
+
+// TestToLooksCategoriesBecomeMatchGroups: заголовок категории сверху,
+// её элементы снизу с тем же matchId. Looks требует соединить
+// заголовок с каждым элементом группы.
+func TestToLooksCategoriesBecomeMatchGroups(t *testing.T) {
+	cfg := categoriesConfig(
+		[]linka.Category{
+			{ID: "forest", ElementID: "forest-card", Items: []string{"bear", "fox"}},
+			{ID: "sea", Name: "Море", Items: []string{"fish"}},
+		},
+		[]linka.Element{
+			{ID: "forest-card", Kind: linka.ElementKindNormal, Text: "Лес",
+				Image: &linka.ElementImage{MediaURL: "media/forest.png"}},
+			{ID: "bear", Kind: linka.ElementKindText, Text: "Медведь"},
+			{ID: "fish", Kind: linka.ElementKindText, Text: "Рыба"},
+			{ID: "fox", Kind: linka.ElementKindText, Text: "Лиса"},
+			{ID: "gap", Kind: linka.ElementKindEmpty},
+		},
+	)
+	got, err := linka.ToLooks(cfg)
+	if err != nil {
+		t.Fatalf("ToLooks: %v", err)
+	}
+	page := got.Pages[0]
+	if page.Mode != linka.LooksModeMatch || page.Rows != 2 {
+		t.Fatalf("mode/rows = %q/%d, want match/2", page.Mode, page.Rows)
+	}
+	if *page.TopColumns != 2 || *page.BottomColumns != 3 {
+		t.Fatalf("lanes = %d/%d, want 2/3", *page.TopColumns, *page.BottomColumns)
+	}
+	type card struct{ id, title, image, match string }
+	want := []card{
+		{"forest-card", "Лес", "media/forest.png", "forest"},
+		{"cat-sea", "Море", "", "sea"},
+		{"bear", "Медведь", "", "forest"},
+		{"fox", "Лиса", "", "forest"},
+		{"fish", "Рыба", "", "sea"},
+	}
+	if len(page.Cards) != len(want) {
+		t.Fatalf("cards = %d, want %d", len(page.Cards), len(want))
+	}
+	for i, w := range want {
+		c := page.Cards[i]
+		if c.ID != w.id || c.Title != w.title || c.ImagePath != w.image || c.MatchID != w.match {
+			t.Fatalf("card %d = %+v, want %+v", i, c, w)
+		}
+	}
+}
+
+func TestToLooksRejectsUnrepresentableCategories(t *testing.T) {
+	text := func(id string) linka.Element { return linka.Element{ID: id, Kind: linka.ElementKindText, Text: id} }
+	cases := map[string]*linka.Config{
+		"no categories": categoriesConfig(nil, []linka.Element{text("a")}),
+		"element outside categories": categoriesConfig(
+			[]linka.Category{{ID: "c1", Name: "c1", Items: []string{"a"}}},
+			[]linka.Element{text("a"), text("lonely")},
+		),
+		"element in two categories": categoriesConfig(
+			[]linka.Category{
+				{ID: "c1", Name: "c1", Items: []string{"a"}},
+				{ID: "c2", Name: "c2", Items: []string{"a"}},
+			},
+			[]linka.Element{text("a")},
+		),
+		"empty category": categoriesConfig(
+			[]linka.Category{{ID: "c1", Name: "c1", Items: []string{"a"}}, {ID: "c2", Name: "c2"}},
+			[]linka.Element{text("a")},
+		),
+	}
+	for name, cfg := range cases {
+		t.Run(name, func(t *testing.T) {
 			_, err := linka.ToLooks(cfg)
-			if !errors.Is(err, linka.ErrLooksUnsupportedBlock) {
-				t.Fatalf("err = %v, want ErrLooksUnsupportedBlock", err)
-			}
-			var unsupported *linka.UnsupportedBlockError
-			if !errors.As(err, &unsupported) || unsupported.BlockType != blockType {
-				t.Errorf("error must name the offending block, got %v", err)
+			if !errors.Is(err, linka.ErrLooksUnrepresentableCategories) {
+				t.Fatalf("err = %v, want ErrLooksUnrepresentableCategories", err)
 			}
 		})
 	}
