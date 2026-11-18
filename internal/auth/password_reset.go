@@ -39,6 +39,15 @@ func (au *authService) ForgotPassword(ctx context.Context, email string) error {
 		return err
 	}
 
+	// У аккаунта, заведённого через Яндекс ID, пароля нет и сбрасывать нечего.
+	// Ответ API тот же, что и для любого адреса, а владелец из письма узнаёт,
+	// как войти.
+	if user.PasswordHash == nil {
+		go au.sendPasswordResetEmail(context.WithoutCancel(ctx), user.ID, mailer.PasswordResetOAuth,
+			email, mailer.EmailData{Email: email, Name: user.Name})
+		return nil
+	}
+
 	token, err := au.repo.CreatePasswordResetToken(ctx, user.ID, au.cfg.ResetPasswordTokenTTL)
 	if err != nil {
 		// The account may have been soft-deleted after the lookup above. Keep
@@ -52,21 +61,25 @@ func (au *authService) ForgotPassword(ctx context.Context, email string) error {
 	// Письмо отправляется асинхронно, чтобы ответ 202 не зависел от SMTP.
 	// WithoutCancel сохраняет context values для логов, но не отменяется после завершения HTTP-запроса,
 	// поэтому SMTP-отправка может завершиться уже после ответа клиенту.
-	go au.sendPasswordResetEmail(context.WithoutCancel(ctx), user.ID, email, token)
+	go au.sendPasswordResetEmail(context.WithoutCancel(ctx), user.ID, mailer.PasswordReset,
+		email, mailer.EmailData{Token: token, Email: email, Name: user.Name})
 
 	return nil
 }
 
-func (au *authService) sendPasswordResetEmail(ctx context.Context, userID, email, token string) {
+func (au *authService) sendPasswordResetEmail(
+	ctx context.Context,
+	userID string,
+	tmpl mailer.Template,
+	email string,
+	data mailer.EmailData,
+) {
 	if au.mailer == nil {
 		slog.ErrorContext(ctx, "password reset email sender is not configured", "user_id", userID)
 		return
 	}
 
-	if err := au.mailer.Send(ctx, email, mailer.PasswordReset, mailer.EmailData{
-		Token: token,
-		Email: email,
-	}); err != nil {
+	if err := au.mailer.Send(ctx, email, tmpl, data); err != nil {
 		slog.ErrorContext(ctx, "password reset email send failed",
 			"user_id", userID,
 			logger.Err(err),

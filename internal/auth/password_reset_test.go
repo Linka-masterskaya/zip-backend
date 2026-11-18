@@ -138,7 +138,7 @@ func TestAuthService_ForgotPassword_SendsResetEmail(t *testing.T) {
 	cfg := testPasswordResetConfig()
 	repo.EXPECT().
 		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
-		Return(&User{ID: "user-id"}, nil)
+		Return(&User{ID: "user-id", Name: "Анна", PasswordHash: ptrString("hash")}, nil)
 	repo.EXPECT().
 		CreatePasswordResetToken(gomock.Any(), "user-id", cfg.ResetPasswordTokenTTL).
 		Return("reset-token", nil)
@@ -173,6 +173,45 @@ func TestAuthService_ForgotPassword_SendsResetEmail(t *testing.T) {
 	if fakeMailer.data.Email != "user@example.com" {
 		t.Fatalf("email = %q, want user@example.com", fakeMailer.data.Email)
 	}
+	if fakeMailer.data.Name != "Анна" {
+		t.Fatalf("name = %q, want Анна", fakeMailer.data.Name)
+	}
+}
+
+// TestAuthService_ForgotPassword_OAuthOnlyAccount: у аккаунта через Яндекс ID
+// нет пароля. Токен сброса не создаётся, письмо объясняет, как войти, а
+// ответ API тот же, что и для любого адреса.
+func TestAuthService_ForgotPassword_OAuthOnlyAccount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := NewMockauthRepoIface(ctrl)
+
+	repo.EXPECT().
+		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
+		Return(&User{ID: "user-id", Name: "Анна"}, nil)
+
+	fakeMailer := &passwordResetMailerFake{called: make(chan struct{})}
+	svc := NewAuthService(
+		repo,
+		&fakeCache{},
+		&fakeRateLimiter{allowed: true},
+		fakeMailer,
+		testPasswordResetConfig(),
+		&passwordResetCryptoFake{hash: []byte("email-hash")},
+	)
+
+	if err := svc.ForgotPassword(context.Background(), "user@example.com"); err != nil {
+		t.Fatalf("ForgotPassword: %v", err)
+	}
+	waitPasswordResetMailerCall(t, fakeMailer)
+	if fakeMailer.template != mailer.PasswordResetOAuth {
+		t.Fatalf("template = %q, want %q", fakeMailer.template, mailer.PasswordResetOAuth)
+	}
+	if fakeMailer.data.Token != "" {
+		t.Fatalf("token = %q, want empty", fakeMailer.data.Token)
+	}
+	if fakeMailer.data.Name != "Анна" || fakeMailer.data.Email != "user@example.com" {
+		t.Fatalf("data = %+v, want name and email", fakeMailer.data)
+	}
 }
 
 func TestAuthService_ForgotPassword_MailerErrorIsSuccess(t *testing.T) {
@@ -182,7 +221,7 @@ func TestAuthService_ForgotPassword_MailerErrorIsSuccess(t *testing.T) {
 	cfg := testPasswordResetConfig()
 	repo.EXPECT().
 		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
-		Return(&User{ID: "user-id"}, nil)
+		Return(&User{ID: "user-id", Name: "Анна", PasswordHash: ptrString("hash")}, nil)
 	repo.EXPECT().
 		CreatePasswordResetToken(gomock.Any(), "user-id", cfg.ResetPasswordTokenTTL).
 		Return("reset-token", nil)
@@ -339,7 +378,7 @@ func TestAuthService_ForgotPassword_SoftDeleteRaceIsSuccess(t *testing.T) {
 	cfg := testPasswordResetConfig()
 	repo.EXPECT().
 		GetUserByEmailHash(gomock.Any(), []byte("email-hash")).
-		Return(&User{ID: "user-id"}, nil)
+		Return(&User{ID: "user-id", Name: "Анна", PasswordHash: ptrString("hash")}, nil)
 	repo.EXPECT().
 		CreatePasswordResetToken(gomock.Any(), "user-id", cfg.ResetPasswordTokenTTL).
 		Return("", apperr.ErrUserNotFound)

@@ -2534,7 +2534,7 @@ paths:
               required: [email, name]
               properties:
                 email:  { type: string, format: email }
-                name:   { type: string }
+                name:   { type: string, minLength: 1, maxLength: 255 }
                 age:    { type: [integer, "null"], minimum: 0, maximum: 100 }
                 status: { type: string, enum: [active, paused, archived, one_time], default: active }
                 cards_shift:
@@ -2642,7 +2642,7 @@ paths:
               additionalProperties: false
               properties:
                 email:  { type: string, format: email }
-                name:   { type: string }
+                name:   { type: string, minLength: 1, maxLength: 255 }
                 age:    { type: integer, minimum: 0, maximum: 100 }
                 status: { type: string, enum: [active, paused, archived, one_time] }
                 last_lesson_at: { type: string, format: date, description: Дата последнего занятия }
