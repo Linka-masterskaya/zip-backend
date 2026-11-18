@@ -17,9 +17,12 @@ type Template string
 const (
 	EmailVerify   Template = "email_verify"
 	PasswordReset Template = "password_reset"
-	EmailChange   Template = "email_change"
-	AccountExists Template = "account_exists"
-	PackShare     Template = "pack_share"
+	// PasswordResetOAuth отвечает на сброс пароля для аккаунта без пароля
+	// (вход только через Яндекс ID).
+	PasswordResetOAuth Template = "password_reset_oauth"
+	EmailChange        Template = "email_change"
+	AccountExists      Template = "account_exists"
+	PackShare          Template = "pack_share"
 )
 
 // Attachment is a streamed email attachment. The caller owns the reader and

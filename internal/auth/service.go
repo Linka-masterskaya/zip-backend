@@ -68,7 +68,7 @@ type authRepoIface interface {
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*User, error)
 	GetUserByIdentity(ctx context.Context, provider, providerUID string) (*User, error)
 	CreateIdentity(ctx context.Context, params CreateIdentityParams) error
-	replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, passwordHash string) error
+	replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, name, passwordHash string) error
 	CreateOrganization(ctx context.Context, params CreateOrganizationParams) error
 	CreateUser(ctx context.Context, params CreateUserParams) error
 	CreateAuthCred(ctx context.Context, params CreateAuthCredParams) error
@@ -266,6 +266,9 @@ func (au *authService) verifyEmail(ctx context.Context, verifyToken string) erro
 	txRepo := au.repo.withTx(tx)
 
 	userID, studentID, err := txRepo.useEmailVerifyToken(ctx, token)
+	if errors.Is(err, errEmailAlreadyVerified) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -326,12 +329,12 @@ func (au *authService) resendEmail(ctx context.Context, email string) error {
 		return apperr.ErrTooManyRequests
 	}
 
-	go au.processResend(context.WithoutCancel(ctx), user.ID, email)
+	go au.processResend(context.WithoutCancel(ctx), user.ID, email, user.Name)
 
 	return nil
 }
 
-func (au *authService) processResend(ctx context.Context, strUser string, email string) {
+func (au *authService) processResend(ctx context.Context, strUser, email, name string) {
 	userID, err := uuid.Parse(strUser)
 	if err != nil {
 		slog.ErrorContext(ctx, "authService.processResend",
@@ -383,7 +386,7 @@ func (au *authService) processResend(ctx context.Context, strUser string, email 
 	mailCtx, mailCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer mailCancel()
 	if err := au.mailer.Send(mailCtx, email, mailer.EmailVerify, mailer.EmailData{
-		Token: token,
+		Token: token, Email: email, Name: name,
 	}); err != nil {
 		slog.ErrorContext(ctx, "authService.processResend",
 			"user_id", userID,
@@ -564,7 +567,7 @@ func (au *authService) rotateRefresh(
 func (au *authService) handleTakenEmail(
 	ctx context.Context,
 	emailHash []byte,
-	email, password string,
+	email, name, password string,
 ) (bool, error) {
 	existing, err := au.repo.GetUserByEmailHashForRegistration(ctx, emailHash)
 	switch {
@@ -586,7 +589,7 @@ func (au *authService) handleTakenEmail(
 	if !existing.EmailVerified {
 		// Владение неподтверждённым адресом не доказала ни одна сторона,
 		// поэтому он достаётся тому, кто пришёл за ним сейчас.
-		return true, au.reclaimUnverifiedRegistration(ctx, existing.ID, email, password)
+		return true, au.reclaimUnverifiedRegistration(ctx, existing.ID, email, name, password)
 	}
 
 	au.notifyReservedEmail(ctx, email, password)
@@ -604,7 +607,7 @@ func (au *authService) notifyReservedEmail(ctx context.Context, email, password 
 
 func (au *authService) reclaimUnverifiedRegistration(
 	ctx context.Context,
-	userIDRaw, email, password string,
+	userIDRaw, email, name, password string,
 ) error {
 	userID, err := uuid.Parse(userIDRaw)
 	if err != nil {
@@ -641,7 +644,7 @@ func (au *authService) reclaimUnverifiedRegistration(
 
 	// Гонка с подтверждением исключена: если адрес успели подтвердить между
 	// проверкой и этим апдейтом, строк не будет и вернётся 409.
-	if err = txRepo.replaceUnverifiedPassword(ctx, userID, string(passwordHash)); err != nil {
+	if err = txRepo.replaceUnverifiedPassword(ctx, userID, name, string(passwordHash)); err != nil {
 		return err
 	}
 
@@ -657,7 +660,7 @@ func (au *authService) reclaimUnverifiedRegistration(
 
 	verifyToken := base64.RawURLEncoding.EncodeToString(tokenRaw)
 	if err = au.mailer.Send(ctx, email, mailer.EmailVerify, mailer.EmailData{
-		Token: verifyToken, Email: email,
+		Token: verifyToken, Email: email, Name: name,
 	}); err != nil {
 		slog.Error("failed to send verify email", "err", err)
 	}
@@ -695,8 +698,9 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	emailHash := au.crp.Hash([]byte(email))
+	name := strings.TrimSpace(req.Name)
 
-	handled, err := au.handleTakenEmail(ctx, emailHash, email, req.Password)
+	handled, err := au.handleTakenEmail(ctx, emailHash, email, name, req.Password)
 	if err != nil {
 		return err
 	}
@@ -734,7 +738,6 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 		return fmt.Errorf("authService.Register: create organization: %w", err)
 	}
 
-	name := strings.TrimSpace(req.Name)
 	userParams := CreateUserParams{ID: uuid.New(), Name: name, OrganizationID: orgParams.ID}
 
 	if err := txRepo.CreateUser(ctx, userParams); err != nil {
@@ -769,7 +772,7 @@ func (au *authService) Register(ctx context.Context, req RegisterRequest) error 
 		return fmt.Errorf("authService.Register: commit tx: %w", err)
 	}
 
-	mailTemplate := mailer.EmailData{Token: verifyTokenString, Email: email}
+	mailTemplate := mailer.EmailData{Token: verifyTokenString, Email: email, Name: name}
 
 	// TODO: backlog: сделать  через NATS + метрика.
 	if err = au.mailer.Send(ctx, email, mailer.EmailVerify, mailTemplate); err != nil {

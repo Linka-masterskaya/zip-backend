@@ -220,17 +220,17 @@ func (mr *MockauthRepoIfaceMockRecorder) beginTx(ctx any) *gomock.Call {
 }
 
 // replaceUnverifiedPassword mocks base method.
-func (m *MockauthRepoIface) replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, passwordHash string) error {
+func (m *MockauthRepoIface) replaceUnverifiedPassword(ctx context.Context, userID uuid.UUID, name, passwordHash string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "replaceUnverifiedPassword", ctx, userID, passwordHash)
+	ret := m.ctrl.Call(m, "replaceUnverifiedPassword", ctx, userID, name, passwordHash)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // replaceUnverifiedPassword indicates an expected call of replaceUnverifiedPassword.
-func (mr *MockauthRepoIfaceMockRecorder) replaceUnverifiedPassword(ctx, userID, passwordHash any) *gomock.Call {
+func (mr *MockauthRepoIfaceMockRecorder) replaceUnverifiedPassword(ctx, userID, name, passwordHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "replaceUnverifiedPassword", reflect.TypeOf((*MockauthRepoIface)(nil).replaceUnverifiedPassword), ctx, userID, passwordHash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "replaceUnverifiedPassword", reflect.TypeOf((*MockauthRepoIface)(nil).replaceUnverifiedPassword), ctx, userID, name, passwordHash)
 }
 
 // rotateEmailTokens mocks base method.

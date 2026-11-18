@@ -78,6 +78,28 @@ func TestStudentCreateRequiresEmail(t *testing.T) {
 	assertStudentStatus(t, err, apperr.ErrBadRequest.HTTPStatus)
 }
 
+// TestStudentCreateRejectsDuplicate: повтор запроса с той же почтой и тем же
+// именем — 409. Та же почта с другим именем допустима: двое детей могут
+// заниматься под почтой родителя.
+func TestStudentCreateRejectsDuplicate(t *testing.T) {
+	pool := studentTestDB(t)
+	ownerID := seedStudentUser(t, pool, "owner")
+	foreignID := seedStudentUser(t, pool, "foreign")
+	service := NewService(NewRepository(pool), identityCrypto{}, stubStorage{}, &stubUploader{pool: pool})
+
+	_, err := service.Create(studentContext(ownerID), CreateInput{Email: "kid@example.com", Name: "Пегас"})
+	require.NoError(t, err)
+
+	_, err = service.Create(studentContext(ownerID), CreateInput{Email: " KID@example.com ", Name: "пегас"})
+	assertStudentStatus(t, err, apperr.ErrConflict.HTTPStatus)
+
+	_, err = service.Create(studentContext(ownerID), CreateInput{Email: "kid@example.com", Name: "Сестра"})
+	require.NoError(t, err)
+
+	_, err = service.Create(studentContext(foreignID), CreateInput{Email: "kid@example.com", Name: "Пегас"})
+	require.NoError(t, err, "у другого дефектолога свой список учеников")
+}
+
 func TestRepositoryListReturnsTotalWhenOffsetIsPastEnd(t *testing.T) {
 	pool := studentTestDB(t)
 	repo := NewRepository(pool)
@@ -238,7 +260,7 @@ func createTestStudent(t *testing.T, repo *Repository, ownerID uuid.UUID, name s
 	cardsShift := defaultCardsShift
 	_, err := repo.Create(t.Context(), ownerID, []byte(name+"@example.com"), CreateInput{
 		Name: name, Status: "active", CardsShift: &cardsShift,
-	})
+	}, func([]byte) (bool, error) { return false, nil })
 	require.NoError(t, err)
 }
 

@@ -2521,6 +2521,7 @@ export interface paths {
                 };
                 400: components["responses"]["BadRequest"];
                 401: components["responses"]["Unauthorized"];
+                409: components["responses"]["Conflict"];
                 429: components["responses"]["TooMany"];
             };
         };

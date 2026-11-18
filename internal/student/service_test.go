@@ -1,7 +1,11 @@
 package student
 
 import (
+	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,4 +56,23 @@ func TestPrepareUpdateCardsShift(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, result.CardsShift)
 	})
+}
+
+// TestNameLengthMatchesColumn: students.name — VARCHAR(255). Имя длиннее
+// должно отсекаться валидацией с 400, а не падать в базе с 500.
+func TestNameLengthMatchesColumn(t *testing.T) {
+	ok := strings.Repeat("я", 255)
+	long := strings.Repeat("я", 256)
+
+	require.NoError(t, validate("a@b.cd", ok, nil, "active", "full"))
+
+	for _, err := range []error{
+		validate("a@b.cd", long, nil, "active", "full"),
+		validateUpdate(UpdateInput{Name: &long}),
+	} {
+		var appErr *apperr.AppError
+		require.ErrorAs(t, err, &appErr)
+		assert.Equal(t, http.StatusBadRequest, appErr.HTTPStatus)
+		assert.Contains(t, appErr.Message, "name")
+	}
 }

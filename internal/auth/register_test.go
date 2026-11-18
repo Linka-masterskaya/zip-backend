@@ -195,6 +195,7 @@ func TestAuthService_Register_IntegrationSuccess(t *testing.T) {
 	assert.Equal(t, expectedEmail, mailerFake.to)
 	assert.Equal(t, mailer.EmailVerify, mailerFake.template)
 	assert.Equal(t, expectedEmail, mailerFake.data.Email)
+	assert.NotEmpty(t, mailerFake.data.Name, "в приветствии письма нужно имя")
 	assert.NotEmpty(t, mailerFake.data.Token)
 
 	rawToken, err := base64.RawURLEncoding.DecodeString(mailerFake.data.Token)
@@ -229,10 +230,16 @@ func TestAuthService_Register_IntegrationReclaimsUnverifiedEmail(t *testing.T) {
 
 	// Адрес занят, но не подтверждён — повторная регистрация забирает его.
 	require.NoError(t, svc.Register(ctx, RegisterRequest{
-		Name:     "Тест Тестов",
+		Name:     "Новый Владелец",
 		Email:    " DUPLICATE@example.com ",
 		Password: "anotherStrongPassword123",
 	}))
+
+	var displayName string
+	require.NoError(t, testPool.QueryRow(ctx, `SELECT display_name FROM users`).Scan(&displayName))
+	assert.Equal(t, "Новый Владелец", displayName, "имя переходит новому владельцу адреса")
+	assert.Equal(t, "Новый Владелец", mailerFake.data.Name)
+	assert.Equal(t, "duplicate@example.com", mailerFake.data.Email)
 
 	counts := getRegisterCounts(t, ctx)
 	assert.Equal(t, 1, counts.users, "второй пользователь заводиться не должен")

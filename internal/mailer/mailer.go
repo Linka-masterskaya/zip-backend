@@ -21,11 +21,12 @@ import (
 
 //nolint:gosec
 var subjects = map[Template]string{
-	EmailVerify:   "Подтверждение email",
-	PasswordReset: "Сброс пароля",
-	EmailChange:   "Смена email",
-	AccountExists: "Аккаунт уже существует",
-	PackShare:     "Набор Linka для вас",
+	EmailVerify:        "Подтверждение email",
+	PasswordReset:      "Сброс пароля",
+	PasswordResetOAuth: "Сброс пароля",
+	EmailChange:        "Смена email",
+	AccountExists:      "Аккаунт уже существует",
+	PackShare:          "Набор Linka для вас",
 }
 
 //go:embed templates/*.html templates/assets/*

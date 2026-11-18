@@ -20,6 +20,7 @@ import (
 type User struct {
 	ID            string
 	OrgID         *string
+	Name          string
 	PasswordHash  *string
 	Role          string
 	EmailVerified bool
@@ -78,6 +79,7 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 		SELECT
 			u.id,
 			u.org_id,
+			u.display_name,
 			ac.password_hash,
 			ac.role,
 			u.email_verified
@@ -90,6 +92,7 @@ func (r *authRepo) GetUserByEmailHash(ctx context.Context, emailHash []byte) (*U
 	err := r.db.QueryRow(ctx, query, emailHash).Scan(
 		&user.ID,
 		&user.OrgID,
+		&user.Name,
 		&user.PasswordHash,
 		&user.Role,
 		&user.EmailVerified,
@@ -381,7 +384,7 @@ func (r *authRepo) useEmailVerifyToken(
 		  AND expires_at > now()
 	`, token).Scan(&userIDDB, &studentIDDB)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, uuid.Nil, apperr.ErrVerifyTokenInvalid
+		return uuid.Nil, uuid.Nil, r.unusableVerifyTokenError(ctx, token)
 	}
 	if err != nil {
 		return uuid.Nil, uuid.Nil, fmt.Errorf("authRepo.useEmailVerifyToken find owner: %w", err)
@@ -417,6 +420,33 @@ func (r *authRepo) useEmailVerifyToken(
 	}
 
 	return userID, studentID, nil
+}
+
+// errEmailAlreadyVerified: ссылкой уже воспользовались, и адрес владельца
+// подтверждён. Повторный переход по письму — не ошибка.
+var errEmailAlreadyVerified = errors.New("email already verified")
+
+func (r *authRepo) unusableVerifyTokenError(ctx context.Context, token []byte) error {
+	var verified bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM verify_tokens t
+			LEFT JOIN users u ON u.id = t.user_id AND u.deleted_at IS NULL
+			LEFT JOIN students s ON s.id = t.student_id AND s.deleted_at IS NULL
+			WHERE t.token_hash = $1
+			  AND t.purpose = 'email_verify'
+			  AND t.used_at IS NOT NULL
+			  AND (u.email_verified OR s.email_verified)
+		)
+	`, token).Scan(&verified)
+	if err != nil {
+		return fmt.Errorf("authRepo.useEmailVerifyToken check used token: %w", err)
+	}
+	if verified {
+		return errEmailAlreadyVerified
+	}
+	return apperr.ErrVerifyTokenInvalid
 }
 
 func (r *authRepo) verifyUser(ctx context.Context, userID uuid.UUID) error {
@@ -641,7 +671,7 @@ func (r *authRepo) CreateVerifyToken(ctx context.Context, params CreateVerifyTok
 func (r *authRepo) replaceUnverifiedPassword(
 	ctx context.Context,
 	userID uuid.UUID,
-	passwordHash string,
+	name, passwordHash string,
 ) error {
 	res, err := r.db.Exec(ctx, `
 		UPDATE auth_cred AS c
@@ -658,6 +688,14 @@ func (r *authRepo) replaceUnverifiedPassword(
 	}
 	if res.RowsAffected() == 0 {
 		return apperr.ErrConflict.WithMessage("email already exists")
+	}
+	// Регистрация целиком переходит новому владельцу, иначе в профиле и в
+	// письмах остаётся имя того, кто занимал адрес до него.
+	if _, err = r.db.Exec(ctx,
+		`UPDATE users SET display_name = $1, updated_at = now() WHERE id = $2`,
+		name, userID,
+	); err != nil {
+		return fmt.Errorf("authRepo.replaceUnverifiedPassword: update name: %w", err)
 	}
 	return nil
 }

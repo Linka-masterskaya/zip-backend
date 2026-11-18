@@ -153,6 +153,37 @@ func TestUseEmailVerifyToken(t *testing.T) {
 		assert.ErrorIs(t, err, apperr.ErrVerifyTokenInvalid)
 	})
 
+	t.Run("used token of verified user is not an error", func(t *testing.T) {
+		truncateAll(t)
+		ctx := testCtx(t)
+
+		userID := seedUser(t, testPool)
+		_, err := testPool.Exec(ctx, `UPDATE users SET email_verified = true WHERE id = $1`, userID)
+		require.NoError(t, err)
+		usedAt := time.Now()
+		tokenHash := seedVerifyToken(t, testPool, &userID, nil, time.Now().Add(-time.Hour), &usedAt)
+
+		_, _, err = repo.useEmailVerifyToken(ctx, tokenHash)
+
+		assert.ErrorIs(t, err, errEmailAlreadyVerified)
+	})
+
+	t.Run("used token of verified student is not an error", func(t *testing.T) {
+		truncateAll(t)
+		ctx := testCtx(t)
+
+		defID := seedUser(t, testPool)
+		studentID := seedStudent(t, testPool, defID)
+		_, err := testPool.Exec(ctx, `UPDATE students SET email_verified = true WHERE id = $1`, studentID)
+		require.NoError(t, err)
+		usedAt := time.Now()
+		tokenHash := seedVerifyToken(t, testPool, nil, &studentID, time.Now().Add(time.Hour), &usedAt)
+
+		_, _, err = repo.useEmailVerifyToken(ctx, tokenHash)
+
+		assert.ErrorIs(t, err, errEmailAlreadyVerified)
+	})
+
 	t.Run("nonexistent token hash", func(t *testing.T) {
 		truncateAll(t)
 		ctx := testCtx(t)

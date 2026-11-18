@@ -8,6 +8,7 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Linka-masterskaya/zip-backend/internal/apperr"
 	"github.com/Linka-masterskaya/zip-backend/internal/authctx"
@@ -17,7 +18,7 @@ import (
 )
 
 type repository interface {
-	Create(context.Context, uuid.UUID, []byte, CreateInput) (*storedStudent, error)
+	Create(context.Context, uuid.UUID, []byte, CreateInput, func([]byte) (bool, error)) (*storedStudent, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*storedStudent, error)
 	List(context.Context, uuid.UUID, ListInput) ([]storedStudent, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, storedUpdate) (*storedStudent, error)
@@ -84,7 +85,13 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 	if err != nil {
 		return nil, fmt.Errorf("student encrypt email: %w", err)
 	}
-	stored, err := s.repo.Create(ctx, ownerID, encrypted, input)
+	stored, err := s.repo.Create(ctx, ownerID, encrypted, input, func(existing []byte) (bool, error) {
+		email, err := s.crypto.Decrypt(existing)
+		if err != nil {
+			return false, err
+		}
+		return strings.EqualFold(string(email), input.Email), nil
+	})
 	if err != nil {
 		return nil, mapStudentError(err)
 	}
@@ -247,13 +254,16 @@ func (s *Service) applyEmail(input UpdateInput, result *storedUpdate) error {
 }
 
 func validateUpdate(input UpdateInput) error {
+	if input.Name != nil {
+		if err := validateName(*input.Name); err != nil {
+			return err
+		}
+	}
 	switch {
-	case input.Name != nil && *input.Name == "":
-		return apperr.ErrBadRequest
 	case input.Age != nil && (*input.Age < 0 || *input.Age > 100):
-		return apperr.ErrBadRequest
+		return apperr.ErrBadRequest.WithMessage("age must be between 0 and 100")
 	case input.Status != nil && !validStatus(*input.Status):
-		return apperr.ErrBadRequest
+		return apperr.ErrBadRequest.WithMessage("status must be one of: active, paused, archived, one_time")
 	}
 	if input.LastLessonAt != nil {
 		today := time.Now().Truncate(24 * time.Hour)
@@ -400,8 +410,8 @@ func validate(email, name string, age *int, status, cardsShift string) error {
 	if !validEmail(email) {
 		return apperr.ErrBadRequest.WithMessage("email must be a valid email address")
 	}
-	if name == "" {
-		return apperr.ErrBadRequest.WithMessage("name must not be empty")
+	if err := validateName(name); err != nil {
+		return err
 	}
 	if !validStatus(status) {
 		return apperr.ErrBadRequest.WithMessage("status must be one of: active, paused, archived, one_time")
@@ -411,6 +421,20 @@ func validate(email, name string, age *int, status, cardsShift string) error {
 	}
 	if !validCardsShift(cardsShift) {
 		return apperr.ErrBadRequest.WithMessage(cardsShiftMessage)
+	}
+	return nil
+}
+
+// maxNameRunes совпадает с students.name VARCHAR(255): длиннее база не
+// примет и вернёт 500.
+const maxNameRunes = 255
+
+func validateName(name string) error {
+	if name == "" {
+		return apperr.ErrBadRequest.WithMessage("name must not be empty")
+	}
+	if utf8.RuneCountInString(name) > maxNameRunes {
+		return apperr.ErrBadRequest.WithMessage("name must be at most 255 characters long")
 	}
 	return nil
 }
@@ -437,6 +461,8 @@ func mapStudentError(err error) error {
 		return apperr.ErrNotFound
 	case errors.Is(err, ErrHasFolder):
 		return apperr.ErrConflict
+	case errors.Is(err, ErrDuplicate):
+		return apperr.ErrConflict.WithMessage("student with the same email and name already exists")
 	default:
 		return err
 	}
