@@ -118,22 +118,19 @@ func TestExportRejectsUnknownFormat(t *testing.T) {
 // заданием.
 func TestExportLooks3RejectsUnrepresentableBlock(t *testing.T) {
 	config := []byte(`{
-		"metadata": {"version": "2.0", "title": "multi"},
+		"metadata": {"version": "2.0", "title": "categories"},
 		"settings": {"columns": 2, "rows": 2},
 		"blocks": [{
-			"id": "multi-block",
-			"type": "multi_choice",
+			"id": "cat-block",
+			"type": "categories",
 			"elements": [
-				{"id": "a", "kind": "text", "value": "a"},
-				{"id": "b", "kind": "text", "value": "b"}
+				{"id": "a", "kind": "text", "text": "a"},
+				{"id": "lonely", "kind": "text", "text": "b"}
 			],
-			"answers": [
-				{"element_id": "a", "is_correct": true},
-				{"element_id": "b", "is_correct": true}
-			]
+			"categories": [{"id": "c1", "name": "c1", "items": ["a"]}]
 		}]
 	}`)
 	rec := exportFixtureRequest(t, "?format=looks-3", config)
 	assert.Equal(t, http.StatusConflict, rec.Code)
-	assert.Contains(t, rec.Body.String(), "multi-block")
+	assert.Contains(t, rec.Body.String(), "cat-block")
 }

@@ -1496,7 +1496,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description Набор нельзя отправить на почту: в нём есть задания, которых нет в формате Linka Looks 3.0 (multi_choice, categories, sequence) или непредставимые пары. В message — блок и тип. */
+                /** @description Набор нельзя отправить на почту: задание не выражается в формате Linka Looks 3.0 — пересекающиеся пары, элемент вне категорий или в нескольких категориях, категория без элементов. В message — блок и причина. */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -3160,9 +3160,11 @@ export interface components {
             /** @description Идентификатор исходного блока */
             id: string;
             /**
-             * @description `standard` — из блока `grid`; `quiz` — из `single_choice`;
-             *     `match` — из `matching`. Типы `multi_choice`, `categories` и
-             *     `sequence` в Looks не выражаются: экспорт таких наборов вернёт `409`.
+             * @description `standard` — из `grid` и `sequence` (карточки в правильном порядке,
+             *     без проверки); `quiz` — из `single_choice` и `multi_choice`
+             *     (засчитывается первый верный ответ); `match` — из `matching` и
+             *     `categories` (заголовок категории сверху, её элементы снизу с тем же
+             *     `matchId`). Непредставимые пары и распределения дают `409`.
              * @enum {string}
              */
             mode: "standard" | "quiz" | "match";

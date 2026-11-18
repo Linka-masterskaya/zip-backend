@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 )
 
 // Linka Looks 3.2.10 читает собственный формат набора версии 3.0
@@ -38,9 +39,9 @@ const (
 )
 
 // ErrLooksUnsupportedBlock возвращается для типов заданий, которые
-// Linka Looks 3.0 не умеет представлять. Молча деградировать такой
-// блок нельзя: пользователь получил бы набор без задания и не узнал
-// бы об этом.
+// Linka Looks 3.0 не умеет представлять. Молча выкидывать такой блок
+// нельзя: пользователь получил бы набор без задания и не узнал бы об
+// этом.
 var ErrLooksUnsupportedBlock = errors.New("block type is not representable in Linka Looks 3.0")
 
 // ErrLooksUnrepresentableMatching возвращается, когда граф пар не
@@ -51,6 +52,11 @@ var ErrLooksUnrepresentableMatching = errors.New("matching block is not represen
 // ErrLooksMissingMediaPath возвращается, если у медиа-элемента нет
 // пути внутри архива. Такой набор открылся бы в Looks без картинки
 // или звука.
+// ErrLooksUnrepresentableCategories возвращается, когда распределение
+// не раскладывается на match-группы Looks: элемент вне категорий или
+// сразу в нескольких, либо категория без элементов.
+var ErrLooksUnrepresentableCategories = errors.New("categories block is not representable as Linka Looks match groups")
+
 var ErrLooksMissingMediaPath = errors.New("media element has no archive path")
 
 // LooksConfig — корень config.json формата Linka Looks 3.0.
@@ -107,9 +113,17 @@ func (e *UnsupportedBlockError) Unwrap() error { return ErrLooksUnsupportedBlock
 // относительные пути внутри архива: Looks знает только про пути и не
 // понимает media_id.
 //
-// Неподдерживаемые типы заданий (multi_choice, categories, sequence)
-// и непредставимые графы пар возвращают ошибку вместо частичного
-// результата.
+// В Looks всего три режима, поэтому часть заданий переводится с
+// потерями, согласованными с заказчиком:
+//   - multi_choice → quiz: все верные помечены, засчитывается первый
+//     верный выбор;
+//   - sequence → standard: карточки стоят в правильном порядке, но
+//     задание не проверяется;
+//   - categories → match-группы: ребёнок соединяет категорию с каждым
+//     её элементом вместо раскладывания по колонкам.
+//
+// Непредставимые пары и распределения возвращают ошибку вместо
+// частичного результата.
 func ToLooks(cfg *Config) (*LooksConfig, error) {
 	if cfg == nil {
 		return nil, errors.New("convert to Linka Looks: config is nil")
@@ -145,12 +159,14 @@ func blockToPage(block *Block, columns, rows int) (*LooksPage, error) {
 	switch block.Type {
 	case BlockTypeGrid:
 		return standardPage(block, LooksModeStandard, columns, rows)
-	case BlockTypeSingleChoice:
+	case BlockTypeSingleChoice, BlockTypeMultiChoice:
 		return quizPage(block, columns, rows)
 	case BlockTypeMatching:
 		return matchPage(block)
-	case BlockTypeMultiChoice, BlockTypeCategories, BlockTypeSequence:
-		return nil, &UnsupportedBlockError{BlockID: block.ID, BlockType: block.Type}
+	case BlockTypeSequence:
+		return sequencePage(block, columns, rows)
+	case BlockTypeCategories:
+		return categoriesPage(block)
 	default:
 		return nil, &UnsupportedBlockError{BlockID: block.ID, BlockType: block.Type}
 	}
@@ -194,6 +210,126 @@ func quizPage(block *Block, columns, rows int) (*LooksPage, error) {
 	question := ""
 	page.Question = &question
 	return page, nil
+}
+
+// sequencePage ставит карточки в правильном порядке на обычную
+// страницу. Режима «порядок» в Looks нет, поэтому задание видно, но не
+// проверяется. Элементы вне sequence идут следом в исходном порядке.
+func sequencePage(block *Block, columns, rows int) (*LooksPage, error) {
+	order := make(map[string]int, len(block.Sequence))
+	for _, item := range block.Sequence {
+		order[item.ElementID] = item.Order
+	}
+	elements := append([]Element(nil), block.Elements...)
+	sort.SliceStable(elements, func(i, j int) bool {
+		left, leftOK := order[elements[i].ID]
+		right, rightOK := order[elements[j].ID]
+		if leftOK != rightOK {
+			return leftOK
+		}
+		return leftOK && left < right
+	})
+	ordered := *block
+	ordered.Elements = elements
+	return standardPage(&ordered, LooksModeStandard, columns, rows)
+}
+
+// categoriesPage раскладывает распределение на две линейки match:
+// заголовки категорий сверху, элементы снизу. Looks считает карточки с
+// общим matchId группой и требует соединить каждую верхнюю со всеми
+// нижними той же группы, поэтому дублировать заголовок не нужно.
+func categoriesPage(block *Block) (*LooksPage, error) {
+	if len(block.Category) == 0 {
+		return nil, fmt.Errorf("%w: block %s has no categories", ErrLooksUnrepresentableCategories, block.ID)
+	}
+	elements := make(map[string]*Element, len(block.Elements))
+	for i := range block.Elements {
+		elements[block.Elements[i].ID] = &block.Elements[i]
+	}
+
+	used := make(map[string]struct{}, len(block.Elements))
+	top := make([]LooksCard, 0, len(block.Category))
+	bottom := make([]LooksCard, 0, len(block.Elements))
+	for _, category := range block.Category {
+		if len(category.Items) == 0 {
+			return nil, fmt.Errorf("%w: category %s of block %s has no items",
+				ErrLooksUnrepresentableCategories, category.ID, block.ID)
+		}
+		header, err := categoryHeaderCard(block, elements, used, category)
+		if err != nil {
+			return nil, err
+		}
+		top = append(top, *header)
+		for _, itemID := range category.Items {
+			element, ok := elements[itemID]
+			if !ok {
+				return nil, fmt.Errorf("%w: block %s references unknown element %s",
+					ErrLooksUnrepresentableCategories, block.ID, itemID)
+			}
+			if _, duplicate := used[itemID]; duplicate {
+				return nil, fmt.Errorf("%w: element %s of block %s belongs to more than one category",
+					ErrLooksUnrepresentableCategories, itemID, block.ID)
+			}
+			used[itemID] = struct{}{}
+			card, err := elementCard(element)
+			if err != nil {
+				return nil, err
+			}
+			card.MatchID = category.ID
+			bottom = append(bottom, *card)
+		}
+	}
+	// Looks не даёт сыграть match-страницу, где у карточки с содержимым
+	// нет группы. Пустые заготовки и пробелы в линейки не переносятся.
+	for i := range block.Elements {
+		element := &block.Elements[i]
+		if _, ok := used[element.ID]; ok || element.Kind == ElementKindEmpty || element.Kind == ElementKindSpace {
+			continue
+		}
+		return nil, fmt.Errorf("%w: element %s of block %s is not in any category",
+			ErrLooksUnrepresentableCategories, element.ID, block.ID)
+	}
+
+	topColumns, bottomColumns := len(top), len(bottom)
+	return &LooksPage{
+		ID:            block.ID,
+		Mode:          LooksModeMatch,
+		Columns:       max(topColumns, bottomColumns),
+		Rows:          looksMatchRows,
+		TopColumns:    &topColumns,
+		BottomColumns: &bottomColumns,
+		Cards:         append(top, bottom...),
+	}, nil
+}
+
+// categoryHeaderCard — карточка заголовка: элемент из блока либо, у
+// наборов до element_id, текстовая карточка из Name.
+func categoryHeaderCard(
+	block *Block,
+	elements map[string]*Element,
+	used map[string]struct{},
+	category Category,
+) (*LooksCard, error) {
+	if category.ElementID == "" {
+		return &LooksCard{
+			ID:       block.ID + "-" + category.ID,
+			CardType: LooksCardTypeContent,
+			Title:    category.Name,
+			MatchID:  category.ID,
+		}, nil
+	}
+	element, ok := elements[category.ElementID]
+	if !ok {
+		return nil, fmt.Errorf("%w: block %s references unknown element %s",
+			ErrLooksUnrepresentableCategories, block.ID, category.ElementID)
+	}
+	used[category.ElementID] = struct{}{}
+	card, err := elementCard(element)
+	if err != nil {
+		return nil, err
+	}
+	card.MatchID = category.ID
+	return card, nil
 }
 
 // matchPage раскладывает пары на две линейки Looks: левые элементы
@@ -361,7 +497,8 @@ func (looks3Converter) Format() Format { return FormatLooks3 }
 
 func (looks3Converter) Description() string {
 	return "формат набора Linka Looks 3.0 (pages[].cards[]); " +
-		"multi_choice, categories и sequence не поддерживаются"
+		"multi_choice — quiz с первым верным ответом, sequence — standard без проверки, " +
+		"categories — match-группы"
 }
 
 func (looks3Converter) Convert(cfg *Config) (any, error) {

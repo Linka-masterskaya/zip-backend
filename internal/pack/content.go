@@ -425,6 +425,7 @@ func contentError(err error) error {
 		return apperr.ErrConflict.WithMessage("archive media reference is missing")
 	case errors.Is(err, linka.ErrLooksUnsupportedBlock),
 		errors.Is(err, linka.ErrLooksUnrepresentableMatching),
+		errors.Is(err, linka.ErrLooksUnrepresentableCategories),
 		errors.Is(err, linka.ErrLooksMissingMediaPath):
 		// Набор валиден, но не выражается в формате Linka Looks:
 		// это конфликт состояния набора с запрошенным форматом.
