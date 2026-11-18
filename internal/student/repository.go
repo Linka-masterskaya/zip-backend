@@ -15,6 +15,7 @@ import (
 var (
 	ErrNotFound  = errors.New("student not found")
 	ErrHasFolder = errors.New("student has a folder")
+	ErrDuplicate = errors.New("student with the same email and name exists")
 )
 
 type Repository struct {
@@ -25,13 +26,56 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+// Create заводит ученика. sameEmail сравнивает зашифрованный адрес
+// существующего ученика с новым: шифрование недетерминированное, поэтому
+// дубль ищется расшифровкой среди учеников с тем же именем.
 func (r *Repository) Create(
 	ctx context.Context,
 	ownerID uuid.UUID,
 	emailEncrypted []byte,
 	input CreateInput,
+	sameEmail func([]byte) (bool, error),
 ) (*storedStudent, error) {
-	row := r.pool.QueryRow(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("student create: begin: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			slog.ErrorContext(ctx, "student create rollback", "err", err)
+		}
+	}()
+
+	// Без блокировки два одновременных запроса (двойной клик) оба не увидят
+	// друг друга и создадут двух одинаковых учеников.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('students:' || $1::text, 0))`,
+		ownerID); err != nil {
+		return nil, fmt.Errorf("student create: lock: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT email_encrypted FROM students
+		WHERE defectologist_id = $1
+		  AND deleted_at IS NULL
+		  AND lower(name) = lower($2)`, ownerID, input.Name)
+	if err != nil {
+		return nil, fmt.Errorf("student create: find duplicates: %w", err)
+	}
+	candidates, err := pgx.CollectRows(rows, pgx.RowTo[[]byte])
+	if err != nil {
+		return nil, fmt.Errorf("student create: find duplicates: %w", err)
+	}
+	for _, candidate := range candidates {
+		same, err := sameEmail(candidate)
+		if err != nil {
+			return nil, fmt.Errorf("student create: compare email: %w", err)
+		}
+		if same {
+			return nil, ErrDuplicate
+		}
+	}
+
+	row := tx.QueryRow(ctx, `
 		WITH created AS (
 			INSERT INTO students (
 				id, defectologist_id, email_encrypted, name, age, status,
@@ -57,6 +101,9 @@ func (r *Repository) Create(
 	}
 	if err != nil {
 		return nil, fmt.Errorf("student create: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("student create: commit: %w", err)
 	}
 	return result, nil
 }

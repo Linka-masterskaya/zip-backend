@@ -2562,6 +2562,7 @@ paths:
               },
           }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '429': { $ref: '#/components/responses/TooMany' }
         '401': { $ref: '#/components/responses/Unauthorized' }
     get:

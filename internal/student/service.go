@@ -18,7 +18,7 @@ import (
 )
 
 type repository interface {
-	Create(context.Context, uuid.UUID, []byte, CreateInput) (*storedStudent, error)
+	Create(context.Context, uuid.UUID, []byte, CreateInput, func([]byte) (bool, error)) (*storedStudent, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*storedStudent, error)
 	List(context.Context, uuid.UUID, ListInput) ([]storedStudent, int, error)
 	Update(context.Context, uuid.UUID, uuid.UUID, storedUpdate) (*storedStudent, error)
@@ -85,7 +85,13 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Student, erro
 	if err != nil {
 		return nil, fmt.Errorf("student encrypt email: %w", err)
 	}
-	stored, err := s.repo.Create(ctx, ownerID, encrypted, input)
+	stored, err := s.repo.Create(ctx, ownerID, encrypted, input, func(existing []byte) (bool, error) {
+		email, err := s.crypto.Decrypt(existing)
+		if err != nil {
+			return false, err
+		}
+		return strings.EqualFold(string(email), input.Email), nil
+	})
 	if err != nil {
 		return nil, mapStudentError(err)
 	}
@@ -455,6 +461,8 @@ func mapStudentError(err error) error {
 		return apperr.ErrNotFound
 	case errors.Is(err, ErrHasFolder):
 		return apperr.ErrConflict
+	case errors.Is(err, ErrDuplicate):
+		return apperr.ErrConflict.WithMessage("student with the same email and name already exists")
 	default:
 		return err
 	}
